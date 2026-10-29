@@ -94,6 +94,10 @@ impl Host for FakeHost {
         tokio::io::AsyncReadExt::read_to_string(&mut sql, &mut text).await?;
         self.record("db_import", format!("{name} {}", text.trim()))
     }
+    async fn adminer_grant(&self, db: &DbCreds) -> anyhow::Result<String> {
+        self.record("adminer_grant", db.name.clone())?;
+        Ok("t".repeat(40))
+    }
     async fn set_db_password(&self, user: &str, password: &str) -> anyhow::Result<()> {
         self.env.lock().unwrap().insert("DB_PASSWORD".into(), password.into());
         self.record("set_db_password", user.to_string())

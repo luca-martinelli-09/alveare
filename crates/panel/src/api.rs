@@ -33,6 +33,7 @@ pub struct App<H> {
     /// I file scritti dal file manager tornano all'utente del sito (false solo nei test senza root).
     pub chown: bool,
     uploads: Arc<tokio::sync::Mutex<()>>,
+    pub adminer_host: Option<Domain>,
 }
 
 impl<H> Clone for App<H> {
@@ -46,6 +47,7 @@ impl<H> Clone for App<H> {
             paths: self.paths.clone(),
             chown: self.chown,
             uploads: self.uploads.clone(),
+            adminer_host: self.adminer_host.clone(),
         }
     }
 }
@@ -53,7 +55,11 @@ impl<H> Clone for App<H> {
 impl<H: Host> App<H> {
     pub fn new(ctx: Ctx<H>, auth: Auth, templates: PathBuf, secure_cookie: bool) -> Self {
         let jobs = Jobs::new(ctx.store.pool().clone());
-        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default() }
+        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None }
+    }
+
+    pub fn with_adminer(self, adminer_host: Option<Domain>) -> Self {
+        Self { adminer_host, ..self }
     }
 
     pub fn with_files(self, paths: Paths, chown: bool) -> Self {
@@ -219,6 +225,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/sites/{id}/database/export", get(database_export::<H>))
         .route("/api/sites/{id}/database/import", post(database_import::<H>))
         .route("/api/sites/{id}/database/password", post(database_password::<H>))
+        .route("/api/sites/{id}/database/adminer", post(database_adminer::<H>))
         .route("/api/alerts", get(list_alerts::<H>))
         .route("/api/jobs/{id}", get(get_job::<H>))
         .with_state(app)
@@ -757,6 +764,16 @@ async fn database_password<H: Host>(State(app): State<App<H>>, Path(id): Path<i6
     Ok(Json(json!({})).into_response())
 }
 
+async fn database_adminer<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_site(&app, &user, id, Need::Manage).await?;
+    let host = app.adminer_host.clone().ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "Adminer non configurato (ALVEARE_ADMINER_HOST)"))?;
+    let db = app.ctx.db_creds(id).await?;
+    let token = app.ctx.host.adminer_grant(&db).await?;
+    app.auth.audit(Some(user.id), "database.adminer", Some(id), "").await?;
+    Ok(Json(json!({ "url": format!("https://{}/?alveare={token}", host.as_str()) })).into_response())
+}
+
 async fn list_alerts<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
     let visible = app.auth.visible_sites(&user).await?;
@@ -1113,6 +1130,22 @@ mod tests {
         assert_eq!(safety.len(), 1);
         let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/database/import"), Some(&admin), Some(serde_json::json!({"path": "foto.jpg"})))).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn adminer_link_needs_configuration_and_manager_role() {
+        let mut t = setup().await;
+        let (admin, id) = site_with_files(&t).await;
+        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/database/adminer"), Some(&admin), None)).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        t.app = t.app.clone().with_adminer(Some(Domain::parse("adminer.example.org").unwrap()));
+        let (s, body, _) = call(&t, req("POST", &format!("/api/sites/{id}/database/adminer"), Some(&admin), None)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(body["url"], format!("https://adminer.example.org/?alveare={}", "t".repeat(40)));
+        let (uid, ro) = token_for(&t, "ro@example.org", false).await;
+        t.app.auth.assign_site(uid, id, Role::Readonly).await.unwrap();
+        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/database/adminer"), Some(&ro), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
     }
 
     fn cookie_of(headers: &axum::http::HeaderMap) -> String {

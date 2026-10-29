@@ -31,6 +31,7 @@ services:
       - ./data/logs:/srv/logs
       - ./data/tmp:/srv/tmp
       - ./data/php:/srv/php
+      - ./data/adminer:/srv/adminer
       - ./data/run/php:/run/php
       - ./data/run/alveare:/run/alveare
     depends_on:

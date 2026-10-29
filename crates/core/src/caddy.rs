@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use crate::php::{socket_path, LOGS_DIR, SITES_DIR};
+use crate::php::{socket_path, LOGS_DIR, SITES_DIR, SOCKET_DIR};
 use crate::site::{Domain, Slug};
 
 pub const ADMIN_SOCKET: &str = "/run/caddy/admin.sock";
@@ -15,6 +15,8 @@ pub struct CaddySite {
 
 pub struct CaddyConfig {
     pub panel_host: Option<Domain>,
+    /// Da proteggere con Cloudflare Access, come il pannello.
+    pub adminer_host: Option<Domain>,
     pub sites: Vec<CaddySite>,
 }
 
@@ -33,6 +35,15 @@ pub fn render_caddyfile(cfg: &CaddyConfig) -> String {
     );
     if let Some(host) = &cfg.panel_host {
         write!(out, "\nhttp://{} {{\n\treverse_proxy panel:8080 {{\n\t\theader_up X-Real-IP {{client_ip}}\n\t}}\n}}\n", host.as_str()).unwrap();
+    }
+    if let Some(host) = &cfg.adminer_host {
+        // Solo il wrapper: adminer.php non si raggiunge direttamente.
+        write!(
+            out,
+            "\nhttp://{} {{\n\troot * /usr/share/adminer\n\trewrite * /index.php\n\tphp_fastcgi unix/{SOCKET_DIR}/_adminer.sock {{\n\t\tenv REMOTE_ADDR {{client_ip}}\n\t}}\n}}\n",
+            host.as_str()
+        )
+        .unwrap();
     }
     let mut sites: Vec<&CaddySite> = cfg.sites.iter().collect();
     sites.sort_by(|a, b| a.slug.as_str().cmp(b.slug.as_str()));
@@ -95,7 +106,16 @@ mod tests {
     }
 
     fn cfg() -> CaddyConfig {
-        CaddyConfig { panel_host: Some(d("pannello.example.org")), sites: vec![sona()] }
+        CaddyConfig { panel_host: Some(d("pannello.example.org")), adminer_host: None, sites: vec![sona()] }
+    }
+
+    #[test]
+    fn adminer_host_only_runs_the_wrapper_on_its_own_pool() {
+        let mut c = cfg();
+        c.adminer_host = Some(d("adminer.example.org"));
+        let out = render_caddyfile(&c);
+        assert!(out.contains("\nhttp://adminer.example.org {\n\troot * /usr/share/adminer\n\trewrite * /index.php\n\tphp_fastcgi unix//run/php/_adminer.sock {\n\t\tenv REMOTE_ADDR {client_ip}\n\t}\n}\n"));
+        assert!(!render_caddyfile(&cfg()).contains("adminer"));
     }
 
     #[test]
@@ -155,8 +175,8 @@ mod tests {
         other.primary = d("aaa.it");
         other.aliases.clear();
         other.redirects.clear();
-        let a = CaddyConfig { panel_host: None, sites: vec![sona(), other.clone()] };
-        let b = CaddyConfig { panel_host: None, sites: vec![other, sona()] };
+        let a = CaddyConfig { panel_host: None, adminer_host: None, sites: vec![sona(), other.clone()] };
+        let b = CaddyConfig { panel_host: None, adminer_host: None, sites: vec![other, sona()] };
         assert_eq!(render_caddyfile(&a), render_caddyfile(&b));
     }
 }

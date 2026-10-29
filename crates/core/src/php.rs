@@ -70,12 +70,16 @@ php_value[max_execution_time] = {max_execution_time_s}
 }
 
 // Il file sostituisce /etc/passwd dell'immagine PHP (Debian): gli utenti di sistema vanno ripetuti.
+// adminer: utente del pool di Adminer, sotto FIRST_SITE_UID così l'agente non lo tratta come un sito.
+pub const ADMINER_UID: u32 = 19999;
 const BASE_PASSWD: &str = "root:x:0:0:root:/root:/bin/bash
 www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+adminer:x:19999:19999::/srv/adminer:/usr/sbin/nologin
 nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin
 ";
 const BASE_GROUP: &str = "root:x:0:
 www-data:x:33:
+adminer:x:19999:
 nogroup:x:65534:
 ";
 
@@ -156,6 +160,7 @@ mod tests {
         b.uid = 20002;
         let pw = render_passwd(&[&a, &b]);
         assert!(pw.starts_with("root:x:0:0:"));
+        assert!(pw.contains("\nadminer:x:19999:19999::/srv/adminer:/usr/sbin/nologin\n"));
         assert!(pw.contains("\nwww-data:x:33:33:"));
         assert!(pw.contains("\nsona_it:x:20001:20001::/srv/sites/sona_it:/usr/sbin/nologin\n"));
         assert!(pw.ends_with("upupa_it:x:20002:20002::/srv/sites/upupa_it:/usr/sbin/nologin\n"));

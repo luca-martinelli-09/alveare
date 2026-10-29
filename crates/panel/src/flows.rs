@@ -46,6 +46,8 @@ pub trait Host: Send + Sync + 'static {
     fn db_dump(&self, name: &str, tables: &[String]) -> impl Future<Output = Result<Dump>> + Send;
     fn db_import(&self, name: &str, sql: Pin<Box<dyn AsyncRead + Send>>) -> impl Future<Output = Result<()>> + Send;
     fn set_db_password(&self, user: &str, password: &str) -> impl Future<Output = Result<()>> + Send;
+    /// Token monouso per aprire Adminer già autenticato su questo database.
+    fn adminer_grant(&self, db: &DbCreds) -> impl Future<Output = Result<String>> + Send;
     /// Riscrive una chiave del .env del sito.
     fn set_site_env(&self, slug: &Slug, uid: u32, key: &str, value: &str) -> impl Future<Output = Result<()>> + Send;
 }

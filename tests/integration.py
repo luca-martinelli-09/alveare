@@ -5,7 +5,9 @@ Uso: python3 tests/integration.py  (le immagini alveare/*:dev devono esistere: d
 Solo libreria standard. Lavora in una cartella temporanea e la ripulisce alla fine.
 """
 import base64
+import gzip
 import hashlib
+import http.cookiejar as http_cookiejar
 import hmac
 import json
 import os
@@ -98,6 +100,19 @@ def page(host, path="/"):
         return e.code, e.read().decode(errors="replace")
 
 
+def raw_get(http, path):
+    req = urllib.request.Request(f"http://127.0.0.1:{PORT}{path}", headers={"Host": PANEL, "Authorization": f"Bearer {http.token}"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return r.read()
+
+
+def raw_put(http, path, data):
+    req = urllib.request.Request(f"http://127.0.0.1:{PORT}{path}", data=data, method="PUT",
+                                 headers={"Host": PANEL, "Authorization": f"Bearer {http.token}", "Content-Type": "application/octet-stream"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.loads(r.read())
+
+
 def run_job(http, method, path, body=None):
     status, resp = http.call(method, path, body, expect=202)
     job = resp["job"]
@@ -126,6 +141,7 @@ def main():
                 f"MARIADB_ROOT_PASSWORD={root_pw}\n"
                 f"ALVEARE_ADMIN_EMAIL=admin@example.org\n"
                 f"ALVEARE_PANEL_HOST={PANEL}\n"
+                f"ALVEARE_ADMINER_HOST=adminer.test\n"
                 f"ALVEARE_INSECURE_COOKIE=1\n"
                 f"ALVEARE_CLOUDFLARED_NETWORK={NETWORK}\n"
             )
@@ -200,6 +216,41 @@ def main():
         assert trash.startswith("sona_test-"), trash
         status, _ = page("upupa.test")
         assert status == 200, "l'altro sito non deve risentirne"
+
+        site_b = next(s["id"] for s in http.call("GET", "/api/sites", expect=200)[1] if s["domain"] == "upupa.test")
+        print("database: panoramica, export, reset password")
+        _, db = http.call("GET", f"/api/sites/{site_b}/database", expect=200)
+        assert any(t["name"] == "wp_posts" for t in db["tables"]), db
+        dump = raw_get(http, f"/api/sites/{site_b}/database/export")
+        sql = gzip.decompress(dump).decode()
+        assert "CREATE TABLE `wp_posts`" in sql and "Dump completed" in sql, sql[-300:]
+        http.call("POST", f"/api/sites/{site_b}/database/password", expect=200)
+        status, html = page("upupa.test")
+        assert status == 200 and "wp-content" in html, "il sito non si collega dopo il cambio password"
+
+        print("Adminer con token monouso")
+        _, link = http.call("POST", f"/api/sites/{site_b}/database/adminer", expect=200)
+        token = link["url"].split("alveare=")[1]
+        jar = http_cookiejar.CookieJar()
+        browser = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+        req = urllib.request.Request(f"http://127.0.0.1:{PORT}/?alveare={token}", headers={"Host": "adminer.test"})
+        with browser.open(req, timeout=30) as r:
+            body = r.read().decode(errors="replace")
+        assert "wp_posts" in body and "upupa_test" in body, body[:800]
+        status, _ = page("adminer.test", f"/?alveare={token}")
+        assert status == 403, "token riusabile"
+        status, _ = page("adminer.test", "/?server=mariadb&username=root")
+        assert status == 403, "Adminer accessibile senza token"
+
+        print("file manager: upload a blocchi e import del dump")
+        data = gzip.compress(sql.replace("Upupa", "Upupa importata").encode())
+        _, up = http.call("POST", f"/api/sites/{site_b}/files/uploads", {"path": "import.sql.gz", "size": len(data)}, expect=201)
+        chunk = up["chunk_size"]
+        for n in range(up["chunks"]):
+            raw_put(http, f"/api/sites/{site_b}/files/uploads/{up['id']}/{n}", data[n * chunk:(n + 1) * chunk])
+        run_job(http, "POST", f"/api/sites/{site_b}/database/import", {"path": "import.sql.gz"})
+        status, html = page("upupa.test")
+        assert "Upupa importata" in html, "dump importato non visibile"
 
         print("riavvio del pannello: lo stato si rigenera")
         sh(*compose, "restart", "panel", cwd=work)

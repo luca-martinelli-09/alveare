@@ -6,6 +6,7 @@ fn main() {
     let d = |s: &str| Domain::parse(s).unwrap();
     let cfg = CaddyConfig {
         panel_host: Some(d("pannello.example.org")),
+        adminer_host: Some(d("adminer.example.org")),
         sites: vec![CaddySite {
             slug: Slug::parse("sona_it").unwrap(),
             primary: d("sona.it"),

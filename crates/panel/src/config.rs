@@ -13,6 +13,7 @@ pub struct Config {
     pub mysql_url: String,
     pub root_password: String,
     pub panel_host: Option<Domain>,
+    pub adminer_host: Option<Domain>,
     pub admin_email: Option<String>,
     pub secure_cookie: bool,
     pub site_env: Vars,
@@ -35,10 +36,14 @@ impl Config {
             .context("ALVEARE_SECRET_KEY: servono 32 byte in base64 (openssl rand -base64 32)")?;
         let root = get("MARIADB_ROOT_PASSWORD").context("MARIADB_ROOT_PASSWORD mancante")?;
         let db_host = get("ALVEARE_DB_HOST").unwrap_or_else(|| "mariadb".into());
-        let panel_host = match get("ALVEARE_PANEL_HOST") {
-            Some(h) => Some(Domain::parse(&h).map_err(|_| anyhow::anyhow!("ALVEARE_PANEL_HOST non è un dominio: {h}"))?),
-            None => None,
+        let host = |key: &str| -> Result<Option<Domain>> {
+            match get(key) {
+                Some(h) => Ok(Some(Domain::parse(&h).map_err(|_| anyhow::anyhow!("{key} non è un dominio: {h}"))?)),
+                None => Ok(None),
+            }
         };
+        let panel_host = host("ALVEARE_PANEL_HOST")?;
+        let adminer_host = host("ALVEARE_ADMINER_HOST")?;
         let secure_cookie = match get("ALVEARE_INSECURE_COOKIE").as_deref() {
             None | Some("0") | Some("false") => true,
             Some("1") | Some("true") => false,
@@ -51,6 +56,7 @@ impl Config {
             root_password: root,
             db_host,
             panel_host,
+            adminer_host,
             admin_email: get("ALVEARE_ADMIN_EMAIL"),
             secure_cookie,
             site_env: vars.iter().filter_map(|(k, v)| Some((k.strip_prefix("SITE_ENV_")?.to_string(), v.clone()))).collect(),
@@ -100,6 +106,13 @@ mod tests {
     fn panel_host_must_be_a_domain() {
         assert!(Config::from_vars(vars(&[("ALVEARE_PANEL_HOST", "pannello.example.org")])).unwrap().panel_host.is_some());
         assert!(Config::from_vars(vars(&[("ALVEARE_PANEL_HOST", "non valido")])).is_err());
+    }
+
+    #[test]
+    fn adminer_host_is_optional_and_validated() {
+        assert!(Config::from_vars(vars(&[])).unwrap().adminer_host.is_none());
+        assert!(Config::from_vars(vars(&[("ALVEARE_ADMINER_HOST", "adminer.example.org")])).unwrap().adminer_host.is_some());
+        assert!(Config::from_vars(vars(&[("ALVEARE_ADMINER_HOST", "x")])).is_err());
     }
 
     #[test]

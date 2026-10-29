@@ -35,6 +35,7 @@ pub struct Paths {
     pub caddy: PathBuf,
     pub caddy_admin: PathBuf,
     pub agent: PathBuf,
+    pub adminer: PathBuf,
 }
 
 impl Paths {
@@ -51,6 +52,7 @@ impl Paths {
             caddy: root.join("caddy"),
             caddy_admin: root.join("run/caddy/admin.sock"),
             agent: root.join("run/alveare/agent.sock"),
+            adminer: root.join("adminer"),
         }
     }
 
@@ -92,6 +94,17 @@ fn write_atomic(path: &Path, content: &str) -> Result<()> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, content).with_context(|| format!("scrittura di {}", tmp.display()))?;
     fs::rename(&tmp, path).with_context(|| format!("rename su {}", path.display()))
+}
+
+/// Cartelle di Adminer: token, sessioni e tmp, solo per l'utente adminer.
+pub fn create_adminer_dirs(p: &Paths, owner: Option<u32>) -> Result<()> {
+    for sub in ["tokens", "sessions", "tmp"] {
+        let dir = p.adminer.join(sub);
+        fs::create_dir_all(&dir)?;
+        set_mode(&dir, 0o700)?;
+        chown(&dir, owner)?;
+    }
+    Ok(())
 }
 
 /// `owner = None` lascia il proprietario attuale (test senza root).
@@ -214,6 +227,7 @@ pub struct SystemHost {
     pub paths: Paths,
     pub mysql: MySqlPool,
     pub panel_host: Option<Domain>,
+    pub adminer_host: Option<Domain>,
     pub db_host: String,
     /// Passata a mariadb-dump e mariadb via MYSQL_PWD, mai sulla riga di comando.
     pub root_password: String,
@@ -287,7 +301,7 @@ impl Host for SystemHost {
     }
 
     async fn sync_caddy(&self, sites: &[CaddySite]) -> Result<()> {
-        let text = render_caddyfile(&CaddyConfig { panel_host: self.panel_host.clone(), sites: sites.to_vec() });
+        let text = render_caddyfile(&CaddyConfig { panel_host: self.panel_host.clone(), adminer_host: self.adminer_host.clone(), sites: sites.to_vec() });
         fs::create_dir_all(&self.paths.caddy)?;
         caddy_load(&self.paths.caddy_admin, &text).await?;
         // Su disco solo una config che Caddy ha accettato: è quella usata al riavvio.
@@ -365,6 +379,17 @@ impl Host for SystemHost {
         Ok(())
     }
 
+    async fn adminer_grant(&self, db: &DbCreds) -> Result<String> {
+        let token = rand::distr::SampleString::sample_string(&rand::distr::Alphanumeric, &mut rand::rng(), 40);
+        let exp = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()) + 300;
+        let grant = serde_json::json!({ "host": self.db_host, "user": db.user, "password": db.password, "db": db.name, "exp": exp });
+        let path = self.paths.adminer.join("tokens").join(format!("{token}.json"));
+        fs::write(&path, grant.to_string())?;
+        set_mode(&path, 0o400)?;
+        chown(&path, Some(alveare_core::php::ADMINER_UID))?;
+        Ok(token)
+    }
+
     async fn set_db_password(&self, user: &str, password: &str) -> Result<()> {
         let (user, pw) = (sql_safe(user)?, sql_safe(password)?);
         sqlx::raw_sql(&format!("ALTER USER '{user}'@'%' IDENTIFIED BY '{pw}';")).execute(&self.mysql).await.context("cambio password")?;
@@ -424,6 +449,16 @@ mod tests {
         assert_eq!(mode(&p.tmp.join("sona_it")), 0o700);
         assert_eq!(mode(&p.logs.join("sona_it")), 0o755);
         assert!(p.logs.join("sona_it/php-error.log").is_file());
+    }
+
+    #[test]
+    fn adminer_dirs_are_private() {
+        let t = tempfile::tempdir().unwrap();
+        let p = paths(&t);
+        create_adminer_dirs(&p, None).unwrap();
+        for sub in ["tokens", "sessions", "tmp"] {
+            assert_eq!(mode(&p.adminer.join(sub)), 0o700);
+        }
     }
 
     #[test]

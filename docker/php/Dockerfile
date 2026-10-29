@@ -7,6 +7,8 @@ RUN cargo build --release -p php-agent
 
 FROM php:8.5-fpm
 ARG WP_CLI_VERSION=2.12.0
+ARG ADMINER_VERSION=6.2.0
+ARG ADMINER_SHA256=7492bf2b158fee5b7ddc9e13255322c4601b1f51b797896e303882626bf1e5af
 
 COPY --from=mlocati/php-extension-installer:2 /usr/bin/install-php-extensions /usr/local/bin/
 RUN install-php-extensions gd intl zip mysqli exif redis pcntl \
@@ -16,6 +18,12 @@ RUN install-php-extensions gd intl zip mysqli exif redis pcntl \
 RUN curl -fsSL -o /usr/local/bin/wp \
       "https://github.com/wp-cli/wp-cli/releases/download/v${WP_CLI_VERSION}/wp-cli-${WP_CLI_VERSION}.phar" \
  && chmod 0755 /usr/local/bin/wp
+
+RUN mkdir -p /usr/share/adminer \
+ && curl -fsSL -o /usr/share/adminer/adminer.php \
+      "https://github.com/vrana/adminer/releases/download/v${ADMINER_VERSION}/adminer-${ADMINER_VERSION}-mysql.php" \
+ && echo "${ADMINER_SHA256}  /usr/share/adminer/adminer.php" | sha256sum -c -
+COPY docker/php/adminer/index.php /usr/share/adminer/index.php
 
 # Via i pool di default (www, porta 9000): esistono solo i pool dei siti.
 RUN rm -f /usr/local/etc/php-fpm.d/*.conf /usr/local/etc/php-fpm.d/*.default \

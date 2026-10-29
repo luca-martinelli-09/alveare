@@ -55,11 +55,12 @@ async fn main() -> Result<()> {
         paths: paths.clone(),
         mysql,
         panel_host: cfg.panel_host.clone(),
+        adminer_host: cfg.adminer_host.clone(),
         db_host: cfg.db_host.clone(),
         root_password: cfg.root_password.clone(),
     };
     let ctx = Ctx { store: store.clone(), host, key: cfg.key.clone(), db_host: cfg.db_host.clone(), global_env: cfg.site_env.clone() };
-    let app = App::new(ctx, auth, paths.templates.clone(), cfg.secure_cookie);
+    let app = App::new(ctx, auth, paths.templates.clone(), cfg.secure_cookie).with_adminer(cfg.adminer_host.clone());
     tokio::spawn(apply_when_ready(app.clone()));
     tokio::spawn(scheduler::run(app.clone()));
 
@@ -97,7 +98,12 @@ async fn bootstrap_admin(auth: &Auth, email: Option<&str>) -> Result<()> {
 async fn write_state_to_disk(store: &Store, paths: &Paths, cfg: &Config) -> Result<()> {
     write_php_files(paths, &store.php_sites().await?, &store.pooled_sites().await?)?;
     std::fs::create_dir_all(&paths.caddy)?;
-    let caddyfile = render_caddyfile(&CaddyConfig { panel_host: cfg.panel_host.clone(), sites: store.caddy_sites().await? });
+    host::create_adminer_dirs(paths, Some(alveare_core::php::ADMINER_UID))?;
+    let caddyfile = render_caddyfile(&CaddyConfig {
+        panel_host: cfg.panel_host.clone(),
+        adminer_host: cfg.adminer_host.clone(),
+        sites: store.caddy_sites().await?,
+    });
     std::fs::write(paths.caddy.join("Caddyfile"), caddyfile).context("scrittura del Caddyfile")
 }
 
