@@ -54,6 +54,7 @@ pub struct CreateSite {
 /// Log di un job; con `live` ogni riga è subito visibile a chi legge il job in corso.
 #[derive(Debug, Default)]
 pub struct JobLog {
+    pub job_id: i64,
     pub lines: Vec<String>,
     pub live: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
 }

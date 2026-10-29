@@ -49,7 +49,7 @@ impl Jobs {
         let this = self.clone();
         tokio::spawn(async move {
             let _turn = this.serial.lock().await;
-            let log = JobLog { lines: Vec::new(), live: Some(live.clone()) };
+            let log = JobLog { job_id: id, lines: Vec::new(), live: Some(live.clone()) };
             let (status, lines) = match work(log).await {
                 Ok(log) => ("done", log.lines),
                 Err(e) => {
@@ -64,6 +64,12 @@ impl Jobs {
             this.live.lock().expect("lock dei job").remove(&id);
         });
         Ok(id)
+    }
+
+    /// Il sito di un job di creazione si conosce solo a metà job.
+    pub async fn set_site(&self, id: i64, site_id: i64) -> sqlx::Result<()> {
+        sqlx::query("UPDATE jobs SET site_id = ? WHERE id = ?").bind(site_id).bind(id).execute(&self.pool).await?;
+        Ok(())
     }
 
     async fn finish(&self, id: i64, status: &str, lines: &[String]) -> sqlx::Result<()> {

@@ -98,6 +98,16 @@ pub struct Session {
 }
 
 #[derive(Debug, serde::Serialize)]
+pub struct AuditEntry {
+    pub id: i64,
+    pub user_id: Option<i64>,
+    pub action: String,
+    pub site_id: Option<i64>,
+    pub details: String,
+    pub at: String,
+}
+
+#[derive(Debug, serde::Serialize)]
 pub struct TotpSetup {
     pub secret: String,
     pub otpauth_url: String,
@@ -409,6 +419,26 @@ impl Auth {
         }
         let ids = sqlx::query_scalar("SELECT site_id FROM user_sites WHERE user_id = ? ORDER BY site_id").bind(user.id).fetch_all(&self.pool).await?;
         Ok(Some(ids))
+    }
+
+    pub async fn audit_for_site(&self, site_id: i64, limit: i64) -> Result<Vec<AuditEntry>> {
+        let rows = sqlx::query("SELECT id, user_id, action, site_id, details, at FROM audit_log WHERE site_id = ? ORDER BY id DESC LIMIT ?")
+            .bind(site_id)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(AuditEntry {
+                    id: r.try_get("id")?,
+                    user_id: r.try_get("user_id")?,
+                    action: r.try_get("action")?,
+                    site_id: r.try_get("site_id")?,
+                    details: r.try_get("details")?,
+                    at: r.try_get("at")?,
+                })
+            })
+            .collect()
     }
 
     pub async fn audit(&self, user_id: Option<i64>, action: &str, site_id: Option<i64>, details: &str) -> Result<()> {
