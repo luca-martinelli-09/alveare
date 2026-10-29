@@ -211,6 +211,11 @@ def main():
         access = sh(*compose, "exec", "-T", "caddy", "cat", "/srv/logs/sona_test/access.log", cwd=work)
         assert VISITOR_IP in access, "IP reale assente dall'access log"
 
+        reach = subprocess.run([*compose, "exec", "-T", "php", "php", "-r",
+                                "echo @file_get_contents('http://panel:8080/healthz') === false ? 'no' : 'si';"],
+                               cwd=work, capture_output=True, text=True).stdout
+        assert reach == "no", "il codice PHP raggiunge il pannello"
+
         status, _ = page("sona.test", "/wp-content/uploads/x.php")
         assert status == 403, f"php in uploads: {status}"
 

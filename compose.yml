@@ -10,6 +10,8 @@ x-common: &common
 services:
   panel:
     <<: *common
+    # Solo rete di controllo: il codice PHP dei siti non deve poter raggiungere l'API.
+    networks: [control]
     image: ${ALVEARE_REGISTRY:-alveare}/panel:${ALVEARE_VERSION:-dev}
     build: { context: ., dockerfile: docker/panel/Dockerfile }
     env_file: .env
@@ -48,12 +50,13 @@ services:
       - ./data/logs:/srv/logs
       - ./data/run/php:/run/php
       - ./data/run/caddy:/run/caddy
-    networks: [hosting, cloudflared]
+    networks: [hosting, control, cloudflared]
     depends_on:
       panel: { condition: service_healthy }
 
   redis:
     <<: *common
+    networks: [hosting, control]
     image: redis:8
     # Cache: memoria fissa, si scarta il meno usato. L'ACL (un utente per sito) la scrive il pannello.
     command: ["redis-server", "--aclfile", "/data/users.acl", "--maxmemory", "${REDIS_MAXMEMORY:-256mb}", "--maxmemory-policy", "allkeys-lru"]
@@ -64,6 +67,7 @@ services:
 
   mariadb:
     <<: *common
+    networks: [hosting, control]
     image: mariadb:12
     environment:
       TZ: Europe/Rome
@@ -79,6 +83,7 @@ services:
 
 networks:
   hosting: {}
+  control: {}
   # Rete dei connettori cloudflared: tutti puntano a http://caddy:80.
   cloudflared:
     external: true
