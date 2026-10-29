@@ -5,6 +5,8 @@ pub const SITES_DIR: &str = "/srv/sites";
 pub const LOGS_DIR: &str = "/srv/logs";
 pub const TMP_DIR: &str = "/srv/tmp";
 pub const SOCKET_DIR: &str = "/run/php";
+/// Gli UID dei siti partono da qui: sotto ci sono solo utenti di sistema.
+pub const FIRST_SITE_UID: u32 = 20000;
 
 const DISABLED_FUNCTIONS: &str = "exec,shell_exec,system,passthru,proc_open,popen";
 
