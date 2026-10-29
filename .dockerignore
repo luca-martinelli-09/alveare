@@ -2,3 +2,5 @@ target
 data
 .git
 ui/node_modules
+ui/build
+ui/.svelte-kit

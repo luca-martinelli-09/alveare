@@ -12,6 +12,7 @@ mod scheduler;
 mod secrets;
 mod store;
 mod template;
+mod ui;
 #[cfg(test)]
 mod testing;
 
@@ -77,7 +78,7 @@ async fn main() -> Result<()> {
     tokio::spawn(apply_when_ready(app.clone()));
     tokio::spawn(scheduler::run(app.clone()));
 
-    let router = api::router(app).route("/healthz", get(|| async { "ok" }));
+    let router = api::router(app).route("/healthz", get(|| async { "ok" })).fallback(ui::serve);
     let listener = tokio::net::TcpListener::bind(&cfg.listen).await?;
     tracing::info!("pannello in ascolto su {}", cfg.listen);
     axum::serve(listener, router).with_graceful_shutdown(shutdown()).await?;

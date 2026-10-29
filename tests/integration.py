@@ -168,6 +168,9 @@ def main():
         temp = re.search(r"password temporanea (\S+)", logs).group(1)
 
         http = Http()
+        status, html = page(PANEL, "/sites/1")
+        assert status == 200 and "/_app/" in html, f"interfaccia non servita: {status}"
+
         print("primo accesso: password, TOTP, token API")
         _, r = http.call("POST", "/api/auth/login", {"email": "admin@example.org", "password": temp}, expect=200)
         assert r["stage"] == "setup"
@@ -213,7 +216,7 @@ def main():
 
         print("Redis: object cache con l'utente ACL del sito")
         agent(compose, work, {"cmd": "wp", "slug": "upupa_test", "args": ["plugin", "activate", "redis-cache"]})
-        agent(compose, work, {"cmd": "wp", "slug": "upupa_test", "args": ["redis", "enable"]})
+        agent(compose, work, {"cmd": "wp", "slug": "upupa_test", "args": ["redis", "update-dropin"]})
         status = agent(compose, work, {"cmd": "wp", "slug": "upupa_test", "args": ["redis", "status"]})
         assert "Connected" in status, status
         code, _ = page("upupa.test")

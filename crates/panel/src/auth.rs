@@ -398,6 +398,11 @@ impl Auth {
         Ok(())
     }
 
+    pub async fn user_sites(&self, user_id: i64) -> Result<Vec<(i64, String)>> {
+        let rows = sqlx::query("SELECT site_id, role FROM user_sites WHERE user_id = ? ORDER BY site_id").bind(user_id).fetch_all(&self.pool).await?;
+        rows.iter().map(|r| Ok((r.try_get("site_id")?, r.try_get("role")?))).collect()
+    }
+
     pub async fn unassign_site(&self, user_id: i64, site_id: i64) -> Result<()> {
         sqlx::query("DELETE FROM user_sites WHERE user_id = ? AND site_id = ?").bind(user_id).bind(site_id).execute(&self.pool).await?;
         Ok(())

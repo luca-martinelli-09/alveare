@@ -1,7 +1,15 @@
+FROM node:24-slim AS ui
+WORKDIR /ui
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci
+COPY ui ./
+RUN npm run build
+
 FROM rust:1-slim-trixie AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
+COPY --from=ui /ui/build ui/build
 RUN cargo build --release -p panel
 
 FROM debian:trixie-slim

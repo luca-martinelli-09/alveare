@@ -219,6 +219,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/me/tokens", post(create_token::<H>))
         .route("/api/users", get(list_users::<H>).post(create_user::<H>))
         .route("/api/users/{id}/block", post(block_user::<H>))
+        .route("/api/users/{id}/sites", get(user_sites::<H>))
         .route("/api/users/{id}/sites/{site}", put(assign_site::<H>).delete(unassign_site::<H>))
         .route("/api/templates", get(list_templates::<H>))
         .route("/api/sites", get(list_sites::<H>).post(create_site::<H>))
@@ -385,6 +386,12 @@ async fn assign_site<H: Host>(State(app): State<App<H>>, Path((id, site)): Path<
     app.auth.assign_site(id, site, r.role).await?;
     app.auth.audit(Some(admin.id), "user.assign", Some(site), &format!("utente {id}: {}", r.role.as_str())).await?;
     Ok(Json(json!({})).into_response())
+}
+
+async fn user_sites<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    require_admin(&caller(&app, &m, &h).await?)?;
+    let rows: Vec<_> = app.auth.user_sites(id).await?.into_iter().map(|(site_id, role)| json!({ "site_id": site_id, "role": role })).collect();
+    Ok(Json(rows).into_response())
 }
 
 async fn unassign_site<H: Host>(State(app): State<App<H>>, Path((id, site)): Path<(i64, i64)>, m: Method, h: HeaderMap) -> ApiResult<Response> {
@@ -1331,6 +1338,8 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         let user = t.app.auth.user(uid).await.unwrap();
         assert!(t.app.auth.can(&user, site, crate::auth::Need::Read).await.unwrap());
+        let (_, sites, _) = call(&t, req("GET", &format!("/api/users/{uid}/sites"), Some(&admin), None)).await;
+        assert_eq!(sites, serde_json::json!([{"site_id": site, "role": "readonly"}]));
         let (_, other) = token_for(&t, "g@example.org", false).await;
         let (s, _, _) = call(&t, req("GET", "/api/users", Some(&other), None)).await;
         assert_eq!(s, StatusCode::FORBIDDEN);
