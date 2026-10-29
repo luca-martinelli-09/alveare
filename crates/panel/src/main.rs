@@ -1,3 +1,4 @@
+mod auth;
 mod flows;
 mod host;
 mod secrets;

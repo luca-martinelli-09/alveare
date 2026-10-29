@@ -145,6 +145,11 @@ impl Store {
         Ok(Self { pool })
     }
 
+    /// Su un pool già migrato.
+    pub fn from_pool(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
