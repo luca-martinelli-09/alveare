@@ -24,6 +24,7 @@ impl Default for PhpSettings {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct SitePhp {
     pub slug: Slug,
     pub uid: u32,
