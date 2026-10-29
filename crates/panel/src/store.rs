@@ -1,0 +1,328 @@
+//! Stato del pannello in SQLite: l'unica fonte di verità da cui si rigenera tutto il resto.
+use std::str::FromStr;
+
+use alveare_core::caddy::CaddySite;
+use alveare_core::php::{PhpSettings, SitePhp, FIRST_SITE_UID};
+use alveare_core::site::{slug_for, Domain, Slug};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{Row, SqlitePool};
+
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    #[error("l'hostname {0} è già usato da un sito")]
+    HostnameTaken(String),
+    #[error("sito non trovato")]
+    NotFound,
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
+pub type Result<T> = std::result::Result<T, StoreError>;
+
+macro_rules! text_enum {
+    ($name:ident { $($variant:ident = $text:literal),+ $(,)? }) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+        #[serde(rename_all = "lowercase")]
+        pub enum $name { $($variant),+ }
+
+        impl $name {
+            pub fn as_str(self) -> &'static str {
+                match self { $(Self::$variant => $text),+ }
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = sqlx::Error;
+            fn from_str(s: &str) -> std::result::Result<Self, sqlx::Error> {
+                match s {
+                    $($text => Ok(Self::$variant),)+
+                    other => Err(sqlx::Error::Decode(format!("valore sconosciuto: {other}").into())),
+                }
+            }
+        }
+    };
+}
+
+text_enum!(SiteKind { Wordpress = "wordpress", Php = "php", Laravel = "laravel" });
+text_enum!(SiteStatus { Creating = "creating", Active = "active", Suspended = "suspended", Error = "error", Deleting = "deleting" });
+text_enum!(DomainKind { Primary = "primary", Alias = "alias", Redirect = "redirect" });
+
+pub struct NewSite {
+    pub primary: Domain,
+    pub kind: SiteKind,
+    pub template: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Site {
+    pub id: i64,
+    pub slug: Slug,
+    pub kind: SiteKind,
+    pub template: String,
+    pub status: SiteStatus,
+    pub settings: PhpSettingsRow,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PhpSettingsRow {
+    pub memory_limit_mb: u32,
+    pub upload_max_mb: u32,
+    pub max_execution_time_s: u32,
+    pub max_children: u32,
+}
+
+impl From<&PhpSettingsRow> for PhpSettings {
+    fn from(r: &PhpSettingsRow) -> Self {
+        Self {
+            memory_limit_mb: r.memory_limit_mb,
+            upload_max_mb: r.upload_max_mb,
+            max_execution_time_s: r.max_execution_time_s,
+            max_children: r.max_children,
+        }
+    }
+}
+
+impl Site {
+    pub fn uid(&self) -> u32 {
+        FIRST_SITE_UID + self.id as u32
+    }
+}
+
+const SITE_COLUMNS: &str = "id, slug, kind, template, status, memory_limit_mb, upload_max_mb, max_execution_time_s, max_children";
+
+fn site_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Site> {
+    let decode = |e: alveare_core::site::InvalidSlug| StoreError::Db(sqlx::Error::Decode(e.to_string().into()));
+    Ok(Site {
+        id: r.try_get("id")?,
+        slug: Slug::parse(r.try_get("slug")?).map_err(decode)?,
+        kind: r.try_get::<&str, _>("kind")?.parse()?,
+        template: r.try_get("template")?,
+        status: r.try_get::<&str, _>("status")?.parse()?,
+        settings: PhpSettingsRow {
+            memory_limit_mb: r.try_get("memory_limit_mb")?,
+            upload_max_mb: r.try_get("upload_max_mb")?,
+            max_execution_time_s: r.try_get("max_execution_time_s")?,
+            max_children: r.try_get("max_children")?,
+        },
+    })
+}
+
+fn unique_violation(e: sqlx::Error, hostname: &Domain) -> StoreError {
+    match &e {
+        sqlx::Error::Database(db) if db.is_unique_violation() => StoreError::HostnameTaken(hostname.as_str().into()),
+        _ => StoreError::Db(e),
+    }
+}
+
+#[derive(Clone)]
+pub struct Store {
+    pool: SqlitePool,
+}
+
+impl Store {
+    pub async fn open(path: &std::path::Path) -> Result<Self> {
+        let opts = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+        Self::with_pool(SqlitePoolOptions::new().connect_with(opts).await?).await
+    }
+
+    #[cfg(test)]
+    pub async fn open_memory() -> Result<Self> {
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")?.foreign_keys(true);
+        // Una sola connessione: ogni connessione a :memory: è un database diverso.
+        Self::with_pool(SqlitePoolOptions::new().max_connections(1).connect_with(opts).await?).await
+    }
+
+    async fn with_pool(pool: SqlitePool) -> Result<Self> {
+        sqlx::migrate!().run(&pool).await.map_err(|e| StoreError::Db(e.into()))?;
+        Ok(Self { pool })
+    }
+
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
+    pub async fn create_site(&self, new: &NewSite) -> Result<Site> {
+        let mut tx = self.pool.begin().await?;
+        let taken: Vec<String> = sqlx::query_scalar("SELECT slug FROM sites").fetch_all(&mut *tx).await?;
+        let slug = slug_for(&new.primary, |c| taken.iter().any(|t| t == c));
+        let id: i64 = sqlx::query_scalar("INSERT INTO sites (slug, kind, template) VALUES (?, ?, ?) RETURNING id")
+            .bind(slug.as_str())
+            .bind(new.kind.as_str())
+            .bind(&new.template)
+            .fetch_one(&mut *tx)
+            .await?;
+        sqlx::query("INSERT INTO domains (site_id, hostname, kind) VALUES (?, ?, 'primary')")
+            .bind(id)
+            .bind(new.primary.as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| unique_violation(e, &new.primary))?;
+        tx.commit().await?;
+        self.site(id).await
+    }
+
+    pub async fn site(&self, id: i64) -> Result<Site> {
+        let row = sqlx::query(&format!("SELECT {SITE_COLUMNS} FROM sites WHERE id = ?"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or(StoreError::NotFound)?;
+        site_from_row(&row)
+    }
+
+    pub async fn sites(&self) -> Result<Vec<Site>> {
+        sqlx::query(&format!("SELECT {SITE_COLUMNS} FROM sites ORDER BY slug"))
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .map(site_from_row)
+            .collect()
+    }
+
+    pub async fn delete_site(&self, id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM sites WHERE id = ?").bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn set_status(&self, id: i64, status: SiteStatus) -> Result<()> {
+        sqlx::query("UPDATE sites SET status = ? WHERE id = ?").bind(status.as_str()).bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn add_domain(&self, site_id: i64, hostname: &Domain, kind: DomainKind) -> Result<()> {
+        sqlx::query("INSERT INTO domains (site_id, hostname, kind) VALUES (?, ?, ?)")
+            .bind(site_id)
+            .bind(hostname.as_str())
+            .bind(kind.as_str())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| unique_violation(e, hostname))?;
+        Ok(())
+    }
+
+    pub async fn domains(&self, site_id: i64) -> Result<Vec<(Domain, DomainKind)>> {
+        let rows = sqlx::query("SELECT hostname, kind FROM domains WHERE site_id = ? ORDER BY kind = 'primary' DESC, hostname")
+            .bind(site_id)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| {
+                let host = Domain::parse(r.try_get("hostname")?)
+                    .map_err(|_| sqlx::Error::Decode("hostname non valido nel database".into()))?;
+                Ok((host, r.try_get::<&str, _>("kind")?.parse()?))
+            })
+            .collect()
+    }
+
+    /// Siti serviti da Caddy: solo quelli attivi.
+    pub async fn caddy_sites(&self) -> Result<Vec<CaddySite>> {
+        let mut out = Vec::new();
+        for site in self.sites().await?.into_iter().filter(|s| s.status == SiteStatus::Active) {
+            let domains = self.domains(site.id).await?;
+            let of = |k: DomainKind| domains.iter().filter(|(_, dk)| *dk == k).map(|(d, _)| d.clone()).collect::<Vec<_>>();
+            let primary = of(DomainKind::Primary).into_iter().next().ok_or(StoreError::NotFound)?;
+            out.push(CaddySite { slug: site.slug, primary, aliases: of(DomainKind::Alias), redirects: of(DomainKind::Redirect) });
+        }
+        Ok(out)
+    }
+
+    /// Tutti i siti con file su disco: servono a passwd/group e ai pool.
+    pub async fn php_sites(&self) -> Result<Vec<SitePhp>> {
+        Ok(self
+            .sites()
+            .await?
+            .into_iter()
+            .map(|s| SitePhp { uid: s.uid(), settings: (&s.settings).into(), slug: s.slug })
+            .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alveare_core::site::Domain;
+
+    async fn store() -> Store {
+        Store::open_memory().await.unwrap()
+    }
+
+    fn d(s: &str) -> Domain {
+        Domain::parse(s).unwrap()
+    }
+
+    fn new_site(domain: &str) -> NewSite {
+        NewSite { primary: d(domain), kind: SiteKind::Wordpress, template: "wordpress".into() }
+    }
+
+    #[tokio::test]
+    async fn created_site_gets_slug_and_uid_from_id() {
+        let s = store().await;
+        let a = s.create_site(&new_site("sona.it")).await.unwrap();
+        let b = s.create_site(&new_site("upupa.it")).await.unwrap();
+        assert_eq!(a.slug.as_str(), "sona_it");
+        assert_eq!(a.uid(), 20001);
+        assert_eq!(b.uid(), 20002);
+        assert_eq!(a.status, SiteStatus::Creating);
+        assert_eq!(s.domains(a.id).await.unwrap(), vec![(d("sona.it"), DomainKind::Primary)]);
+    }
+
+    #[tokio::test]
+    async fn uid_is_never_reused_after_delete() {
+        let s = store().await;
+        let a = s.create_site(&new_site("sona.it")).await.unwrap();
+        s.delete_site(a.id).await.unwrap();
+        let b = s.create_site(&new_site("sona.it")).await.unwrap();
+        assert_eq!(b.uid(), 20002);
+    }
+
+    #[tokio::test]
+    async fn slug_collision_gets_suffix() {
+        let s = store().await;
+        s.create_site(&new_site("sona.it")).await.unwrap();
+        let b = s.create_site(&new_site("www.sona-it.com")).await.unwrap();
+        assert_eq!(b.slug.as_str(), "sona_it_com");
+        let f = s.create_site(&new_site("sona-it.com")).await.unwrap();
+        assert_eq!(f.slug.as_str(), "sona_it_com_2");
+    }
+
+    #[tokio::test]
+    async fn hostname_cannot_belong_to_two_sites() {
+        let s = store().await;
+        let a = s.create_site(&new_site("sona.it")).await.unwrap();
+        s.add_domain(a.id, &d("www.sona.it"), DomainKind::Redirect).await.unwrap();
+        assert!(matches!(s.create_site(&new_site("www.sona.it")).await, Err(StoreError::HostnameTaken(_))));
+        assert!(matches!(s.add_domain(a.id, &d("sona.it"), DomainKind::Alias).await, Err(StoreError::HostnameTaken(_))));
+    }
+
+    #[tokio::test]
+    async fn caddy_config_lists_active_sites_with_their_domains() {
+        let s = store().await;
+        let a = s.create_site(&new_site("sona.it")).await.unwrap();
+        s.add_domain(a.id, &d("www.sona.it"), DomainKind::Redirect).await.unwrap();
+        s.add_domain(a.id, &d("comune-sona.it"), DomainKind::Alias).await.unwrap();
+        s.set_status(a.id, SiteStatus::Active).await.unwrap();
+        s.create_site(&new_site("in-creazione.it")).await.unwrap();
+        let sites = s.caddy_sites().await.unwrap();
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].primary, d("sona.it"));
+        assert_eq!(sites[0].aliases, vec![d("comune-sona.it")]);
+        assert_eq!(sites[0].redirects, vec![d("www.sona.it")]);
+    }
+
+    #[tokio::test]
+    async fn php_sites_include_every_site_with_files_on_disk() {
+        let s = store().await;
+        let a = s.create_site(&new_site("sona.it")).await.unwrap();
+        s.set_status(a.id, SiteStatus::Active).await.unwrap();
+        s.create_site(&new_site("nuovo.it")).await.unwrap();
+        let php = s.php_sites().await.unwrap();
+        assert_eq!(php.len(), 2);
+        let sona = php.iter().find(|p| p.slug.as_str() == "sona_it").unwrap();
+        assert_eq!(sona.uid, 20001);
+        assert_eq!(sona.settings, alveare_core::php::PhpSettings::default());
+    }
+}
