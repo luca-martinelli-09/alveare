@@ -114,6 +114,10 @@ fn unique_violation(e: sqlx::Error, hostname: &Domain) -> StoreError {
     }
 }
 
+fn to_php(s: Site) -> SitePhp {
+    SitePhp { uid: s.uid(), settings: (&s.settings).into(), slug: s.slug }
+}
+
 #[derive(Clone)]
 pub struct Store {
     pool: SqlitePool,
@@ -218,6 +222,27 @@ impl Store {
             .collect()
     }
 
+    pub async fn save_db_creds(&self, site_id: i64, name: &str, user: &str, password_enc: &[u8]) -> Result<()> {
+        sqlx::query("INSERT INTO site_databases (site_id, db_name, db_user, password_enc) VALUES (?, ?, ?, ?)")
+            .bind(site_id)
+            .bind(name)
+            .bind(user)
+            .bind(password_enc)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// (nome DB, utente DB, password cifrata)
+    pub async fn db_creds(&self, site_id: i64) -> Result<(String, String, Vec<u8>)> {
+        let r = sqlx::query("SELECT db_name, db_user, password_enc FROM site_databases WHERE site_id = ?")
+            .bind(site_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or(StoreError::NotFound)?;
+        Ok((r.try_get("db_name")?, r.try_get("db_user")?, r.try_get("password_enc")?))
+    }
+
     /// Siti serviti da Caddy: solo quelli attivi.
     pub async fn caddy_sites(&self) -> Result<Vec<CaddySite>> {
         let mut out = Vec::new();
@@ -230,13 +255,19 @@ impl Store {
         Ok(out)
     }
 
-    /// Tutti i siti con file su disco: servono a passwd/group e ai pool.
+    /// Tutti i siti con file su disco: servono a passwd e group.
     pub async fn php_sites(&self) -> Result<Vec<SitePhp>> {
+        Ok(self.sites().await?.into_iter().map(to_php).collect())
+    }
+
+    /// Siti con un pool FPM attivo: non sospesi né in eliminazione.
+    pub async fn pooled_sites(&self) -> Result<Vec<SitePhp>> {
         Ok(self
             .sites()
             .await?
             .into_iter()
-            .map(|s| SitePhp { uid: s.uid(), settings: (&s.settings).into(), slug: s.slug })
+            .filter(|s| !matches!(s.status, SiteStatus::Suspended | SiteStatus::Deleting))
+            .map(to_php)
             .collect())
     }
 }
@@ -311,6 +342,17 @@ mod tests {
         assert_eq!(sites[0].primary, d("sona.it"));
         assert_eq!(sites[0].aliases, vec![d("comune-sona.it")]);
         assert_eq!(sites[0].redirects, vec![d("www.sona.it")]);
+    }
+
+    #[tokio::test]
+    async fn pooled_sites_exclude_suspended_and_deleting() {
+        let s = store().await;
+        for (domain, status) in [("a.it", SiteStatus::Active), ("b.it", SiteStatus::Suspended), ("c.it", SiteStatus::Deleting), ("d.it", SiteStatus::Creating)] {
+            let site = s.create_site(&new_site(domain)).await.unwrap();
+            s.set_status(site.id, status).await.unwrap();
+        }
+        let slugs: Vec<String> = s.pooled_sites().await.unwrap().into_iter().map(|p| p.slug.as_str().to_string()).collect();
+        assert_eq!(slugs, ["a_it", "d_it"]);
     }
 
     #[tokio::test]
