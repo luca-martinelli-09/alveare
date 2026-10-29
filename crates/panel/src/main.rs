@@ -5,6 +5,7 @@ mod files;
 mod flows;
 mod host;
 mod jobs;
+mod logs;
 mod secrets;
 mod store;
 mod template;

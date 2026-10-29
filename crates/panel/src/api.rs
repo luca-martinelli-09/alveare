@@ -213,6 +213,8 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/sites/{id}/files/uploads", post(upload_start::<H>))
         .route("/api/sites/{id}/files/uploads/{upload}", get(upload_status::<H>))
         .route("/api/sites/{id}/files/uploads/{upload}/{n}", put(upload_chunk::<H>).layer(DefaultBodyLimit::max(CHUNK as usize + 1024)))
+        .route("/api/sites/{id}/logs/{kind}", get(read_log::<H>).delete(clear_log::<H>))
+        .route("/api/sites/{id}/logs/{kind}/stream", get(stream_log::<H>))
         .route("/api/jobs/{id}", get(get_job::<H>))
         .with_state(app)
 }
@@ -574,6 +576,95 @@ async fn upload_chunk<H: Host>(State(app): State<App<H>>, Path((id, upload, n)):
     Ok(Json(blocking(move || files.upload_chunk(&upload, n, &body)).await?).into_response())
 }
 
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum LogKind {
+    Access,
+    PhpError,
+    PhpSlow,
+    WpDebug,
+}
+
+const WP_DEBUG_LOG: &str = "public/wp-content/debug.log";
+
+impl LogKind {
+    fn file(self) -> &'static str {
+        match self {
+            LogKind::Access => "access.log",
+            LogKind::PhpError => "php-error.log",
+            LogKind::PhpSlow => "php-slow.log",
+            LogKind::WpDebug => "debug.log",
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct LinesQuery {
+    lines: Option<usize>,
+}
+
+fn log_payload(kind: LogKind, lines: Vec<String>) -> serde_json::Value {
+    if kind == LogKind::Access {
+        let entries: Vec<_> = lines.iter().filter_map(|l| crate::logs::parse_access(l)).collect();
+        json!({ "entries": entries })
+    } else {
+        json!({ "lines": lines })
+    }
+}
+
+async fn read_log<H: Host>(State(app): State<App<H>>, Path((id, kind)): Path<(i64, LogKind)>, Query(q): Query<LinesQuery>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_site(&app, &user, id, Need::Read).await?;
+    let site = app.ctx.store.site(id).await?;
+    let n = q.lines.unwrap_or(200).min(5000);
+    let lines = if kind == LogKind::WpDebug {
+        // debug.log sta nella cartella del sito: si legge con cap-std, mai seguendo link verso fuori.
+        let files = SiteFiles::open(&app.paths, &site.slug, None)?;
+        match files.open_read(WP_DEBUG_LOG) {
+            Ok(f) => blocking(move || crate::logs::tail_file(f, n).map_err(FileError::Io)).await?,
+            Err(FileError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => vec![],
+            Err(e) => return Err(e.into()),
+        }
+    } else {
+        let path = app.paths.logs.join(site.slug.as_str()).join(kind.file());
+        blocking(move || crate::logs::tail(&path, n).map_err(FileError::Io)).await?
+    };
+    Ok(Json(log_payload(kind, lines)).into_response())
+}
+
+/// Solo il debug.log di WordPress si svuota dal pannello; gli altri ruotano da soli.
+async fn clear_log<H: Host>(State(app): State<App<H>>, Path((id, kind)): Path<(i64, LogKind)>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    if kind != LogKind::WpDebug {
+        return Err(ApiError::bad_request("si può svuotare solo il debug.log di WordPress"));
+    }
+    let files = site_files(&app, &user, id).await?;
+    blocking(move || files.write(WP_DEBUG_LOG, b"")).await?;
+    app.auth.audit(Some(user.id), "log.clear", Some(id), "debug.log").await?;
+    Ok(Json(json!({})).into_response())
+}
+
+async fn stream_log<H: Host>(State(app): State<App<H>>, Path((id, kind)): Path<(i64, LogKind)>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use tokio_stream::StreamExt;
+    let user = caller(&app, &m, &h).await?;
+    require_site(&app, &user, id, Need::Read).await?;
+    if kind == LogKind::WpDebug {
+        return Err(ApiError::bad_request("il debug.log non si segue in tempo reale"));
+    }
+    let site = app.ctx.store.site(id).await?;
+    let path = app.paths.logs.join(site.slug.as_str()).join(kind.file());
+    let rx = crate::logs::follow(path, std::time::Duration::from_secs(1));
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(move |line| {
+        let data = match kind {
+            LogKind::Access => crate::logs::parse_access(&line).map(|e| serde_json::to_string(&e).expect("serializzazione")),
+            _ => Some(serde_json::to_string(&line).expect("serializzazione")),
+        };
+        Ok::<_, std::convert::Infallible>(Event::default().data(data.unwrap_or_else(|| "null".into())))
+    });
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()).into_response())
+}
+
 async fn get_job<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
     let job = app.jobs.get(id).await?;
@@ -803,6 +894,39 @@ mod tests {
         let resp = router(t.app.clone()).oneshot(req("GET", &format!("/api/sites/{id}/files/download?path=public/big.bin"), Some(&admin), None)).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.into_body().collect().await.unwrap().to_bytes().len(), size);
+    }
+
+    #[tokio::test]
+    async fn logs_are_readable_by_readonly_users_and_access_is_parsed() {
+        let t = setup().await;
+        let (_, id) = site_with_files(&t).await;
+        let logs = t.app.paths.logs.join("sona_it");
+        std::fs::write(logs.join("access.log"), "{\"ts\":1.0,\"request\":{\"client_ip\":\"198.51.100.9\",\"method\":\"GET\",\"uri\":\"/\"},\"status\":200}\nrotta\n").unwrap();
+        std::fs::write(logs.join("php-error.log"), "PHP Warning: x\n").unwrap();
+        let (uid, ro) = token_for(&t, "ro@example.org", false).await;
+        t.app.auth.assign_site(uid, id, Role::Readonly).await.unwrap();
+        let (s, body, _) = call(&t, req("GET", &format!("/api/sites/{id}/logs/access"), Some(&ro), None)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(body["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(body["entries"][0]["ip"], "198.51.100.9");
+        let (_, body, _) = call(&t, req("GET", &format!("/api/sites/{id}/logs/php-error"), Some(&ro), None)).await;
+        assert_eq!(body["lines"][0], "PHP Warning: x");
+        let (s, _, _) = call(&t, req("DELETE", &format!("/api/sites/{id}/logs/wp-debug"), Some(&ro), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, _, _) = call(&t, req("GET", &format!("/api/sites/{id}/logs/sconosciuto"), Some(&ro), None)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn wp_debug_log_symlink_outside_site_is_not_read() {
+        let t = setup().await;
+        let (admin, id) = site_with_files(&t).await;
+        let wpc = t.app.paths.sites.join("sona_it/public/wp-content");
+        std::fs::create_dir_all(&wpc).unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", wpc.join("debug.log")).unwrap();
+        let (s, body, _) = call(&t, req("GET", &format!("/api/sites/{id}/logs/wp-debug"), Some(&admin), None)).await;
+        assert_ne!(s, StatusCode::OK, "{body}");
+        assert!(!body.to_string().contains("root:"));
     }
 
     fn cookie_of(headers: &axum::http::HeaderMap) -> String {
