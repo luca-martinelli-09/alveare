@@ -32,6 +32,9 @@ function adminer_object()
             alveare_deny(403, 'Link scaduto: riapri Adminer dal pannello.');
         }
         $_SESSION['alveare'] = $grant;
+        // Adminer costruisce il redirect dall'URL corrente: il token consumato non deve restarci.
+        unset($_GET['alveare']);
+        $_SERVER['REQUEST_URI'] = preg_replace('/([?&])alveare=[^&]*&?/', '$1', $_SERVER['REQUEST_URI']);
         $_POST = ['auth' => [
             'driver' => 'server',
             'server' => $grant['host'],
