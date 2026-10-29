@@ -256,6 +256,19 @@ async fn rollback<H: Host>(c: &Ctx<H>, undo: Vec<Undo>, log: &mut JobLog) {
     }
 }
 
+/// Dopo import e restore la cache oggetti in Redis ha i dati vecchi. `wp cache flush` usa il
+/// flush selettivo del drop-in (solo le chiavi del sito); se non riesce, il sito resta valido.
+async fn flush_object_cache<H: Host>(c: &Ctx<H>, site: &Site, log: &mut JobLog) {
+    if site.kind != SiteKind::Wordpress {
+        return;
+    }
+    let args = ["cache", "flush"].map(String::from);
+    match c.host.wp(&site.slug, &args).await {
+        Ok(_) => log.push("cache oggetti svuotata"),
+        Err(e) => log.push(format!("cache oggetti non svuotata: {e:#}")),
+    }
+}
+
 /// Import di un dump: prima un dump di sicurezza in tmp/<slug>, poi l'import e,
 /// se richiesto, `wp search-replace` (rispetta i dati serializzati di WordPress).
 pub async fn import_database<H: Host>(
@@ -277,6 +290,7 @@ pub async fn import_database<H: Host>(
         let out = c.host.wp(&site.slug, &args).await?;
         log.push(format!("search-replace {from} → {to}: {}", out.lines().last().unwrap_or_default()));
     }
+    flush_object_cache(c, &site, log).await;
     Ok(())
 }
 
@@ -349,6 +363,7 @@ pub async fn restore_site<H: Host>(c: &Ctx<H>, site_id: i64, snapshot: &str, mod
     log.push(format!("ripristinato {snapshot} ({})", match mode { RestoreMode::Full => "file e database", RestoreMode::Files => "solo file", RestoreMode::Database => "solo database" }));
     c.sync_php().await?;
     c.sync_caddy().await?;
+    flush_object_cache(c, &site, log).await;
     Ok(())
 }
 
@@ -511,7 +526,14 @@ mod tests {
         restore_site(&c, site.id, "abcdef12", RestoreMode::Database, &mut JobLog::default()).await.unwrap();
         assert_eq!(
             c.host.calls(),
-            ["backup sona_it sona_it", "prune sona_it 7", "restore sona_it abcdef12 files=false db=sona_it", "sync_php users=sona_it pools=sona_it", "sync_caddy sona_it"]
+            [
+                "backup sona_it sona_it",
+                "prune sona_it 7",
+                "restore sona_it abcdef12 files=false db=sona_it",
+                "sync_php users=sona_it pools=sona_it",
+                "sync_caddy sona_it",
+                "wp sona_it cache flush",
+            ]
         );
         let runs = c.store.backup_runs(site.id, 10).await.unwrap();
         assert_eq!((runs[0].status.as_str(), runs[0].snapshot_id.as_deref()), ("done", Some("abcdef12")));
