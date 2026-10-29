@@ -342,7 +342,26 @@ impl Auth {
     async fn check_code(&self, user: &User, secret: &str, code: &str, ip: &str, now: i64) -> Result<()> {
         let keys = Self::failure_keys(&user.email, ip);
         self.check_not_locked(&keys, now).await?;
-        if totp(secret, &user.email)?.check(code.trim(), now as u64).is_none() {
+        let t = totp(secret, &user.email)?;
+        // Finestra di ±30 s; il passo trovato deve essere successivo all'ultimo usato.
+        let step = [now - 30, now, now + 30]
+            .into_iter()
+            .find(|ts| t.generate(*ts as u64).to_string() == code.trim())
+            .map(|ts| ts.div_euclid(30));
+        let fresh = match step {
+            Some(step) => {
+                sqlx::query("UPDATE users SET totp_last_step = ? WHERE id = ? AND totp_last_step < ?")
+                    .bind(step)
+                    .bind(user.id)
+                    .bind(step)
+                    .execute(&self.pool)
+                    .await?
+                    .rows_affected()
+                    == 1
+            }
+            None => false,
+        };
+        if !fresh {
             self.record_failure(&keys, now).await?;
             return Err(AuthError::Invalid);
         }
@@ -495,11 +514,11 @@ mod tests {
     async fn first_login_requires_password_change_and_totp() {
         let a = auth().await;
         let (_, secret) = active_user(&a, "luca@example.org", true).await;
-        let (tok, stage) = a.login("LUCA@example.org", "una-password-lunga", "1.1.1.1", "ua", T0 + 10).await.unwrap();
+        let (tok, stage) = a.login("LUCA@example.org", "una-password-lunga", "1.1.1.1", "ua", T0 + 40).await.unwrap();
         assert_eq!(stage, Stage::Totp);
-        assert_eq!(a.session(&tok, T0 + 10).await.unwrap().stage, Stage::Totp);
-        a.verify_totp(&tok, &code(&secret, T0 + 10), "1.1.1.1", T0 + 10).await.unwrap();
-        assert_eq!(a.session(&tok, T0 + 10).await.unwrap().stage, Stage::Full);
+        assert_eq!(a.session(&tok, T0 + 40).await.unwrap().stage, Stage::Totp);
+        a.verify_totp(&tok, &code(&secret, T0 + 40), "1.1.1.1", T0 + 40).await.unwrap();
+        assert_eq!(a.session(&tok, T0 + 40).await.unwrap().stage, Stage::Full);
     }
 
     #[tokio::test]
@@ -508,6 +527,18 @@ mod tests {
         let (_, temp) = a.create_user("a@example.org", "A", false).await.unwrap();
         let (tok, _) = a.login("a@example.org", &temp, "1.1.1.1", "ua", T0).await.unwrap();
         assert!(matches!(a.setup_password(&tok, "corta", T0).await, Err(AuthError::WeakPassword)));
+    }
+
+    #[tokio::test]
+    async fn totp_code_cannot_be_reused() {
+        let a = auth().await;
+        let (_, secret) = active_user(&a, "a@example.org", false).await;
+        let c = code(&secret, T0 + 60);
+        let (t1, _) = a.login("a@example.org", "una-password-lunga", "1.1.1.1", "ua", T0 + 60).await.unwrap();
+        a.verify_totp(&t1, &c, "1.1.1.1", T0 + 60).await.unwrap();
+        let (t2, _) = a.login("a@example.org", "una-password-lunga", "1.1.1.1", "ua", T0 + 61).await.unwrap();
+        assert!(a.verify_totp(&t2, &c, "1.1.1.1", T0 + 61).await.is_err(), "codice riusato accettato");
+        a.verify_totp(&t2, &code(&secret, T0 + 90), "1.1.1.1", T0 + 90).await.unwrap();
     }
 
     #[tokio::test]

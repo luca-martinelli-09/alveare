@@ -26,7 +26,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT = "alveare-it"
 NETWORK = "alveare-it-cloudflared"
 PORT = 18080
-PANEL = "pannello.test"
+PANEL = "pannello.localhost"
 VISITOR_IP = "198.51.100.9"
 
 
