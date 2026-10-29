@@ -12,6 +12,10 @@ use cap_std::fs::{Dir, File, MetadataExt};
 use crate::host::Paths;
 
 pub const EDITOR_LIMIT: u64 = 2 * 1024 * 1024;
+/// Sotto il limite di 100 MB per richiesta di Cloudflare Free e Pro.
+pub const CHUNK: u64 = 8 * 1024 * 1024;
+pub const UPLOAD_LIMIT: u64 = 10 * 1024 * 1024 * 1024;
+const UPLOAD_ID_LEN: usize = 24;
 /// Percorsi che il file manager non mostra né tocca: il .env ha le credenziali.
 const HIDDEN: [&str; 1] = [".env"];
 const PROTECTED: [&str; 1] = ["public"];
@@ -28,8 +32,40 @@ pub enum FileError {
     BadMode,
     #[error("il file non è testo UTF-8")]
     NotText,
+    #[error("upload non valido: {0}")]
+    BadUpload(&'static str),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct UploadInfo {
+    pub id: String,
+    pub chunk_size: u64,
+    pub chunks: u64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct UploadStatus {
+    pub received: Vec<u64>,
+    pub complete: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct UploadMeta {
+    dest: String,
+    size: u64,
+}
+
+fn chunks_for(size: u64) -> u64 {
+    size.div_ceil(CHUNK).max(1)
+}
+
+fn upload_dir(id: &str) -> Result<PathBuf> {
+    if id.len() != UPLOAD_ID_LEN || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(FileError::BadUpload("id"));
+    }
+    Ok(Path::new("uploads").join(id))
 }
 
 pub type Result<T> = std::result::Result<T, FileError>;
@@ -188,6 +224,67 @@ impl SiteFiles {
         let perms = cap_std::fs::Permissions::from_std(std::fs::Permissions::from_mode(mode));
         Ok(self.root.set_permissions(rel(path)?, perms)?)
     }
+
+    /// Upload a blocchi: i pezzi si ricompongono in tmp/<slug>/uploads/<id> e il file finito
+    /// si sposta al suo posto. I blocchi possono arrivare in qualunque ordine e ripetersi.
+    pub fn upload_start(&self, dest: &str, size: u64) -> Result<UploadInfo> {
+        let dest_rel = rel(dest)?;
+        if is_protected(&dest_rel) {
+            return Err(FileError::Protected);
+        }
+        if size > UPLOAD_LIMIT {
+            return Err(FileError::BadUpload("file oltre 10 GB"));
+        }
+        let id = rand::distr::SampleString::sample_string(&rand::distr::Alphanumeric, &mut rand::rng(), UPLOAD_ID_LEN);
+        let dir = upload_dir(&id)?;
+        self.tmp.create_dir_all(&dir)?;
+        let meta = UploadMeta { dest: dest_rel.to_string_lossy().into_owned(), size };
+        self.tmp.write(dir.join("meta.json"), serde_json::to_vec(&meta).expect("serializzazione"))?;
+        self.tmp.create(dir.join("data"))?.set_len(size)?;
+        Ok(UploadInfo { id, chunk_size: CHUNK, chunks: chunks_for(size) })
+    }
+
+    fn upload_meta(&self, dir: &Path) -> Result<UploadMeta> {
+        let raw = self.tmp.read(dir.join("meta.json")).map_err(|_| FileError::BadUpload("upload sconosciuto"))?;
+        serde_json::from_slice(&raw).map_err(|_| FileError::BadUpload("metadati"))
+    }
+
+    pub fn upload_status(&self, id: &str) -> Result<UploadStatus> {
+        let dir = upload_dir(id)?;
+        let meta = self.upload_meta(&dir)?;
+        let received: Vec<u64> = (0..chunks_for(meta.size)).filter(|n| self.tmp.exists(dir.join(format!("{n}.ok")))).collect();
+        let complete = received.len() as u64 == chunks_for(meta.size);
+        Ok(UploadStatus { received, complete })
+    }
+
+    pub fn upload_chunk(&self, id: &str, n: u64, bytes: &[u8]) -> Result<UploadStatus> {
+        use std::io::{Seek, SeekFrom};
+        let dir = upload_dir(id)?;
+        let meta = self.upload_meta(&dir)?;
+        if n >= chunks_for(meta.size) {
+            return Err(FileError::BadUpload("blocco fuori intervallo"));
+        }
+        let expected = CHUNK.min(meta.size - n * CHUNK);
+        if bytes.len() as u64 != expected {
+            return Err(FileError::BadUpload("dimensione del blocco"));
+        }
+        let mut f = self.tmp.open_with(dir.join("data"), cap_std::fs::OpenOptions::new().write(true))?;
+        f.seek(SeekFrom::Start(n * CHUNK))?;
+        f.write_all(bytes)?;
+        f.sync_data()?;
+        self.tmp.write(dir.join(format!("{n}.ok")), b"")?;
+        let status = self.upload_status(id)?;
+        if status.complete {
+            let dest = PathBuf::from(&meta.dest);
+            if let Some(parent) = dest.parent().filter(|x| !x.as_os_str().is_empty()) {
+                self.mkdirs(parent)?;
+            }
+            self.tmp.rename(dir.join("data"), &self.root, &dest)?;
+            self.give_to_site(&self.root.open(&dest)?.into_std())?;
+            self.tmp.remove_dir_all(&dir)?;
+        }
+        Ok(status)
+    }
 }
 
 #[cfg(test)]
@@ -281,6 +378,51 @@ mod tests {
         let mode = std::fs::metadata(p.sites.join("sona_it/public/a.php")).unwrap().permissions().mode();
         assert_eq!(mode & 0o7777, 0o640);
         assert!(f.chmod("public/a.php", 0o4755).is_err());
+    }
+
+    fn data(len: usize) -> Vec<u8> {
+        (0..len).map(|i| (i % 251) as u8).collect()
+    }
+
+    #[test]
+    fn chunked_upload_in_any_order_lands_at_destination() {
+        let (_t, p, f) = site();
+        let content = data(CHUNK as usize + 1000);
+        let up = f.upload_start("public/video/clip.mp4", content.len() as u64).unwrap();
+        assert_eq!(up.chunks, 2);
+        let s = f.upload_chunk(&up.id, 1, &content[CHUNK as usize..]).unwrap();
+        assert_eq!((s.received.clone(), s.complete), (vec![1], false));
+        let s = f.upload_chunk(&up.id, 0, &content[..CHUNK as usize]).unwrap();
+        assert!(s.complete);
+        assert_eq!(std::fs::read(p.sites.join("sona_it/public/video/clip.mp4")).unwrap(), content);
+        assert!(std::fs::read_dir(p.tmp.join("sona_it/uploads")).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn upload_status_allows_resuming() {
+        let (_t, _p, f) = site();
+        let content = data(CHUNK as usize * 2 + 5);
+        let up = f.upload_start("public/a.bin", content.len() as u64).unwrap();
+        f.upload_chunk(&up.id, 0, &content[..CHUNK as usize]).unwrap();
+        assert_eq!(f.upload_status(&up.id).unwrap().received, [0]);
+    }
+
+    #[test]
+    fn upload_rejects_wrong_chunks_and_bad_ids() {
+        let (_t, _p, f) = site();
+        let up = f.upload_start("public/a.bin", 10).unwrap();
+        assert!(f.upload_chunk(&up.id, 0, b"corto").is_err());
+        assert!(f.upload_chunk(&up.id, 1, b"0123456789").is_err());
+        assert!(f.upload_chunk("../../etc", 0, b"0123456789").is_err());
+        assert!(f.upload_status("inesistente000000000000000").is_err());
+    }
+
+    #[test]
+    fn upload_destination_must_stay_in_site() {
+        let (_t, _p, f) = site();
+        assert!(f.upload_start("../fuori.bin", 10).is_err());
+        assert!(f.upload_start(".env", 10).is_err());
+        assert!(f.upload_start("public/x", UPLOAD_LIMIT + 1).is_err());
     }
 
     #[test]
