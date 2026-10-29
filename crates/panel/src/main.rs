@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod config;
+mod database;
 mod files;
 mod flows;
 mod host;
@@ -50,7 +51,13 @@ async fn main() -> Result<()> {
     write_state_to_disk(&store, &paths, &cfg).await?;
 
     let mysql = MySqlPoolOptions::new().max_connections(4).connect_lazy(&cfg.mysql_url)?;
-    let host = SystemHost { paths: paths.clone(), mysql, panel_host: cfg.panel_host.clone() };
+    let host = SystemHost {
+        paths: paths.clone(),
+        mysql,
+        panel_host: cfg.panel_host.clone(),
+        db_host: cfg.db_host.clone(),
+        root_password: cfg.root_password.clone(),
+    };
     let ctx = Ctx { store: store.clone(), host, key: cfg.key.clone(), db_host: cfg.db_host.clone(), global_env: cfg.site_env.clone() };
     let app = App::new(ctx, auth, paths.templates.clone(), cfg.secure_cookie);
     tokio::spawn(apply_when_ready(app.clone()));

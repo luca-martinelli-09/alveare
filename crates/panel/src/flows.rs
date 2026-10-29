@@ -6,6 +6,11 @@ use alveare_core::site::{Domain, Slug};
 use anyhow::{bail, Context, Result};
 use rand::distr::{Alphanumeric, SampleString};
 
+use std::pin::Pin;
+
+use tokio::io::AsyncRead;
+
+use crate::database::TableInfo;
 use crate::secrets::{random_password, SecretKey};
 use crate::store::{NewSite, Site, SiteKind, SiteStatus, Store};
 use crate::template::Vars;
@@ -36,6 +41,18 @@ pub trait Host: Send + Sync + 'static {
     fn wp_output(&self, slug: &Slug, args: &[String]) -> impl Future<Output = Result<(bool, String)>> + Send;
     /// Fa riaprire a PHP-FPM i log dopo la rotazione.
     fn reopen_fpm_logs(&self) -> impl Future<Output = Result<()>> + Send;
+    fn db_tables(&self, name: &str) -> impl Future<Output = Result<Vec<TableInfo>>> + Send;
+    /// Dump SQL in streaming; `finished` dice se mariadb-dump è arrivato in fondo.
+    fn db_dump(&self, name: &str, tables: &[String]) -> impl Future<Output = Result<Dump>> + Send;
+    fn db_import(&self, name: &str, sql: Pin<Box<dyn AsyncRead + Send>>) -> impl Future<Output = Result<()>> + Send;
+    fn set_db_password(&self, user: &str, password: &str) -> impl Future<Output = Result<()>> + Send;
+    /// Riscrive una chiave del .env del sito.
+    fn set_site_env(&self, slug: &Slug, uid: u32, key: &str, value: &str) -> impl Future<Output = Result<()>> + Send;
+}
+
+pub struct Dump {
+    pub reader: Pin<Box<dyn AsyncRead + Send>>,
+    pub finished: Pin<Box<dyn Future<Output = Result<()>> + Send>>,
 }
 
 pub struct Ctx<H> {
@@ -199,6 +216,52 @@ async fn rollback<H: Host>(c: &Ctx<H>, undo: Vec<Undo>, log: &mut JobLog) {
             log.push(format!("rigenerazione dopo il rollback: {e:#}"));
         }
     }
+}
+
+/// Import di un dump: prima un dump di sicurezza in tmp/<slug>, poi l'import e,
+/// se richiesto, `wp search-replace` (rispetta i dati serializzati di WordPress).
+pub async fn import_database<H: Host>(
+    c: &Ctx<H>,
+    site_id: i64,
+    sql: Pin<Box<dyn AsyncRead + Send>>,
+    safety: &std::path::Path,
+    search_replace: Option<(String, String)>,
+    log: &mut JobLog,
+) -> Result<()> {
+    let site = c.store.site(site_id).await?;
+    let db = c.db_creds(site_id).await?;
+    save_dump(c, &db.name, safety).await.context("dump di sicurezza")?;
+    log.push(format!("dump di sicurezza salvato in {}", safety.display()));
+    c.host.db_import(&db.name, sql).await?;
+    log.push("dump importato");
+    if let Some((from, to)) = search_replace {
+        let args: Vec<String> = ["search-replace", &from, &to, "--all-tables", "--skip-columns=guid"].map(String::from).to_vec();
+        let out = c.host.wp(&site.slug, &args).await?;
+        log.push(format!("search-replace {from} → {to}: {}", out.lines().last().unwrap_or_default()));
+    }
+    Ok(())
+}
+
+/// Dump compresso su file; fallisce se mariadb-dump non arriva in fondo.
+pub async fn save_dump<H: Host>(c: &Ctx<H>, db: &str, dest: &std::path::Path) -> Result<()> {
+    use async_compression::tokio::write::GzipEncoder;
+    use tokio::io::AsyncWriteExt;
+    let dump = c.host.db_dump(db, &[]).await?;
+    let file = tokio::fs::File::create(dest).await.with_context(|| format!("creazione di {}", dest.display()))?;
+    let mut gz = GzipEncoder::new(file);
+    let mut reader = dump.reader;
+    tokio::io::copy(&mut reader, &mut gz).await?;
+    gz.shutdown().await?;
+    dump.finished.await
+}
+
+pub async fn reset_db_password<H: Host>(c: &Ctx<H>, site_id: i64) -> Result<()> {
+    let site = c.store.site(site_id).await?;
+    let db = c.db_creds(site_id).await?;
+    let password = random_password();
+    c.host.set_db_password(&db.user, &password).await?;
+    c.store.update_db_password(site_id, &c.key.encrypt(&password)).await?;
+    c.host.set_site_env(&site.slug, site.uid(), "DB_PASSWORD", &password).await
 }
 
 /// Elimina un sito. Va solo avanti: se si ferma, il sito resta in `deleting` e si può rilanciare.

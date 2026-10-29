@@ -215,6 +215,10 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/sites/{id}/files/uploads/{upload}/{n}", put(upload_chunk::<H>).layer(DefaultBodyLimit::max(CHUNK as usize + 1024)))
         .route("/api/sites/{id}/logs/{kind}", get(read_log::<H>).delete(clear_log::<H>))
         .route("/api/sites/{id}/logs/{kind}/stream", get(stream_log::<H>))
+        .route("/api/sites/{id}/database", get(database_overview::<H>))
+        .route("/api/sites/{id}/database/export", get(database_export::<H>))
+        .route("/api/sites/{id}/database/import", post(database_import::<H>))
+        .route("/api/sites/{id}/database/password", post(database_password::<H>))
         .route("/api/alerts", get(list_alerts::<H>))
         .route("/api/jobs/{id}", get(get_job::<H>))
         .with_state(app)
@@ -666,6 +670,93 @@ async fn stream_log<H: Host>(State(app): State<App<H>>, Path((id, kind)): Path<(
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()).into_response())
 }
 
+async fn database_overview<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_site(&app, &user, id, Need::Manage).await?;
+    let db = app.ctx.db_creds(id).await?;
+    let tables = app.ctx.host.db_tables(&db.name).await?;
+    let total: u64 = tables.iter().map(|t| t.bytes).sum();
+    Ok(Json(json!({ "name": db.name, "user": db.user, "host": app.ctx.db_host, "total_bytes": total, "tables": tables })).into_response())
+}
+
+#[derive(Deserialize)]
+struct ExportQuery {
+    #[serde(default)]
+    tables: String,
+}
+
+async fn database_export<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, Query(q): Query<ExportQuery>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    use tokio_stream::StreamExt;
+    let user = caller(&app, &m, &h).await?;
+    require_site(&app, &user, id, Need::Manage).await?;
+    let tables: Vec<String> = q.tables.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect();
+    if !tables.iter().all(|t| crate::database::valid_table(t)) {
+        return Err(ApiError::bad_request("nome di tabella non valido"));
+    }
+    let site = app.ctx.store.site(id).await?;
+    let db = app.ctx.db_creds(id).await?;
+    let dump = app.ctx.host.db_dump(&db.name, &tables).await?;
+    app.auth.audit(Some(user.id), "database.export", Some(id), &q.tables).await?;
+    let flows::Dump { reader, finished } = dump;
+    let gz = async_compression::tokio::bufread::GzipEncoder::new(tokio::io::BufReader::new(reader));
+    // Se mariadb-dump fallisce a metà, lo stream finisce con un errore: il download risulta interrotto.
+    let tail = futures_util::stream::once(async move {
+        finished.await.map(|_| axum::body::Bytes::new()).map_err(|e| std::io::Error::other(e.to_string()))
+    });
+    let stream = tokio_util::io::ReaderStream::new(gz).chain(tail);
+    let name = format!("{}-{}.sql.gz", site.slug.as_str(), chrono::Local::now().format("%Y%m%d-%H%M"));
+    Ok((
+        [(header::CONTENT_TYPE, "application/gzip".to_string()), (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\""))],
+        axum::body::Body::from_stream(stream),
+    )
+        .into_response())
+}
+
+#[derive(Deserialize)]
+struct SearchReplace {
+    from: String,
+    to: String,
+}
+
+#[derive(Deserialize)]
+struct ImportReq {
+    /// Percorso di un dump già caricato nella cartella del sito (.sql o .sql.gz).
+    path: String,
+    search_replace: Option<SearchReplace>,
+}
+
+async fn database_import<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(r): Json<ImportReq>) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    let files = site_files(&app, &user, id).await?;
+    let gz = crate::database::dump_kind(&r.path).ok_or_else(|| ApiError::bad_request("serve un file .sql o .sql.gz"))?;
+    let path = r.path.clone();
+    let file = blocking(move || files.open_read(&path)).await?;
+    let site = app.ctx.store.site(id).await?;
+    let safety = app.paths.tmp.join(site.slug.as_str()).join(format!("db-before-import-{}.sql.gz", now()));
+    let sr = r.search_replace.map(|s| (s.from, s.to));
+    let (ctx, auth, uid, detail) = (app.ctx.clone(), app.auth.clone(), user.id, r.path.clone());
+    let job = app
+        .jobs
+        .spawn("database.import", Some(id), Some(user.id), move |mut log| async move {
+            let reader = tokio::io::BufReader::new(tokio::fs::File::from_std(file));
+            let sql: std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send>> =
+                if gz { Box::pin(async_compression::tokio::bufread::GzipDecoder::new(reader)) } else { Box::pin(reader) };
+            flows::import_database(&ctx, id, sql, &safety, sr, &mut log).await?;
+            auth.audit(Some(uid), "database.import", Some(id), &detail).await?;
+            Ok(log)
+        })
+        .await?;
+    Ok((StatusCode::ACCEPTED, Json(json!({ "job": job }))).into_response())
+}
+
+async fn database_password<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_site(&app, &user, id, Need::Manage).await?;
+    flows::reset_db_password(&app.ctx, id).await?;
+    app.auth.audit(Some(user.id), "database.password", Some(id), "").await?;
+    Ok(Json(json!({})).into_response())
+}
+
 async fn list_alerts<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
     let visible = app.auth.visible_sites(&user).await?;
@@ -951,6 +1042,77 @@ mod tests {
         assert_eq!(list[0]["site_id"], a);
         let (_, all, _) = call(&t, req("GET", "/api/alerts", Some(&admin), None)).await;
         assert_eq!(all.as_array().unwrap().len(), 2);
+    }
+
+    async fn wait_job(t: &T, job: i64) -> crate::jobs::JobView {
+        for _ in 0..300 {
+            let v = t.app.jobs.get(job).await.unwrap();
+            if v.status != "running" {
+                return v;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("job non terminato");
+    }
+
+    #[tokio::test]
+    async fn database_overview_and_compressed_export() {
+        let t = setup().await;
+        let (admin, id) = site_with_files(&t).await;
+        let (uid, ro) = token_for(&t, "ro@example.org", false).await;
+        t.app.auth.assign_site(uid, id, Role::Readonly).await.unwrap();
+        let (s, _, _) = call(&t, req("GET", &format!("/api/sites/{id}/database"), Some(&ro), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, body, _) = call(&t, req("GET", &format!("/api/sites/{id}/database"), Some(&admin), None)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(body["tables"][0]["name"], "wp_posts");
+        assert_eq!(body["total_bytes"], 4096);
+
+        let resp = router(t.app.clone()).oneshot(req("GET", &format!("/api/sites/{id}/database/export?tables=wp_posts"), Some(&admin), None)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(resp.headers()["content-disposition"].to_str().unwrap().contains("sona_it"));
+        let gz = resp.into_body().collect().await.unwrap().to_bytes();
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(&gz[..]), &mut text).unwrap();
+        assert_eq!(text, "-- dump finto\n");
+        assert!(t.app.ctx.host.calls().contains(&"db_dump sona_it wp_posts".to_string()));
+        let (s, _, _) = call(&t, req("GET", &format!("/api/sites/{id}/database/export?tables=a;DROP"), Some(&admin), None)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn database_password_reset_updates_db_store_and_env() {
+        let t = setup().await;
+        let (admin, id) = site_with_files(&t).await;
+        let before = t.app.ctx.db_creds(id).await.unwrap().password;
+        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/database/password"), Some(&admin), None)).await;
+        assert_eq!(s, StatusCode::OK);
+        let after = t.app.ctx.db_creds(id).await.unwrap().password;
+        assert_ne!(before, after);
+        let env = t.app.ctx.host.env.lock().unwrap().clone();
+        assert_eq!(env["DB_PASSWORD"], after);
+        assert_eq!(env["SITE_ENV DB_PASSWORD"], after);
+    }
+
+    #[tokio::test]
+    async fn database_import_runs_as_job_with_safety_dump() {
+        let t = setup().await;
+        let (admin, id) = site_with_files(&t).await;
+        let files = crate::files::SiteFiles::open(&t.app.paths, &alveare_core::site::Slug::parse("sona_it").unwrap(), None).unwrap();
+        files.write("dump.sql", b"INSERT INTO x VALUES (1);").unwrap();
+        let body = serde_json::json!({"path": "dump.sql", "search_replace": {"from": "vecchio.it", "to": "sona.it"}});
+        let (s, resp, _) = call(&t, req("POST", &format!("/api/sites/{id}/database/import"), Some(&admin), Some(body))).await;
+        assert_eq!(s, StatusCode::ACCEPTED, "{resp}");
+        let job = wait_job(&t, resp["job"].as_i64().unwrap()).await;
+        assert_eq!(job.status, "done", "{:?}", job.log);
+        let calls = t.app.ctx.host.calls();
+        let pos = |p: &str| calls.iter().position(|c| c.starts_with(p)).unwrap_or_else(|| panic!("manca {p}: {calls:?}"));
+        assert!(pos("db_dump sona_it") < pos("db_import sona_it INSERT INTO x VALUES (1);"));
+        assert!(pos("db_import") < pos("wp sona_it search-replace vecchio.it sona.it --all-tables"));
+        let safety: Vec<_> = std::fs::read_dir(t.app.paths.tmp.join("sona_it")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("db-before-import-")).collect();
+        assert_eq!(safety.len(), 1);
+        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/database/import"), Some(&admin), Some(serde_json::json!({"path": "foto.jpg"})))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
     }
 
     fn cookie_of(headers: &axum::http::HeaderMap) -> String {

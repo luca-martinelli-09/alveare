@@ -247,6 +247,11 @@ impl Store {
         Ok(())
     }
 
+    pub async fn update_db_password(&self, site_id: i64, password_enc: &[u8]) -> Result<()> {
+        sqlx::query("UPDATE site_databases SET password_enc = ? WHERE site_id = ?").bind(password_enc).bind(site_id).execute(&self.pool).await?;
+        Ok(())
+    }
+
     /// (nome DB, utente DB, password cifrata)
     pub async fn db_creds(&self, site_id: i64) -> Result<(String, String, Vec<u8>)> {
         let r = sqlx::query("SELECT db_name, db_user, password_enc FROM site_databases WHERE site_id = ?")

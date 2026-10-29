@@ -5,7 +5,12 @@ use alveare_core::caddy::CaddySite;
 use alveare_core::php::SitePhp;
 use alveare_core::site::Slug;
 
-use crate::flows::{DbCreds, Host};
+use std::pin::Pin;
+
+use tokio::io::AsyncRead;
+
+use crate::database::TableInfo;
+use crate::flows::{DbCreds, Dump, Host};
 use crate::template::Vars;
 
 #[derive(Default)]
@@ -75,6 +80,27 @@ impl Host for FakeHost {
     }
     async fn reopen_fpm_logs(&self) -> anyhow::Result<()> {
         self.record("reopen_fpm_logs", String::new())
+    }
+    async fn db_tables(&self, name: &str) -> anyhow::Result<Vec<TableInfo>> {
+        self.record("db_tables", name.to_string())?;
+        Ok(vec![TableInfo { name: "wp_posts".into(), rows: 10, bytes: 4096 }])
+    }
+    async fn db_dump(&self, name: &str, tables: &[String]) -> anyhow::Result<Dump> {
+        self.record("db_dump", format!("{name} {}", tables.join(",")))?;
+        Ok(Dump { reader: Box::pin(std::io::Cursor::new(b"-- dump finto\n".to_vec())), finished: Box::pin(async { Ok(()) }) })
+    }
+    async fn db_import(&self, name: &str, mut sql: Pin<Box<dyn AsyncRead + Send>>) -> anyhow::Result<()> {
+        let mut text = String::new();
+        tokio::io::AsyncReadExt::read_to_string(&mut sql, &mut text).await?;
+        self.record("db_import", format!("{name} {}", text.trim()))
+    }
+    async fn set_db_password(&self, user: &str, password: &str) -> anyhow::Result<()> {
+        self.env.lock().unwrap().insert("DB_PASSWORD".into(), password.into());
+        self.record("set_db_password", user.to_string())
+    }
+    async fn set_site_env(&self, slug: &Slug, _uid: u32, key: &str, value: &str) -> anyhow::Result<()> {
+        self.env.lock().unwrap().insert(format!("SITE_ENV {key}"), value.into());
+        self.record("set_site_env", format!("{} {key}", slug.as_str()))
     }
 }
 

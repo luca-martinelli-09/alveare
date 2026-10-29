@@ -13,7 +13,10 @@ use sqlx::MySqlPool;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
-use crate::flows::{DbCreds, Host};
+use sqlx::Row;
+
+use crate::database::TableInfo;
+use crate::flows::{DbCreds, Dump, Host};
 use crate::template::{env_file, Template, Vars};
 
 /// Il timeout dell'agente per WP-CLI è 600 s: il pannello aspetta un po' di più.
@@ -211,6 +214,9 @@ pub struct SystemHost {
     pub paths: Paths,
     pub mysql: MySqlPool,
     pub panel_host: Option<Domain>,
+    pub db_host: String,
+    /// Passata a mariadb-dump e mariadb via MYSQL_PWD, mai sulla riga di comando.
+    pub root_password: String,
 }
 
 impl SystemHost {
@@ -299,6 +305,81 @@ impl Host for SystemHost {
     async fn wp_output(&self, slug: &Slug, args: &[String]) -> Result<(bool, String)> {
         let resp = self.agent(Command::Wp { slug: slug.clone(), args: args.to_vec() }).await?;
         Ok((resp.ok, resp.output))
+    }
+
+    async fn db_tables(&self, name: &str) -> Result<Vec<TableInfo>> {
+        let rows = sqlx::query(
+            "SELECT CAST(table_name AS CHAR) AS name, CAST(COALESCE(table_rows, 0) AS UNSIGNED) AS r,
+                    CAST(COALESCE(data_length, 0) + COALESCE(index_length, 0) AS UNSIGNED) AS b
+             FROM information_schema.tables WHERE table_schema = ? ORDER BY b DESC",
+        )
+        .bind(sql_safe(name)?)
+        .fetch_all(&self.mysql)
+        .await?;
+        rows.iter()
+            .map(|r| Ok(TableInfo { name: r.try_get("name")?, rows: r.try_get("r")?, bytes: r.try_get("b")? }))
+            .collect()
+    }
+
+    async fn db_dump(&self, name: &str, tables: &[String]) -> Result<Dump> {
+        let mut cmd = tokio::process::Command::new("mariadb-dump");
+        cmd.args(["--single-transaction", "--quick", "--default-character-set=utf8mb4", "-h", &self.db_host, "-u", "root", "--"])
+            .arg(sql_safe(name)?)
+            .args(tables)
+            .env("MYSQL_PWD", &self.root_password)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = cmd.spawn().context("avvio di mariadb-dump")?;
+        let stdout = child.stdout.take().context("stdout di mariadb-dump")?;
+        let finished = async move {
+            let out = child.wait_with_output().await?;
+            if !out.status.success() {
+                bail!("mariadb-dump: {}", String::from_utf8_lossy(&out.stderr).trim());
+            }
+            Ok(())
+        };
+        Ok(Dump { reader: Box::pin(stdout), finished: Box::pin(finished) })
+    }
+
+    async fn db_import(&self, name: &str, mut sql: std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send>>) -> Result<()> {
+        let mut child = tokio::process::Command::new("mariadb")
+            .args(["--default-character-set=utf8mb4", "-h", &self.db_host, "-u", "root", "--"])
+            .arg(sql_safe(name)?)
+            .env("MYSQL_PWD", &self.root_password)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .context("avvio di mariadb")?;
+        let mut stdin = child.stdin.take().context("stdin di mariadb")?;
+        let copied = tokio::io::copy(&mut sql, &mut stdin).await;
+        drop(stdin);
+        let out = child.wait_with_output().await?;
+        if !out.status.success() {
+            bail!("import: {}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        copied.context("lettura del dump")?;
+        Ok(())
+    }
+
+    async fn set_db_password(&self, user: &str, password: &str) -> Result<()> {
+        let (user, pw) = (sql_safe(user)?, sql_safe(password)?);
+        sqlx::raw_sql(&format!("ALTER USER '{user}'@'%' IDENTIFIED BY '{pw}';")).execute(&self.mysql).await.context("cambio password")?;
+        Ok(())
+    }
+
+    async fn set_site_env(&self, slug: &Slug, uid: u32, key: &str, value: &str) -> Result<()> {
+        let path = self.paths.sites.join(slug.as_str()).join(".env");
+        let current = fs::read_to_string(&path).context("lettura del .env")?;
+        let updated = crate::database::replace_env_value(&current, key, value)?;
+        let tmp = path.with_extension("new");
+        fs::write(&tmp, updated)?;
+        set_mode(&tmp, 0o400)?;
+        chown(&tmp, Some(uid))?;
+        fs::rename(&tmp, &path).context("sostituzione del .env")
     }
 
     async fn reopen_fpm_logs(&self) -> Result<()> {
