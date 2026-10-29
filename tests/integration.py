@@ -113,6 +113,19 @@ def raw_put(http, path, data):
         return json.loads(r.read())
 
 
+def agent(compose, work, cmd):
+    """Un comando all'agente PHP, come lo manda il pannello."""
+    php = ("$s=stream_socket_client('unix:///run/alveare/agent.sock');"
+           "fwrite($s, $argv[1].\"\\n\"); $r=json_decode(fgets($s), true);"
+           "echo $r['output']; exit($r['ok'] ? 0 : 1);")
+    return sh(*compose, "exec", "-T", "php", "php", "-r", php, json.dumps(cmd), cwd=work)
+
+
+def read_env(work, slug, key):
+    text = sh("docker", "compose", "-p", PROJECT, "exec", "-T", "panel", "cat", f"/srv/sites/{slug}/.env", cwd=work)
+    return re.search(rf"^{key}='([^']*)'", text, re.M).group(1)
+
+
 def run_job(http, method, path, body=None):
     status, resp = http.call(method, path, body, expect=202)
     job = resp["job"]
@@ -197,6 +210,18 @@ def main():
 
         status, _ = page("sona.test", "/wp-content/uploads/x.php")
         assert status == 403, f"php in uploads: {status}"
+
+        print("Redis: object cache con l'utente ACL del sito")
+        agent(compose, work, {"cmd": "wp", "slug": "upupa_test", "args": ["plugin", "activate", "redis-cache"]})
+        agent(compose, work, {"cmd": "wp", "slug": "upupa_test", "args": ["redis", "enable"]})
+        status = agent(compose, work, {"cmd": "wp", "slug": "upupa_test", "args": ["redis", "status"]})
+        assert "Connected" in status, status
+        code, _ = page("upupa.test")
+        assert code == 200
+        keys = sh(*compose, "exec", "-T", "redis", "redis-cli", "--user", "upupa_test", "--pass", read_env(work, "upupa_test", "REDIS_PASSWORD"), "--no-auth-warning", "SCAN", "0", "COUNT", "1000", cwd=work)
+        assert "upupa_test:" in keys, keys
+        denied = sh(*compose, "exec", "-T", "redis", "redis-cli", "--user", "upupa_test", "--pass", read_env(work, "upupa_test", "REDIS_PASSWORD"), "--no-auth-warning", "GET", "altro:chiave", cwd=work)
+        assert "NOPERM" in denied, denied
 
         print("WP-CLI con l'utente del sito (cron)...")
         sh(*compose, "exec", "-T", "php", "php", "-r",

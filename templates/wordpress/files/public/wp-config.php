@@ -51,6 +51,13 @@ define('WP_DEBUG', $env('WP_DEBUG') === 'true');
 define('WP_DEBUG_LOG', $env('WP_DEBUG') === 'true');
 define('WP_DEBUG_DISPLAY', false);
 
+// Object cache (plugin Redis Object Cache, da attivare sito per sito): utente ACL e prefisso del sito.
+define('WP_REDIS_HOST', $env('REDIS_HOST', 'redis'));
+define('WP_REDIS_PORT', (int) $env('REDIS_PORT', 6379));
+define('WP_REDIS_PASSWORD', [$env('REDIS_USERNAME'), $env('REDIS_PASSWORD')]);
+define('WP_REDIS_PREFIX', $env('REDIS_PREFIX'));
+define('WP_REDIS_SELECTIVE_FLUSH', true);
+
 foreach (['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_FROM', 'SMTP_FROM_NAME', 'ALVEARE_UPDATE_RULE'] as $k) {
     if ($env($k) !== null) {
         define($k, $env($k));

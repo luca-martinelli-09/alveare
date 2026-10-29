@@ -59,6 +59,8 @@ async fn main() -> Result<()> {
         adminer_host: cfg.adminer_host.clone(),
         db_host: cfg.db_host.clone(),
         root_password: cfg.root_password.clone(),
+        redis_addr: cfg.redis_addr.clone(),
+        redis_admin_password: cfg.redis_admin_password.clone(),
     };
     let ctx = Ctx {
         store: store.clone(),
@@ -117,6 +119,8 @@ async fn remind_recovery_kit(app: &App<SystemHost>) -> Result<()> {
 /// PHP e Caddy partono dopo il pannello e trovano i file pronti.
 async fn write_state_to_disk(store: &Store, paths: &Paths, cfg: &Config) -> Result<()> {
     write_php_files(paths, &store.php_sites().await?, &store.pooled_sites().await?)?;
+    let redis_users = flows::redis_users(store, &cfg.key).await?;
+    host::write_redis_acl(paths, &alveare_core::redis::sha256_hex(&cfg.redis_admin_password), &redis_users)?;
     std::fs::create_dir_all(&paths.caddy)?;
     host::create_adminer_dirs(paths, Some(alveare_core::php::ADMINER_UID))?;
     let caddyfile = render_caddyfile(&CaddyConfig {

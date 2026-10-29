@@ -38,6 +38,7 @@ pub struct Paths {
     pub agent: PathBuf,
     pub adminer: PathBuf,
     pub backups: PathBuf,
+    pub redis: PathBuf,
 }
 
 impl Paths {
@@ -56,6 +57,7 @@ impl Paths {
             agent: root.join("run/alveare/agent.sock"),
             adminer: root.join("adminer"),
             backups: root.join("backups"),
+            redis: root.join("redis"),
         }
     }
 
@@ -226,6 +228,40 @@ fn sql_safe(s: &str) -> Result<&str> {
     Ok(s)
 }
 
+/// Gruppo dell'utente redis nell'immagine ufficiale: deve leggere il file ACL.
+const REDIS_GID: u32 = 999;
+
+/// users.acl nella cartella dati di Redis: contiene solo hash SHA-256 delle password.
+pub fn write_redis_acl(p: &Paths, admin_sha256: &str, users: &[alveare_core::redis::RedisUser]) -> Result<()> {
+    fs::create_dir_all(&p.redis)?;
+    let path = p.redis.join("users.acl");
+    write_atomic(&path, &alveare_core::redis::render_acl(admin_sha256, users))?;
+    set_mode(&path, 0o640)?;
+    if unsafe { libc::geteuid() } == 0 {
+        lchown(&path, Some(0), Some(REDIS_GID))?;
+    }
+    Ok(())
+}
+
+/// AUTH come admin e ACL LOAD, in RESP: due comandi non valgono un client Redis.
+pub async fn redis_acl_load(addr: &str, admin_password: &str) -> Result<()> {
+    fn resp(args: &[&str]) -> String {
+        args.iter().fold(format!("*{}\r\n", args.len()), |acc, a| acc + &format!("${}\r\n{a}\r\n", a.len()))
+    }
+    let stream = tokio::net::TcpStream::connect(addr).await.with_context(|| format!("connessione a Redis ({addr})"))?;
+    let (r, mut w) = stream.into_split();
+    let mut r = BufReader::new(r);
+    for cmd in [resp(&["AUTH", alveare_core::redis::ADMIN_USER, admin_password]), resp(&["ACL", "LOAD"])] {
+        w.write_all(cmd.as_bytes()).await?;
+        let mut line = String::new();
+        tokio::time::timeout(Duration::from_secs(10), r.read_line(&mut line)).await.context("Redis non risponde")??;
+        if !line.starts_with('+') {
+            bail!("Redis: {}", line.trim());
+        }
+    }
+    Ok(())
+}
+
 pub struct SystemHost {
     pub paths: Paths,
     pub mysql: MySqlPool,
@@ -234,6 +270,8 @@ pub struct SystemHost {
     pub db_host: String,
     /// Passata a mariadb-dump e mariadb via MYSQL_PWD, mai sulla riga di comando.
     pub root_password: String,
+    pub redis_addr: String,
+    pub redis_admin_password: String,
 }
 
 impl SystemHost {
@@ -495,6 +533,11 @@ impl Host for SystemHost {
         Ok(snap)
     }
 
+    async fn sync_redis(&self, users: &[alveare_core::redis::RedisUser]) -> Result<()> {
+        write_redis_acl(&self.paths, &alveare_core::redis::sha256_hex(&self.redis_admin_password), users)?;
+        redis_acl_load(&self.redis_addr, &self.redis_admin_password).await
+    }
+
     async fn adminer_grant(&self, db: &DbCreds) -> Result<String> {
         let token = rand::distr::SampleString::sample_string(&rand::distr::Alphanumeric, &mut rand::rng(), 40);
         let exp = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()) + 300;
@@ -656,6 +699,47 @@ mod tests {
             s.write_all(resp.as_bytes()).await.unwrap();
             String::from_utf8_lossy(&buf[..n]).into_owned()
         })
+    }
+
+    #[tokio::test]
+    async fn redis_acl_load_authenticates_then_reloads() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let server = tokio::spawn(async move {
+            let (s, _) = listener.accept().await.unwrap();
+            let (r, mut w) = s.into_split();
+            let mut r = BufReader::new(r);
+            let mut seen = String::new();
+            for _ in 0..2 {
+                let mut header = String::new();
+                r.read_line(&mut header).await.unwrap();
+                let n: usize = header.trim()[1..].parse().unwrap();
+                seen.push_str(&header);
+                for _ in 0..n * 2 {
+                    let mut l = String::new();
+                    r.read_line(&mut l).await.unwrap();
+                    seen.push_str(&l);
+                }
+                w.write_all(b"+OK\r\n").await.unwrap();
+            }
+            seen
+        });
+        redis_acl_load(&addr, "pw").await.unwrap();
+        assert_eq!(server.await.unwrap(), "*3\r\n$4\r\nAUTH\r\n$7\r\nalveare\r\n$2\r\npw\r\n*2\r\n$3\r\nACL\r\n$4\r\nLOAD\r\n");
+    }
+
+    #[tokio::test]
+    async fn redis_error_is_reported() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 256];
+            let _ = s.read(&mut buf).await;
+            s.write_all(b"-WRONGPASS invalid username-password pair\r\n").await.unwrap();
+        });
+        let err = redis_acl_load(&addr, "x").await.unwrap_err();
+        assert!(err.to_string().contains("WRONGPASS"));
     }
 
     #[tokio::test]

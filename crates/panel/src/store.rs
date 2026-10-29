@@ -264,6 +264,24 @@ impl Store {
         Ok(())
     }
 
+    pub async fn save_redis_password(&self, site_id: i64, enc: &[u8]) -> Result<()> {
+        sqlx::query("UPDATE site_databases SET redis_password_enc = ? WHERE site_id = ?").bind(enc).bind(site_id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// (slug, password Redis cifrata) dei siti che ne hanno una.
+    pub async fn redis_users(&self) -> Result<Vec<(Slug, Vec<u8>)>> {
+        let rows = sqlx::query("SELECT s.slug, d.redis_password_enc FROM sites s JOIN site_databases d ON d.site_id = s.id WHERE d.redis_password_enc IS NOT NULL ORDER BY s.slug")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| {
+                let slug = Slug::parse(r.try_get("slug")?).map_err(|e| StoreError::Db(sqlx::Error::Decode(e.to_string().into())))?;
+                Ok((slug, r.try_get("redis_password_enc")?))
+            })
+            .collect()
+    }
+
     /// (nome DB, utente DB, password cifrata)
     pub async fn db_creds(&self, site_id: i64) -> Result<(String, String, Vec<u8>)> {
         let r = sqlx::query("SELECT db_name, db_user, password_enc FROM site_databases WHERE site_id = ?")

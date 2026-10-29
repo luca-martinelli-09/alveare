@@ -52,6 +52,16 @@ services:
     depends_on:
       panel: { condition: service_healthy }
 
+  redis:
+    <<: *common
+    image: redis:8
+    # Cache: memoria fissa, si scarta il meno usato. L'ACL (un utente per sito) la scrive il pannello.
+    command: ["redis-server", "--aclfile", "/data/users.acl", "--maxmemory", "${REDIS_MAXMEMORY:-256mb}", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - ./data/redis:/data
+    depends_on:
+      panel: { condition: service_healthy }
+
   mariadb:
     <<: *common
     image: mariadb:12

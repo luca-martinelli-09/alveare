@@ -12,6 +12,9 @@ pub struct Config {
     pub db_host: String,
     pub mysql_url: String,
     pub root_password: String,
+    pub redis_addr: String,
+    /// Derivata dalla chiave del pannello: una variabile in meno da gestire.
+    pub redis_admin_password: String,
     pub panel_host: Option<Domain>,
     pub adminer_host: Option<Domain>,
     pub admin_email: Option<String>,
@@ -36,8 +39,8 @@ impl Config {
 
     pub fn from_vars(vars: Vec<(String, String)>) -> Result<Self> {
         let get = |k: &str| vars.iter().rev().find(|(n, _)| n == k).map(|(_, v)| v.trim().to_string()).filter(|v| !v.is_empty());
-        let key = SecretKey::from_base64(&get("ALVEARE_SECRET_KEY").context("ALVEARE_SECRET_KEY mancante")?)
-            .context("ALVEARE_SECRET_KEY: servono 32 byte in base64 (openssl rand -base64 32)")?;
+        let secret = get("ALVEARE_SECRET_KEY").context("ALVEARE_SECRET_KEY mancante")?;
+        let key = SecretKey::from_base64(&secret).context("ALVEARE_SECRET_KEY: servono 32 byte in base64 (openssl rand -base64 32)")?;
         let root = get("MARIADB_ROOT_PASSWORD").context("MARIADB_ROOT_PASSWORD mancante")?;
         let db_host = get("ALVEARE_DB_HOST").unwrap_or_else(|| "mariadb".into());
         let host = |key: &str| -> Result<Option<Domain>> {
@@ -66,6 +69,8 @@ impl Config {
             key,
             mysql_url: format!("mysql://root:{}@{db_host}:3306/mysql", url_encode(&root)),
             root_password: root,
+            redis_addr: get("ALVEARE_REDIS_ADDR").unwrap_or_else(|| "redis:6379".into()),
+            redis_admin_password: alveare_core::redis::sha256_hex(&format!("alveare-redis-admin:{secret}")),
             db_host,
             panel_host,
             adminer_host,

@@ -6,4 +6,6 @@ post_create = [
     ["core", "download", "--locale=it_IT", "--skip-content"],
     ["core", "install", "--url={{SITE_URL}}", "--title={{TITLE}}", "--admin_user={{ADMIN_USER}}", "--admin_password={{ADMIN_PASSWORD}}", "--admin_email={{ADMIN_EMAIL}}", "--skip-email"],
     ["theme", "install", "twentytwentyfive", "--activate"],
+    # Installato ma spento: l'object cache si attiva sito per sito (wp redis enable).
+    ["plugin", "install", "redis-cache"],
 ]

@@ -2,6 +2,7 @@
 //! come annullarlo; in caso di errore si annulla in ordine inverso e si rigenera tutto dallo stato.
 use alveare_core::caddy::CaddySite;
 use alveare_core::php::SitePhp;
+use alveare_core::redis::{sha256_hex, RedisUser};
 use alveare_core::site::{Domain, Slug};
 use anyhow::{bail, Context, Result};
 use rand::distr::{Alphanumeric, SampleString};
@@ -56,6 +57,8 @@ pub trait Host: Send + Sync + 'static {
     fn restore(&self, slug: &Slug, snapshot: &str, files: bool, db: Option<&DbCreds>) -> impl Future<Output = Result<()>> + Send;
     /// panel.db, template e configurazione cifrata, con il tag `panel`.
     fn backup_panel(&self, store: &Store, env_enc: &[u8]) -> impl Future<Output = Result<Snapshot>> + Send;
+    /// Riscrive l'ACL di Redis e la fa ricaricare.
+    fn sync_redis(&self, users: &[RedisUser]) -> impl Future<Output = Result<()>> + Send;
     /// Token monouso per aprire Adminer già autenticato su questo database.
     fn adminer_grant(&self, db: &DbCreds) -> impl Future<Output = Result<String>> + Send;
     /// Riscrive una chiave del .env del sito.
@@ -123,6 +126,18 @@ impl<H: Host> Ctx<H> {
     async fn sync_caddy(&self) -> Result<()> {
         self.host.sync_caddy(&self.store.caddy_sites().await?).await
     }
+
+    async fn sync_redis(&self) -> Result<()> {
+        self.host.sync_redis(&redis_users(&self.store, &self.key).await?).await
+    }
+}
+
+pub async fn redis_users(store: &Store, key: &SecretKey) -> Result<Vec<RedisUser>> {
+    let mut users = Vec::new();
+    for (slug, enc) in store.redis_users().await? {
+        users.push(RedisUser { slug, password_sha256: sha256_hex(&key.decrypt(&enc)?) });
+    }
+    Ok(users)
 }
 
 fn random_salt() -> String {
@@ -130,7 +145,7 @@ fn random_salt() -> String {
 }
 
 /// (variabili del template, contenuto del `.env`)
-fn site_vars<H>(c: &Ctx<H>, req: &CreateSite, site: &Site, db: &DbCreds) -> (Vars, Vars) {
+fn site_vars<H>(c: &Ctx<H>, req: &CreateSite, site: &Site, db: &DbCreds, redis_password: &str) -> (Vars, Vars) {
     let url = format!("https://{}", req.domain.as_str());
     let mut env = c.global_env.clone();
     env.extend([
@@ -143,6 +158,11 @@ fn site_vars<H>(c: &Ctx<H>, req: &CreateSite, site: &Site, db: &DbCreds) -> (Var
         ("WP_SITEURL".into(), url.clone()),
         ("WP_ENVIRONMENT_TYPE".into(), "production".into()),
         ("ALVEARE_UPDATE_RULE".into(), "security".into()),
+        ("REDIS_HOST".into(), "redis".into()),
+        ("REDIS_PORT".into(), "6379".into()),
+        ("REDIS_USERNAME".into(), site.slug.as_str().into()),
+        ("REDIS_PASSWORD".into(), redis_password.into()),
+        ("REDIS_PREFIX".into(), format!("{}:", site.slug.as_str())),
         ("SMTP_FROM".into(), format!("noreply@{}", req.domain.as_str())),
         // Il .env usa apici singoli: "Pro Loco d'Arco" diventa "Pro Loco d’Arco".
         ("SMTP_FROM_NAME".into(), req.title.replace('\'', "’").replace(['\n', '\r'], " ")),
@@ -188,9 +208,13 @@ async fn create_steps<H: Host>(c: &Ctx<H>, req: &CreateSite, site: &Site, undo: 
 
     c.host.create_site_dirs(slug, site.uid()).await?;
     undo.push(Undo::Dirs(slug.clone()));
-    let (vars, env) = site_vars(c, req, site, &db);
+    let redis_password = random_password();
+    c.store.save_redis_password(site.id, &c.key.encrypt(&redis_password)).await?;
+    let (vars, env) = site_vars(c, req, site, &db, &redis_password);
     let commands = c.host.install_template(slug, site.uid(), &req.template, &vars, &env).await?;
     log.push(format!("template {} installato", req.template));
+    c.sync_redis().await?;
+    log.push("utente Redis creato");
 
     let rejected = c.sync_php().await?;
     let own = format!("{}.conf", slug.as_str());
@@ -225,7 +249,7 @@ async fn rollback<H: Host>(c: &Ctx<H>, undo: Vec<Undo>, log: &mut JobLog) {
             log.push(format!("rollback incompleto: {e:#}"));
         }
     }
-    for res in [c.sync_php().await.map(drop), c.sync_caddy().await] {
+    for res in [c.sync_php().await.map(drop), c.sync_redis().await, c.sync_caddy().await] {
         if let Err(e) = res {
             log.push(format!("rigenerazione dopo il rollback: {e:#}"));
         }
@@ -349,6 +373,7 @@ pub async fn delete_site<H: Host>(c: &Ctx<H>, id: i64, log: &mut JobLog) -> Resu
     }
     c.store.delete_site(id).await?;
     c.sync_php().await?;
+    c.sync_redis().await?;
     log.push(format!("sito {} eliminato", site.slug.as_str()));
     Ok(())
 }
@@ -393,6 +418,7 @@ mod tests {
                 "create_database sona_it",
                 "create_site_dirs sona_it",
                 "install_template sona_it wordpress",
+                "sync_redis sona_it",
                 "sync_php users=sona_it pools=sona_it",
                 "wp sona_it core install",
                 "sync_caddy sona_it",
@@ -417,6 +443,10 @@ mod tests {
         assert!(!env.contains_key("ADMIN_PASSWORD"), "la password admin non va nel .env");
         assert_eq!(env["SMTP_FROM"], "noreply@sona.it");
         assert_eq!(env["SMTP_FROM_NAME"], "Sona");
+        assert_eq!(env["REDIS_USERNAME"], "sona_it");
+        assert_eq!(env["REDIS_PREFIX"], "sona_it:");
+        assert_eq!(env["REDIS_PASSWORD"].len(), 32);
+        assert_ne!(env["REDIS_PASSWORD"], env["DB_PASSWORD"]);
     }
 
     #[tokio::test]
@@ -426,7 +456,7 @@ mod tests {
         assert!(create_site(&c, &req("sona.it"), &mut log).await.is_err());
         assert_eq!(
             c.host.ops(),
-            ["create_database", "create_site_dirs", "install_template", "remove_site_dirs", "drop_database", "sync_php", "sync_caddy"]
+            ["create_database", "create_site_dirs", "install_template", "remove_site_dirs", "drop_database", "sync_php", "sync_redis", "sync_caddy"]
         );
         assert!(c.store.sites().await.unwrap().is_empty());
         assert!(log.lines.iter().any(|l| l.contains("install_template fallito")));
@@ -502,6 +532,7 @@ mod tests {
                 "trash_site_dirs sona_it",
                 "drop_database sona_it",
                 "sync_php users=upupa_it pools=upupa_it",
+                "sync_redis upupa_it",
             ]
         );
         assert!(c.store.site(site.id).await.is_err());

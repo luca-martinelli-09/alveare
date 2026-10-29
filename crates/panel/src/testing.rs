@@ -112,6 +112,9 @@ impl Host for FakeHost {
         self.record("backup_panel", String::new())?;
         Ok(Snapshot { snapshot_id: "panel123".into(), bytes_added: 1, total_bytes: 1 })
     }
+    async fn sync_redis(&self, users: &[alveare_core::redis::RedisUser]) -> anyhow::Result<()> {
+        self.record("sync_redis", slugs(users.iter().map(|u| &u.slug)))
+    }
     async fn adminer_grant(&self, db: &DbCreds) -> anyhow::Result<String> {
         self.record("adminer_grant", db.name.clone())?;
         Ok("t".repeat(40))
