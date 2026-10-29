@@ -30,7 +30,7 @@ Poi:
 3. **Scarica il kit di ripristino** (Account → Kit di ripristino) e conservalo fuori dal server.
 4. Crea un sito, poi aggiungi il suo hostname al tunnel verso `http://caddy:80`.
 
-Per l'object cache di un sito WordPress: `wp plugin activate redis-cache` e `wp redis update-dropin` (non `wp redis enable`, che fa un `FLUSHDB` negato dall'ACL).
+Per l'object cache di un sito WordPress: `wp plugin activate redis-cache`, poi copia `wp-content/plugins/redis-cache/includes/object-cache.php` in `wp-content/` (dal file manager o con `wp eval`). `wp redis enable` e `wp redis update-dropin` fanno un `FLUSHDB`, che l'ACL nega perché svuoterebbe la cache di tutti i siti.
 
 ## Sviluppo
 

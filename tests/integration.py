@@ -221,7 +221,8 @@ def main():
 
         print("Redis: object cache con l'utente ACL del sito")
         agent(compose, work, {"cmd": "wp", "slug": "upupa_test", "args": ["plugin", "activate", "redis-cache"]})
-        agent(compose, work, {"cmd": "wp", "slug": "upupa_test", "args": ["redis", "update-dropin"]})
+        # Drop-in copiato a mano: `wp redis enable` e `update-dropin` fanno FLUSHDB, negato dall'ACL.
+        agent(compose, work, {"cmd": "wp", "slug": "upupa_test", "args": ["eval", "copy(WP_PLUGIN_DIR . '/redis-cache/includes/object-cache.php', WP_CONTENT_DIR . '/object-cache.php');"]})
         status = agent(compose, work, {"cmd": "wp", "slug": "upupa_test", "args": ["redis", "status"]})
         assert "Connected" in status, status
         code, _ = page("upupa.test")

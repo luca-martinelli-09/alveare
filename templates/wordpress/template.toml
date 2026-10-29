@@ -6,7 +6,8 @@ post_create = [
     ["core", "download", "--locale=it_IT", "--skip-content"],
     ["core", "install", "--url={{SITE_URL}}", "--title={{TITLE}}", "--admin_user={{ADMIN_USER}}", "--admin_password={{ADMIN_PASSWORD}}", "--admin_email={{ADMIN_EMAIL}}", "--skip-email"],
     ["theme", "install", "twentytwentyfive", "--activate"],
-    # Installato ma spento. Si attiva con `wp plugin activate redis-cache` e `wp redis update-dropin`:
-    # `wp redis enable` fa FLUSHDB, che l'ACL nega perché svuoterebbe la cache di tutti i siti.
+    # Installato ma spento. Per attivarlo: `wp plugin activate redis-cache` e copia di
+    # includes/object-cache.php in wp-content/. `wp redis enable` e `update-dropin` fanno FLUSHDB,
+    # che l'ACL nega perché svuoterebbe la cache di tutti i siti.
     ["plugin", "install", "redis-cache"],
 ]
