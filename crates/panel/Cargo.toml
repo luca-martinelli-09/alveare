@@ -11,6 +11,7 @@ anyhow = "1.0.104"
 argon2 = "0.6.0"
 axum = "0.8.9"
 base64 = "0.23.1"
+cap-std = "4.0.3"
 chrono = { version = "0.4.45", features = ["serde"] }
 hex = "0.4.3"
 libc = "0.2.191"

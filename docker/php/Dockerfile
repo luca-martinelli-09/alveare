@@ -20,6 +20,9 @@ RUN curl -fsSL -o /usr/local/bin/wp \
 # Via i pool di default (www, porta 9000): esistono solo i pool dei siti.
 RUN rm -f /usr/local/etc/php-fpm.d/*.conf /usr/local/etc/php-fpm.d/*.default \
  && mkdir -p /srv/php/pools /srv/php/staging /run/php /run/alveare
+# Utenti dei siti generati dal pannello in /srv/php/etc: con un link (e non un bind mount
+# del singolo file) la sostituzione atomica del pannello si vede subito.
+RUN ln -sf /srv/php/etc/passwd /etc/passwd && ln -sf /srv/php/etc/group /etc/group
 COPY docker/php/fpm.conf /usr/local/etc/php-fpm.d/alveare.conf
 COPY docker/php/php.ini /usr/local/etc/php/conf.d/alveare.ini
 COPY --from=agent /src/target/release/php-agent /usr/local/bin/php-agent

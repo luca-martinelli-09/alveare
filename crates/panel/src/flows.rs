@@ -108,6 +108,9 @@ fn site_vars<H>(c: &Ctx<H>, req: &CreateSite, site: &Site, db: &DbCreds) -> (Var
         ("WP_SITEURL".into(), url.clone()),
         ("WP_ENVIRONMENT_TYPE".into(), "production".into()),
         ("ALVEARE_UPDATE_RULE".into(), "security".into()),
+        ("SMTP_FROM".into(), format!("noreply@{}", req.domain.as_str())),
+        // Il .env usa apici singoli: "Pro Loco d'Arco" diventa "Pro Loco d’Arco".
+        ("SMTP_FROM_NAME".into(), req.title.replace('\'', "’").replace(['\n', '\r'], " ")),
     ]);
     env.extend(WP_SALT_KEYS.map(|k| (k.to_string(), random_salt())));
     let mut vars = env.clone();
@@ -275,6 +278,8 @@ mod tests {
         assert_eq!(env["AUTH_KEY"].len(), 64);
         assert_ne!(env["AUTH_KEY"], env["AUTH_SALT"]);
         assert!(!env.contains_key("ADMIN_PASSWORD"), "la password admin non va nel .env");
+        assert_eq!(env["SMTP_FROM"], "noreply@sona.it");
+        assert_eq!(env["SMTP_FROM_NAME"], "Sona");
     }
 
     #[tokio::test]

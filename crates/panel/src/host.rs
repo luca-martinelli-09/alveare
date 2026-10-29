@@ -52,8 +52,10 @@ impl Paths {
     }
 
     /// Percorsi nel container del pannello: identici a quelli di Caddy e PHP.
+    /// `data/` è un unico mount su /srv, così cestino e upload si spostano con un rename.
     pub fn production() -> Self {
         Self {
+            caddy: "/srv/caddy/config".into(),
             caddy_admin: alveare_core::caddy::ADMIN_SOCKET.into(),
             agent: alveare_core::agent::AGENT_SOCKET.into(),
             ..Self::under(Path::new("/srv"))

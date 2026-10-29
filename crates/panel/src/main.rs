@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod config;
+mod files;
 mod flows;
 mod host;
 mod jobs;

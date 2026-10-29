@@ -1,0 +1,74 @@
+# Alveare: numero di container fisso, qualunque sia il numero di siti.
+name: alveare
+
+x-common: &common
+  restart: unless-stopped
+  environment:
+    TZ: Europe/Rome
+  networks: [hosting]
+
+services:
+  panel:
+    <<: *common
+    image: ${ALVEARE_REGISTRY:-alveare}/panel:${ALVEARE_VERSION:-dev}
+    build: { context: ., dockerfile: docker/panel/Dockerfile }
+    env_file: .env
+    volumes:
+      # Un solo mount: tra sites/, tmp/ e trash/ i file si spostano con un rename.
+      - ./data:/srv
+      - ./templates:/srv/templates:ro
+      - ./data/run/caddy:/run/caddy
+      - ./data/run/alveare:/run/alveare
+    depends_on:
+      mariadb: { condition: service_healthy }
+
+  php:
+    <<: *common
+    image: ${ALVEARE_REGISTRY:-alveare}/php:${ALVEARE_VERSION:-dev}
+    build: { context: ., dockerfile: docker/php/Dockerfile }
+    volumes:
+      - ./data/sites:/srv/sites
+      - ./data/logs:/srv/logs
+      - ./data/tmp:/srv/tmp
+      - ./data/php:/srv/php
+      - ./data/run/php:/run/php
+      - ./data/run/alveare:/run/alveare
+    depends_on:
+      panel: { condition: service_healthy }
+
+  caddy:
+    <<: *common
+    image: caddy:2
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    volumes:
+      - ./data/caddy/config:/etc/caddy:ro
+      - ./data/caddy/data:/data
+      - ./data/sites:/srv/sites:ro
+      - ./data/logs:/srv/logs
+      - ./data/run/php:/run/php
+      - ./data/run/caddy:/run/caddy
+    networks: [hosting, cloudflared]
+    depends_on:
+      panel: { condition: service_healthy }
+
+  mariadb:
+    <<: *common
+    image: mariadb:12
+    environment:
+      TZ: Europe/Rome
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD mancante nel .env}
+    command: ["--default-time-zone=Europe/Rome"]
+    volumes:
+      - ./data/db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+networks:
+  hosting: {}
+  # Rete dei connettori cloudflared: tutti puntano a http://caddy:80.
+  cloudflared:
+    external: true
+    name: ${ALVEARE_CLOUDFLARED_NETWORK:-cloudflared}

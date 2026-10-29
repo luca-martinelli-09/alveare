@@ -1,0 +1,9 @@
+# Ricetta: core scaricato al momento, poi installazione e tema di default.
+name = "WordPress base"
+kind = "wordpress"
+render = []
+post_create = [
+    ["core", "download", "--locale=it_IT", "--skip-content"],
+    ["core", "install", "--url={{SITE_URL}}", "--title={{TITLE}}", "--admin_user={{ADMIN_USER}}", "--admin_password={{ADMIN_PASSWORD}}", "--admin_email={{ADMIN_EMAIL}}", "--skip-email"],
+    ["theme", "install", "twentytwentyfive", "--activate"],
+]
