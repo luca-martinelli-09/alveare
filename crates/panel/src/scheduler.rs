@@ -8,7 +8,7 @@ use chrono_tz::Tz;
 
 use crate::api::App;
 use crate::files::SiteFiles;
-use crate::flows::Host;
+use crate::flows::{self, Host};
 use crate::store::{SiteKind, SiteStatus};
 
 const MB: u64 = 1024 * 1024;
@@ -23,6 +23,8 @@ pub struct SiteRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Task {
     WpCron(i64),
+    Backup(i64),
+    PanelBackup,
     RotateLogs,
     Integrity(i64),
     Cleanup,
@@ -76,6 +78,14 @@ pub fn due(now: DateTime<Tz>, sites: &[SiteRef]) -> Vec<Task> {
     if (h, m) == (4, 30) {
         out.push(Task::Cleanup);
     }
+    if (h, m) == (1, 50) {
+        out.push(Task::PanelBackup);
+    }
+    for s in sites.iter().filter(|s| s.active) {
+        if crate::backup::backup_slot(s.id) == (h as u32, m as u32) {
+            out.push(Task::Backup(s.id));
+        }
+    }
     for s in sites.iter().filter(|s| s.active && s.wordpress) {
         if m % 5 == s.id % 5 {
             out.push(Task::WpCron(s.id));
@@ -114,6 +124,8 @@ pub async fn run<H: Host>(app: App<H>) {
             tokio::spawn(async move {
                 let key = match task {
                     Task::WpCron(id) => (id, "cron"),
+                    Task::Backup(id) => (id, "backup"),
+                    Task::PanelBackup => (0, "panel-backup"),
                     Task::Integrity(id) => (id, "integrity"),
                     Task::RotateLogs => (0, "rotate"),
                     Task::Cleanup => (0, "cleanup"),
@@ -138,6 +150,25 @@ async fn execute<H: Host>(app: &App<H>, task: Task) -> anyhow::Result<()> {
             let args = ["cron", "event", "run", "--due-now"].map(String::from);
             app.ctx.host.wp(&site.slug, &args).await?;
         }
+        Task::Backup(id) if app.ctx.backups => {
+            // Come job: compare nella lista dei job del sito e non si sovrappone a crea/elimina.
+            let ctx = app.ctx.clone();
+            app.jobs
+                .spawn("site.backup", Some(id), None, move |mut log| async move {
+                    flows::backup_site(&ctx, id, &mut log).await?;
+                    Ok(log)
+                })
+                .await?;
+        }
+        Task::PanelBackup if app.ctx.backups => {
+            let env = crate::backup::panel_env(std::env::vars());
+            let snap = app.ctx.host.backup_panel(&app.ctx.store, &app.ctx.key.encrypt(&env)).await;
+            match snap {
+                Ok(_) => app.ctx.store.resolve_global_alerts("panel-backup").await?,
+                Err(e) => app.ctx.store.raise_alert(None, "panel-backup", &format!("backup del pannello fallito: {e:#}")).await?,
+            }
+        }
+        Task::Backup(_) | Task::PanelBackup => {}
         Task::RotateLogs => rotate_all(app).await?,
         Task::Integrity(id) => integrity(app, id).await?,
         Task::Cleanup => cleanup(app).await?,
@@ -198,6 +229,11 @@ async fn cleanup<H: Host>(app: &App<H>) -> anyhow::Result<()> {
         removed += purge_stale_uploads(&tmp.join("uploads"), 86400)?;
     }
     app.auth.purge_sessions(now).await?;
+    if app.ctx.backups {
+        for slug in app.ctx.store.orphan_backup_slugs().await? {
+            app.ctx.host.expire_deleted(&slug).await?;
+        }
+    }
     tracing::info!("pulizia notturna: {removed} elementi eliminati");
     Ok(())
 }
@@ -241,6 +277,17 @@ mod tests {
             }
         }
         assert_eq!(runs, [(1, 1), (2, 2), (6, 1), (7, 2)]);
+    }
+
+    #[test]
+    fn nightly_backup_at_each_site_slot_and_panel_backup_before() {
+        let sites = [wp(1), SiteRef { id: 2, wordpress: false, active: true }, SiteRef { id: 3, wordpress: true, active: false }];
+        let all: Vec<(u32, u32, Task)> = (0..24 * 60).flat_map(|i| due(at(i / 60, i % 60), &sites).into_iter().map(move |t| (i / 60, i % 60, t))).collect();
+        let backups: Vec<_> = all.iter().filter(|(_, _, t)| matches!(t, Task::Backup(_))).collect();
+        assert_eq!(backups.len(), 2, "un backup per ogni sito attivo");
+        let (h, m) = crate::backup::backup_slot(2);
+        assert!(backups.contains(&&(h, m, Task::Backup(2))));
+        assert_eq!(all.iter().filter(|(h, m, t)| *t == Task::PanelBackup && (*h, *m) == (1, 50)).count(), 1);
     }
 
     #[test]

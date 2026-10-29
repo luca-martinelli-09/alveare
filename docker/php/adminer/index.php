@@ -3,43 +3,47 @@
  * Adminer aperto dal pannello: un token monouso (scritto dal pannello, valido 5 minuti)
  * apre la sessione sul solo database del sito. Senza token non si entra, nemmeno a mano:
  * niente login con altre credenziali né connessioni verso altri server.
+ *
+ * Il token si gestisce in adminer_object(): Adminer la chiama dopo aver aperto la sua
+ * sessione e prima di elaborare il login.
  */
-session_name('alveare_adminer');
-$https = ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https';
-session_set_cookie_params(['httponly' => true, 'samesite' => 'Lax', 'secure' => $https, 'path' => '/']);
-session_start();
+if (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https') {
+    $_SERVER['HTTPS'] = 'on';
+}
 
-$token = $_GET['alveare'] ?? '';
-if ($token !== '') {
-    if (!preg_match('/^[A-Za-z0-9]{40}$/', $token)) {
-        http_response_code(400);
-        exit('Link non valido.');
-    }
-    $file = "/srv/adminer/tokens/$token.json";
-    $grant = is_file($file) ? json_decode((string) file_get_contents($file), true) : null;
-    @unlink($file);
-    if (!is_array($grant) || ($grant['exp'] ?? 0) < time()) {
-        http_response_code(403);
-        exit('Link scaduto: riapri Adminer dal pannello.');
-    }
-    session_regenerate_id(true);
-    $_SESSION['alveare'] = $grant;
-    $_POST = ['auth' => [
-        'driver' => 'server',
-        'server' => $grant['host'],
-        'username' => $grant['user'],
-        'password' => $grant['password'],
-        'db' => $grant['db'],
-        'permanent' => 0,
-    ]];
-    $_SERVER['REQUEST_METHOD'] = 'POST';
-} elseif (empty($_SESSION['alveare'])) {
-    http_response_code(403);
-    exit('Apri Adminer dal pannello di Alveare.');
+function alveare_deny(int $status, string $message): void
+{
+    http_response_code($status);
+    header('Content-Type: text/plain; charset=utf-8');
+    exit($message);
 }
 
 function adminer_object()
 {
+    $token = $_GET['alveare'] ?? '';
+    if ($token !== '') {
+        if (!preg_match('/^[A-Za-z0-9]{40}$/', $token)) {
+            alveare_deny(400, 'Link non valido.');
+        }
+        $file = "/srv/adminer/tokens/$token.json";
+        $grant = is_file($file) ? json_decode((string) file_get_contents($file), true) : null;
+        @unlink($file);
+        if (!is_array($grant) || ($grant['exp'] ?? 0) < time()) {
+            alveare_deny(403, 'Link scaduto: riapri Adminer dal pannello.');
+        }
+        $_SESSION['alveare'] = $grant;
+        $_POST = ['auth' => [
+            'driver' => 'server',
+            'server' => $grant['host'],
+            'username' => $grant['user'],
+            'password' => $grant['password'],
+            'db' => $grant['db'],
+            'permanent' => 0,
+        ]];
+    } elseif (empty($_SESSION['alveare'])) {
+        alveare_deny(403, 'Apri Adminer dal pannello di Alveare.');
+    }
+
     class AlveareAdminer extends \Adminer\Adminer
     {
         public function name()

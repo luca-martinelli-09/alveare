@@ -10,6 +10,7 @@ use std::pin::Pin;
 
 use tokio::io::AsyncRead;
 
+use crate::backup::{Retention, Snapshot};
 use crate::database::TableInfo;
 use crate::secrets::{random_password, SecretKey};
 use crate::store::{NewSite, Site, SiteKind, SiteStatus, Store};
@@ -46,6 +47,15 @@ pub trait Host: Send + Sync + 'static {
     fn db_dump(&self, name: &str, tables: &[String]) -> impl Future<Output = Result<Dump>> + Send;
     fn db_import(&self, name: &str, sql: Pin<Box<dyn AsyncRead + Send>>) -> impl Future<Output = Result<()>> + Send;
     fn set_db_password(&self, user: &str, password: &str) -> impl Future<Output = Result<()>> + Send;
+    /// Dump del database + cartella del sito in uno snapshot restic.
+    fn backup(&self, slug: &Slug, db_name: &str) -> impl Future<Output = Result<Snapshot>> + Send;
+    fn prune(&self, slug: &Slug, keep: Retention) -> impl Future<Output = Result<()>> + Send;
+    /// Snapshot di siti eliminati: restano 30 giorni.
+    fn expire_deleted(&self, slug: &str) -> impl Future<Output = Result<()>> + Send;
+    /// Ripristina file e/o database dallo snapshot (dopo un backup dello stato attuale fatto dal flusso).
+    fn restore(&self, slug: &Slug, snapshot: &str, files: bool, db: Option<&DbCreds>) -> impl Future<Output = Result<()>> + Send;
+    /// panel.db, template e configurazione cifrata, con il tag `panel`.
+    fn backup_panel(&self, store: &Store, env_enc: &[u8]) -> impl Future<Output = Result<Snapshot>> + Send;
     /// Token monouso per aprire Adminer già autenticato su questo database.
     fn adminer_grant(&self, db: &DbCreds) -> impl Future<Output = Result<String>> + Send;
     /// Riscrive una chiave del .env del sito.
@@ -64,6 +74,8 @@ pub struct Ctx<H> {
     pub db_host: String,
     /// Valori comuni a tutti i siti (SMTP di SES).
     pub global_env: Vars,
+    /// Repository restic configurato: senza, niente backup (e l'eliminazione lo dice nel log).
+    pub backups: bool,
 }
 
 pub struct CreateSite {
@@ -266,9 +278,64 @@ pub async fn reset_db_password<H: Host>(c: &Ctx<H>, site_id: i64) -> Result<()> 
     c.host.set_site_env(&site.slug, site.uid(), "DB_PASSWORD", &password).await
 }
 
+/// Backup di un sito con registrazione dell'esito e avviso se fallisce.
+pub async fn backup_site<H: Host>(c: &Ctx<H>, site_id: i64, log: &mut JobLog) -> Result<Snapshot> {
+    if !c.backups {
+        bail!("backup non configurati (RESTIC_REPOSITORY)");
+    }
+    let site = c.store.site(site_id).await?;
+    let db = c.db_creds(site_id).await?;
+    let run = c.store.backup_started(site_id, &site.slug).await?;
+    let result = async {
+        let snap = c.host.backup(&site.slug, &db.name).await?;
+        c.host.prune(&site.slug, c.store.retention(site_id).await?).await?;
+        Ok::<_, anyhow::Error>(snap)
+    }
+    .await;
+    match &result {
+        Ok(snap) => {
+            c.store.backup_finished(run, Ok(snap)).await?;
+            c.store.resolve_alerts(site_id, "backup").await?;
+            log.push(format!("backup {} ({} byte nuovi)", snap.snapshot_id, snap.bytes_added));
+        }
+        Err(e) => {
+            c.store.backup_finished(run, Err(format!("{e:#}"))).await?;
+            c.store.raise_alert(Some(site_id), "backup", &format!("backup fallito: {e:#}")).await?;
+        }
+    }
+    result
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RestoreMode {
+    Full,
+    Files,
+    Database,
+}
+
+/// Prima un backup dello stato attuale, poi il ripristino: si può sempre tornare indietro.
+pub async fn restore_site<H: Host>(c: &Ctx<H>, site_id: i64, snapshot: &str, mode: RestoreMode, log: &mut JobLog) -> Result<()> {
+    let site = c.store.site(site_id).await?;
+    backup_site(c, site_id, log).await.context("backup prima del ripristino")?;
+    let db = c.db_creds(site_id).await?;
+    let files = mode != RestoreMode::Database;
+    let with_db = (mode != RestoreMode::Files).then_some(&db);
+    c.host.restore(&site.slug, snapshot, files, with_db).await?;
+    log.push(format!("ripristinato {snapshot} ({})", match mode { RestoreMode::Full => "file e database", RestoreMode::Files => "solo file", RestoreMode::Database => "solo database" }));
+    c.sync_php().await?;
+    c.sync_caddy().await?;
+    Ok(())
+}
+
 /// Elimina un sito. Va solo avanti: se si ferma, il sito resta in `deleting` e si può rilanciare.
 pub async fn delete_site<H: Host>(c: &Ctx<H>, id: i64, log: &mut JobLog) -> Result<()> {
     let site = c.store.site(id).await?;
+    if c.backups {
+        backup_site(c, id, log).await.context("backup finale obbligatorio")?;
+    } else {
+        log.push("ATTENZIONE: backup non configurati, nessun backup finale");
+    }
     let db = c.store.db_creds(id).await.ok();
     c.store.set_status(id, SiteStatus::Deleting).await?;
     c.sync_caddy().await?;
@@ -301,6 +368,7 @@ mod tests {
             key: SecretKey::from_base64("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=").unwrap(),
             db_host: "mariadb".into(),
             global_env: Vars::from([("SMTP_HOST".into(), "email-smtp.eu-west-1.amazonaws.com".into())]),
+            backups: false,
         }
     }
 
@@ -379,6 +447,44 @@ mod tests {
         let before = c.host.calls().len();
         assert!(create_site(&c, &req("sona.it"), &mut JobLog::default()).await.is_err());
         assert_eq!(c.host.calls().len(), before);
+    }
+
+    async fn ctx_with_backups(host: FakeHost) -> Ctx<FakeHost> {
+        Ctx { backups: true, ..ctx(host).await }
+    }
+
+    #[tokio::test]
+    async fn delete_takes_a_final_backup_first() {
+        let c = ctx_with_backups(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        delete_site(&c, site.id, &mut JobLog::default()).await.unwrap();
+        assert_eq!(c.host.ops()[..2], ["backup", "prune"]);
+    }
+
+    #[tokio::test]
+    async fn failed_final_backup_stops_the_deletion_and_alerts() {
+        let c = ctx_with_backups(FakeHost::failing("backup")).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        assert!(delete_site(&c, site.id, &mut JobLog::default()).await.is_err());
+        assert_eq!(c.store.site(site.id).await.unwrap().status, SiteStatus::Active);
+        let alerts = c.store.open_alerts(None).await.unwrap();
+        assert_eq!(alerts[0].kind, "backup");
+        assert_eq!(c.store.backup_runs(site.id, 10).await.unwrap()[0].status, "failed");
+    }
+
+    #[tokio::test]
+    async fn restore_backs_up_current_state_then_restores_and_resyncs() {
+        let c = ctx_with_backups(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        restore_site(&c, site.id, "abcdef12", RestoreMode::Database, &mut JobLog::default()).await.unwrap();
+        assert_eq!(
+            c.host.calls(),
+            ["backup sona_it sona_it", "prune sona_it 7", "restore sona_it abcdef12 files=false db=sona_it", "sync_php users=sona_it pools=sona_it", "sync_caddy sona_it"]
+        );
+        let runs = c.store.backup_runs(site.id, 10).await.unwrap();
+        assert_eq!((runs[0].status.as_str(), runs[0].snapshot_id.as_deref()), ("done", Some("abcdef12")));
     }
 
     #[tokio::test]

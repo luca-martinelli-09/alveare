@@ -1,5 +1,6 @@
 mod api;
 mod auth;
+mod backup;
 mod config;
 mod database;
 mod files;
@@ -59,7 +60,14 @@ async fn main() -> Result<()> {
         db_host: cfg.db_host.clone(),
         root_password: cfg.root_password.clone(),
     };
-    let ctx = Ctx { store: store.clone(), host, key: cfg.key.clone(), db_host: cfg.db_host.clone(), global_env: cfg.site_env.clone() };
+    let ctx = Ctx {
+        store: store.clone(),
+        host,
+        key: cfg.key.clone(),
+        db_host: cfg.db_host.clone(),
+        global_env: cfg.site_env.clone(),
+        backups: cfg.restic_repository.is_some(),
+    };
     let app = App::new(ctx, auth, paths.templates.clone(), cfg.secure_cookie).with_adminer(cfg.adminer_host.clone());
     tokio::spawn(apply_when_ready(app.clone()));
     tokio::spawn(scheduler::run(app.clone()));

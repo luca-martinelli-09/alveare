@@ -9,6 +9,7 @@ use std::pin::Pin;
 
 use tokio::io::AsyncRead;
 
+use crate::backup::{Retention, Snapshot};
 use crate::database::TableInfo;
 use crate::flows::{DbCreds, Dump, Host};
 use crate::template::Vars;
@@ -93,6 +94,23 @@ impl Host for FakeHost {
         let mut text = String::new();
         tokio::io::AsyncReadExt::read_to_string(&mut sql, &mut text).await?;
         self.record("db_import", format!("{name} {}", text.trim()))
+    }
+    async fn backup(&self, slug: &Slug, db_name: &str) -> anyhow::Result<Snapshot> {
+        self.record("backup", format!("{} {db_name}", slug.as_str()))?;
+        Ok(Snapshot { snapshot_id: "abcdef12".into(), bytes_added: 100, total_bytes: 1000 })
+    }
+    async fn prune(&self, slug: &Slug, keep: Retention) -> anyhow::Result<()> {
+        self.record("prune", format!("{} {}", slug.as_str(), keep.daily))
+    }
+    async fn expire_deleted(&self, slug: &str) -> anyhow::Result<()> {
+        self.record("expire_deleted", slug.to_string())
+    }
+    async fn restore(&self, slug: &Slug, snapshot: &str, files: bool, db: Option<&DbCreds>) -> anyhow::Result<()> {
+        self.record("restore", format!("{} {snapshot} files={files} db={}", slug.as_str(), db.map_or("-", |d| d.name.as_str())))
+    }
+    async fn backup_panel(&self, _store: &crate::store::Store, _env: &[u8]) -> anyhow::Result<Snapshot> {
+        self.record("backup_panel", String::new())?;
+        Ok(Snapshot { snapshot_id: "panel123".into(), bytes_added: 1, total_bytes: 1 })
     }
     async fn adminer_grant(&self, db: &DbCreds) -> anyhow::Result<String> {
         self.record("adminer_grant", db.name.clone())?;

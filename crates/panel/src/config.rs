@@ -17,6 +17,10 @@ pub struct Config {
     pub admin_email: Option<String>,
     pub secure_cookie: bool,
     pub site_env: Vars,
+    /// restic legge da solo RESTIC_REPOSITORY, RESTIC_PASSWORD e AWS_* dall'ambiente.
+    pub restic_repository: Option<String>,
+    /// Valori per il kit di ripristino.
+    pub recovery: Vec<(String, String)>,
 }
 
 fn url_encode(s: &str) -> String {
@@ -44,6 +48,14 @@ impl Config {
         };
         let panel_host = host("ALVEARE_PANEL_HOST")?;
         let adminer_host = host("ALVEARE_ADMINER_HOST")?;
+        let restic_repository = get("RESTIC_REPOSITORY");
+        if restic_repository.is_some() && get("RESTIC_PASSWORD").is_none() {
+            bail!("RESTIC_PASSWORD mancante: serve insieme a RESTIC_REPOSITORY");
+        }
+        let recovery = ["ALVEARE_SECRET_KEY", "RESTIC_REPOSITORY", "RESTIC_PASSWORD", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_DEFAULT_REGION"]
+            .iter()
+            .filter_map(|k| Some((k.to_string(), get(k)?)))
+            .collect();
         let secure_cookie = match get("ALVEARE_INSECURE_COOKIE").as_deref() {
             None | Some("0") | Some("false") => true,
             Some("1") | Some("true") => false,
@@ -59,6 +71,8 @@ impl Config {
             adminer_host,
             admin_email: get("ALVEARE_ADMIN_EMAIL"),
             secure_cookie,
+            restic_repository,
+            recovery,
             site_env: vars.iter().filter_map(|(k, v)| Some((k.strip_prefix("SITE_ENV_")?.to_string(), v.clone()))).collect(),
         })
     }
@@ -113,6 +127,15 @@ mod tests {
         assert!(Config::from_vars(vars(&[])).unwrap().adminer_host.is_none());
         assert!(Config::from_vars(vars(&[("ALVEARE_ADMINER_HOST", "adminer.example.org")])).unwrap().adminer_host.is_some());
         assert!(Config::from_vars(vars(&[("ALVEARE_ADMINER_HOST", "x")])).is_err());
+    }
+
+    #[test]
+    fn restic_needs_a_password_and_feeds_the_recovery_kit() {
+        assert!(Config::from_vars(vars(&[("RESTIC_REPOSITORY", "s3:https://r2/x")])).is_err());
+        let c = Config::from_vars(vars(&[("RESTIC_REPOSITORY", "s3:https://r2/x"), ("RESTIC_PASSWORD", "p")])).unwrap();
+        assert_eq!(c.restic_repository.as_deref(), Some("s3:https://r2/x"));
+        let keys: Vec<&str> = c.recovery.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["ALVEARE_SECRET_KEY", "RESTIC_REPOSITORY", "RESTIC_PASSWORD"]);
     }
 
     #[test]

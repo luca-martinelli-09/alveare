@@ -15,6 +15,7 @@ use tokio::net::UnixStream;
 
 use sqlx::Row;
 
+use crate::backup::{backup_args, forget_args, parse_summary, valid_snapshot, Retention, Snapshot};
 use crate::database::TableInfo;
 use crate::flows::{DbCreds, Dump, Host};
 use crate::template::{env_file, Template, Vars};
@@ -36,6 +37,7 @@ pub struct Paths {
     pub caddy_admin: PathBuf,
     pub agent: PathBuf,
     pub adminer: PathBuf,
+    pub backups: PathBuf,
 }
 
 impl Paths {
@@ -53,6 +55,7 @@ impl Paths {
             caddy_admin: root.join("run/caddy/admin.sock"),
             agent: root.join("run/alveare/agent.sock"),
             adminer: root.join("adminer"),
+            backups: root.join("backups"),
         }
     }
 
@@ -237,6 +240,37 @@ impl SystemHost {
     async fn agent(&self, cmd: Command) -> Result<Response> {
         agent_call(&self.paths.agent, &cmd, AGENT_TIMEOUT).await
     }
+
+    async fn restic(&self, args: &[String]) -> Result<String> {
+        let out = tokio::process::Command::new("restic")
+            .args(args)
+            .env("RESTIC_CACHE_DIR", self.paths.backups.join("cache"))
+            .stdin(std::process::Stdio::null())
+            .output()
+            .await
+            .context("avvio di restic")?;
+        if !out.status.success() {
+            bail!("restic {}: {}", args.first().map_or("", String::as_str), String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// Il primo backup inizializza il repository.
+    async fn ensure_repo(&self) -> Result<()> {
+        if self.restic(&["cat".into(), "config".into()]).await.is_ok() {
+            return Ok(());
+        }
+        self.restic(&["init".into()]).await.map(drop)
+    }
+
+    async fn dump_to_file(&self, db: &str, dest: &Path) -> Result<()> {
+        let dump = self.db_dump(db, &[]).await?;
+        let mut file = tokio::fs::File::create(dest).await?;
+        let mut reader = dump.reader;
+        tokio::io::copy(&mut reader, &mut file).await?;
+        file.sync_all().await?;
+        dump.finished.await
+    }
 }
 
 impl Host for SystemHost {
@@ -377,6 +411,88 @@ impl Host for SystemHost {
         }
         copied.context("lettura del dump")?;
         Ok(())
+    }
+
+    async fn backup(&self, slug: &Slug, db_name: &str) -> Result<Snapshot> {
+        let dir = self.paths.backups.join(slug.as_str());
+        fs::create_dir_all(&dir)?;
+        set_mode(&dir, 0o700)?;
+        let dump = dir.join("db.sql");
+        self.dump_to_file(db_name, &dump).await.context("dump del database")?;
+        self.ensure_repo().await?;
+        let site_dir = self.paths.sites.join(slug.as_str());
+        let out = self.restic(&backup_args(slug, &site_dir.to_string_lossy(), &dump.to_string_lossy())).await;
+        let _ = fs::remove_file(&dump);
+        parse_summary(&out?).context("riepilogo di restic mancante")
+    }
+
+    async fn prune(&self, slug: &Slug, keep: Retention) -> Result<()> {
+        self.restic(&forget_args(slug, keep)).await.map(drop)
+    }
+
+    async fn expire_deleted(&self, slug: &str) -> Result<()> {
+        let slug = Slug::parse(slug).map_err(|_| anyhow::anyhow!("slug non valido: {slug}"))?;
+        let args = ["forget", "--json", "--tag", &format!("site={}", slug.as_str()), "--keep-within", "30d", "--prune"].map(String::from);
+        self.restic(&args).await.map(drop)
+    }
+
+    async fn restore(&self, slug: &Slug, snapshot: &str, files: bool, db: Option<&DbCreds>) -> Result<()> {
+        if !valid_snapshot(snapshot) {
+            bail!("snapshot non valido: {snapshot}");
+        }
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let staging = self.paths.backups.join(format!("restore-{}-{now}", slug.as_str()));
+        let site_dir = self.paths.sites.join(slug.as_str());
+        let dump = self.paths.backups.join(slug.as_str()).join("db.sql");
+        let mut args = vec!["restore".to_string(), snapshot.to_string(), "--target".into(), staging.to_string_lossy().into_owned()];
+        if files {
+            args.extend(["--include".into(), site_dir.to_string_lossy().into_owned()]);
+        }
+        if db.is_some() {
+            args.extend(["--include".into(), dump.to_string_lossy().into_owned()]);
+        }
+        let result = async {
+            self.restic(&args).await?;
+            // restic ricrea i percorsi assoluti sotto la cartella di destinazione.
+            let inside = |p: &Path| staging.join(p.strip_prefix("/").unwrap_or(p));
+            if files {
+                let restored = inside(&site_dir);
+                if !restored.is_dir() {
+                    bail!("lo snapshot non contiene i file del sito");
+                }
+                let old = self.paths.trash.join(format!("{}-{now}", slug.as_str()));
+                fs::create_dir_all(&old)?;
+                if site_dir.exists() {
+                    fs::rename(&site_dir, old.join("site"))?;
+                }
+                fs::rename(&restored, &site_dir)?;
+            }
+            if let Some(db) = db {
+                let restored = inside(&dump);
+                let file = tokio::fs::File::open(&restored).await.context("lo snapshot non contiene il dump del database")?;
+                self.drop_database(&db.name, &db.user).await?;
+                self.create_database(db).await?;
+                self.db_import(&db.name, Box::pin(tokio::io::BufReader::new(file))).await?;
+            }
+            Ok(())
+        }
+        .await;
+        let _ = fs::remove_dir_all(&staging);
+        result
+    }
+
+    async fn backup_panel(&self, store: &crate::store::Store, env_enc: &[u8]) -> Result<Snapshot> {
+        let dir = self.paths.backups.join("panel");
+        fs::create_dir_all(&dir)?;
+        set_mode(&dir, 0o700)?;
+        store.snapshot_to(&dir.join("panel.db")).await?;
+        fs::write(dir.join("env.enc"), env_enc)?;
+        self.ensure_repo().await?;
+        let args = ["backup", "--json", "--host", "alveare", "--tag", "panel", &dir.to_string_lossy(), &self.paths.templates.to_string_lossy()].map(String::from);
+        let snap = parse_summary(&self.restic(&args).await?).context("riepilogo di restic mancante")?;
+        let keep = ["forget", "--json", "--host", "alveare", "--tag", "panel", "--keep-daily", "7", "--keep-weekly", "4", "--keep-monthly", "6", "--prune"].map(String::from);
+        self.restic(&keep).await?;
+        Ok(snap)
     }
 
     async fn adminer_grant(&self, db: &DbCreds) -> Result<String> {

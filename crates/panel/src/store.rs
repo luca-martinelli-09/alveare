@@ -56,6 +56,18 @@ pub struct Alert {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BackupRun {
+    pub id: i64,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub status: String,
+    pub snapshot_id: Option<String>,
+    pub bytes_added: Option<i64>,
+    pub total_bytes: Option<i64>,
+    pub error: Option<String>,
+}
+
 pub struct NewSite {
     pub primary: Domain,
     pub kind: SiteKind,
@@ -285,6 +297,14 @@ impl Store {
         Ok(())
     }
 
+    pub async fn resolve_global_alerts(&self, kind: &str) -> Result<()> {
+        sqlx::query("UPDATE alerts SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE site_id IS NULL AND kind = ? AND resolved_at IS NULL")
+            .bind(kind)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// `visible = None`: tutti (admin), compresi gli avvisi globali.
     pub async fn open_alerts(&self, visible: Option<&[i64]>) -> Result<Vec<Alert>> {
         let rows = sqlx::query("SELECT id, site_id, kind, message, created_at FROM alerts WHERE resolved_at IS NULL ORDER BY id DESC")
@@ -298,6 +318,81 @@ impl Store {
             }
         }
         Ok(out)
+    }
+
+    pub async fn retention(&self, site_id: i64) -> Result<crate::backup::Retention> {
+        let r = sqlx::query("SELECT keep_daily, keep_weekly, keep_monthly FROM backup_policies WHERE site_id = ?")
+            .bind(site_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(match r {
+            Some(r) => crate::backup::Retention { daily: r.try_get("keep_daily")?, weekly: r.try_get("keep_weekly")?, monthly: r.try_get("keep_monthly")? },
+            None => crate::backup::Retention::default(),
+        })
+    }
+
+    pub async fn backup_started(&self, site_id: i64, slug: &Slug) -> Result<i64> {
+        Ok(sqlx::query_scalar("INSERT INTO backup_runs (site_id, slug) VALUES (?, ?) RETURNING id").bind(site_id).bind(slug.as_str()).fetch_one(&self.pool).await?)
+    }
+
+    pub async fn backup_finished(&self, run: i64, outcome: std::result::Result<&crate::backup::Snapshot, String>) -> Result<()> {
+        let q = match outcome {
+            Ok(s) => sqlx::query("UPDATE backup_runs SET status = 'done', finished_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), snapshot_id = ?, bytes_added = ?, total_bytes = ? WHERE id = ?")
+                .bind(s.snapshot_id.clone())
+                .bind(s.bytes_added as i64)
+                .bind(s.total_bytes as i64)
+                .bind(run),
+            Err(e) => sqlx::query("UPDATE backup_runs SET status = 'failed', finished_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), error = ? WHERE id = ?").bind(e).bind(run),
+        };
+        q.execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn backup_runs(&self, site_id: i64, limit: i64) -> Result<Vec<BackupRun>> {
+        let rows = sqlx::query("SELECT id, started_at, finished_at, status, snapshot_id, bytes_added, total_bytes, error FROM backup_runs WHERE site_id = ? ORDER BY id DESC LIMIT ?")
+            .bind(site_id)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(BackupRun {
+                    id: r.try_get("id")?,
+                    started_at: r.try_get("started_at")?,
+                    finished_at: r.try_get("finished_at")?,
+                    status: r.try_get("status")?,
+                    snapshot_id: r.try_get("snapshot_id")?,
+                    bytes_added: r.try_get("bytes_added")?,
+                    total_bytes: r.try_get("total_bytes")?,
+                    error: r.try_get("error")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Slug con backup ma senza più un sito: i loro snapshot scadono dopo 30 giorni.
+    pub async fn orphan_backup_slugs(&self) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar("SELECT DISTINCT slug FROM backup_runs WHERE slug NOT IN (SELECT slug FROM sites)").fetch_all(&self.pool).await?)
+    }
+
+    pub async fn setting(&self, key: &str) -> Result<Option<String>> {
+        Ok(sqlx::query_scalar("SELECT value FROM settings WHERE key = ?").bind(key).fetch_optional(&self.pool).await?)
+    }
+
+    pub async fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+            .bind(key)
+            .bind(value)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Copia coerente del database del pannello, anche mentre è in uso.
+    pub async fn snapshot_to(&self, dest: &std::path::Path) -> Result<()> {
+        let _ = std::fs::remove_file(dest);
+        sqlx::query("VACUUM INTO ?").bind(dest.to_string_lossy().into_owned()).execute(&self.pool).await?;
+        Ok(())
     }
 
     /// Siti serviti da Caddy: solo quelli attivi.

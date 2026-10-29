@@ -817,7 +817,7 @@ mod tests {
         let templates = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(templates.path().join("wordpress")).unwrap();
         std::fs::write(templates.path().join("wordpress/template.toml"), "name = \"WordPress\"\nkind = \"wordpress\"\n").unwrap();
-        let ctx = Ctx { store: store.clone(), host: FakeHost::default(), key: key.clone(), db_host: "mariadb".into(), global_env: Default::default() };
+        let ctx = Ctx { store: store.clone(), host: FakeHost::default(), key: key.clone(), db_host: "mariadb".into(), global_env: Default::default(), backups: true };
         let paths = crate::host::Paths::under(&templates.path().join("data"));
         let app = App::new(ctx, Auth::new(store.pool().clone(), key), templates.path().to_path_buf(), false).with_files(paths, false);
         T { app, _templates: templates }
