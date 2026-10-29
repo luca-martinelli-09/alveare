@@ -6,6 +6,25 @@ pub struct InvalidDomain;
 
 pub const SLUG_MAX: usize = 24;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Slug(String);
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct InvalidSlug;
+
+impl Slug {
+    /// Il valore entra in path, nomi utente e nomi DB: niente oltre [a-z0-9_].
+    pub fn parse(s: &str) -> Result<Self, InvalidSlug> {
+        let ok = (1..=SLUG_MAX).contains(&s.len())
+            && s.starts_with(|c: char| c.is_ascii_lowercase())
+            && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+        if ok { Ok(Self(s.to_string())) } else { Err(InvalidSlug) }
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 impl Domain {
     /// Hostname ASCII (IDN già in punycode), almeno due etichette.
     pub fn parse(s: &str) -> Result<Self, InvalidDomain> {
@@ -30,7 +49,7 @@ impl Domain {
 }
 
 /// Slug per cartella, utente Unix e DB: [a-z0-9_], inizia con una lettera, max 24 caratteri.
-pub fn slug_for(d: &Domain, taken: impl Fn(&str) -> bool) -> String {
+pub fn slug_for(d: &Domain, taken: impl Fn(&str) -> bool) -> Slug {
     let host = d.as_str().strip_prefix("www.").unwrap_or(d.as_str());
     let mut base: String = host.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
     if base.starts_with(|c: char| c.is_ascii_digit()) {
@@ -39,15 +58,16 @@ pub fn slug_for(d: &Domain, taken: impl Fn(&str) -> bool) -> String {
     let fit = |s: &str, max: usize| s[..s.len().min(max)].trim_end_matches('_').to_string();
     let first = fit(&base, SLUG_MAX);
     if !taken(&first) {
-        return first;
+        return Slug(first);
     }
-    (2..)
+    let next = (2..)
         .map(|n| {
             let suffix = format!("_{n}");
             format!("{}{suffix}", fit(&base, SLUG_MAX - suffix.len()))
         })
         .find(|c| !taken(c))
-        .expect("serie infinita")
+        .expect("serie infinita");
+    Slug(next)
 }
 
 #[cfg(test)]
@@ -81,21 +101,29 @@ mod tests {
     #[test]
     fn slug_replaces_separators_and_drops_www() {
         let d = Domain::parse("www.pro-loco.sona.it").unwrap();
-        assert_eq!(slug_for(&d, |_| false), "pro_loco_sona_it");
+        assert_eq!(slug_for(&d, |_| false).as_str(), "pro_loco_sona_it");
     }
 
     #[test]
     fn slug_is_at_most_24_chars() {
         let d = Domain::parse("associazione-molto-lunga-di-sona.example.org").unwrap();
         let s = slug_for(&d, |_| false);
-        assert_eq!(s.len(), 24);
-        assert_eq!(s, "associazione_molto_lunga");
+        assert_eq!(s.as_str().len(), 24);
+        assert_eq!(s.as_str(), "associazione_molto_lunga");
     }
 
     #[test]
     fn slug_starting_with_digit_gets_letter_prefix() {
         let d = Domain::parse("123.it").unwrap();
-        assert_eq!(slug_for(&d, |_| false), "s123_it");
+        assert_eq!(slug_for(&d, |_| false).as_str(), "s123_it");
+    }
+
+    #[test]
+    fn slug_parse_accepts_only_safe_names() {
+        assert!(Slug::parse("pro_loco_2").is_ok());
+        for bad in ["", "2abc", "Abc", "a-b", "a.b", "a/b", "../x", "abcdefghijklmnopqrstuvwxy"] {
+            assert!(Slug::parse(bad).is_err(), "accettato: {bad:?}");
+        }
     }
 
     #[test]
@@ -103,6 +131,6 @@ mod tests {
         let d = Domain::parse("associazione-molto-lunga.example.org").unwrap();
         let taken = ["associazione_molto_lunga", "associazione_molto_lun_2"];
         let s = slug_for(&d, |c| taken.contains(&c));
-        assert_eq!(s, "associazione_molto_lun_3");
+        assert_eq!(s.as_str(), "associazione_molto_lun_3");
     }
 }
