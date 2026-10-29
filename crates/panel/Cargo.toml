@@ -5,9 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+aes-gcm = { version = "0.11.1", features = ["getrandom"] }
 alveare-core = { version = "0.1.0", path = "../core" }
 anyhow = "1.0.104"
 axum = "0.8.9"
+base64 = "0.23.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 rand = "0.10.3"
 serde = { version = "1.0.229", features = ["derive"] }
