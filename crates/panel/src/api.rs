@@ -34,6 +34,8 @@ pub struct App<H> {
     pub chown: bool,
     uploads: Arc<tokio::sync::Mutex<()>>,
     pub adminer_host: Option<Domain>,
+    /// Valori del kit di ripristino (chiave del pannello, repository e password di restic).
+    pub recovery: Vec<(String, String)>,
 }
 
 impl<H> Clone for App<H> {
@@ -48,6 +50,7 @@ impl<H> Clone for App<H> {
             chown: self.chown,
             uploads: self.uploads.clone(),
             adminer_host: self.adminer_host.clone(),
+            recovery: self.recovery.clone(),
         }
     }
 }
@@ -55,7 +58,16 @@ impl<H> Clone for App<H> {
 impl<H: Host> App<H> {
     pub fn new(ctx: Ctx<H>, auth: Auth, templates: PathBuf, secure_cookie: bool) -> Self {
         let jobs = Jobs::new(ctx.store.pool().clone());
-        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None }
+        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None, recovery: vec![] }
+    }
+
+    pub fn with_recovery(self, recovery: Vec<(String, String)>) -> Self {
+        Self { recovery, ..self }
+    }
+
+    pub fn recovery_kit(&self) -> String {
+        let pairs: Vec<(&str, &str)> = self.recovery.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        crate::backup::recovery_kit(&pairs)
     }
 
     pub fn with_adminer(self, adminer_host: Option<Domain>) -> Self {
@@ -226,6 +238,9 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/sites/{id}/database/import", post(database_import::<H>))
         .route("/api/sites/{id}/database/password", post(database_password::<H>))
         .route("/api/sites/{id}/database/adminer", post(database_adminer::<H>))
+        .route("/api/sites/{id}/backups", get(list_backups::<H>).post(backup_now::<H>))
+        .route("/api/sites/{id}/backups/{snapshot}/restore", post(restore_backup::<H>))
+        .route("/api/admin/recovery-kit", get(recovery_kit::<H>))
         .route("/api/alerts", get(list_alerts::<H>))
         .route("/api/jobs/{id}", get(get_job::<H>))
         .with_state(app)
@@ -774,6 +789,75 @@ async fn database_adminer<H: Host>(State(app): State<App<H>>, Path(id): Path<i64
     Ok(Json(json!({ "url": format!("https://{}/?alveare={token}", host.as_str()) })).into_response())
 }
 
+async fn list_backups<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_site(&app, &user, id, Need::Read).await?;
+    let runs = app.ctx.store.backup_runs(id, 100).await?;
+    Ok(Json(json!({ "enabled": app.ctx.backups, "runs": runs })).into_response())
+}
+
+async fn backup_now<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_site(&app, &user, id, Need::Manage).await?;
+    if !app.ctx.backups {
+        return Err(ApiError::new(StatusCode::CONFLICT, "backup non configurati (RESTIC_REPOSITORY)"));
+    }
+    app.ctx.store.site(id).await?;
+    let (ctx, auth, uid) = (app.ctx.clone(), app.auth.clone(), user.id);
+    let job = app
+        .jobs
+        .spawn("site.backup", Some(id), Some(user.id), move |mut log| async move {
+            let snap = flows::backup_site(&ctx, id, &mut log).await?;
+            auth.audit(Some(uid), "backup.run", Some(id), &snap.snapshot_id).await?;
+            Ok(log)
+        })
+        .await?;
+    Ok((StatusCode::ACCEPTED, Json(json!({ "job": job }))).into_response())
+}
+
+#[derive(Deserialize)]
+struct RestoreReq {
+    mode: flows::RestoreMode,
+}
+
+async fn restore_backup<H: Host>(State(app): State<App<H>>, Path((id, snapshot)): Path<(i64, String)>, m: Method, h: HeaderMap, Json(r): Json<RestoreReq>) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_site(&app, &user, id, Need::Manage).await?;
+    if !crate::backup::valid_snapshot(&snapshot) {
+        return Err(ApiError::bad_request("snapshot non valido"));
+    }
+    // Solo snapshot di questo sito: l'id arriva dallo storico del sito, non da restic.
+    let known = app.ctx.store.backup_runs(id, 10_000).await?.into_iter().any(|run| run.snapshot_id.as_deref().is_some_and(|s| s.starts_with(&snapshot)));
+    if !known {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "snapshot non trovato per questo sito"));
+    }
+    let (ctx, auth, uid) = (app.ctx.clone(), app.auth.clone(), user.id);
+    let job = app
+        .jobs
+        .spawn("site.restore", Some(id), Some(user.id), move |mut log| async move {
+            flows::restore_site(&ctx, id, &snapshot, r.mode, &mut log).await?;
+            auth.audit(Some(uid), "backup.restore", Some(id), &snapshot).await?;
+            Ok(log)
+        })
+        .await?;
+    Ok((StatusCode::ACCEPTED, Json(json!({ "job": job }))).into_response())
+}
+
+/// Il kit contiene le chiavi in chiaro: solo admin, sempre nell'audit log.
+async fn recovery_kit<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_admin(&user)?;
+    let kit = app.recovery_kit();
+    app.ctx.store.set_setting("recovery_kit_fingerprint", &crate::backup::kit_fingerprint(&kit)).await?;
+    app.ctx.store.resolve_global_alerts("recovery-kit").await?;
+    app.auth.audit(Some(user.id), "recovery_kit.download", None, "").await?;
+    Ok((
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8"), (header::CONTENT_DISPOSITION, "attachment; filename=\"alveare-kit-ripristino.txt\"")],
+        kit,
+    )
+        .into_response())
+}
+
 async fn list_alerts<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
     let visible = app.auth.visible_sites(&user).await?;
@@ -1146,6 +1230,39 @@ mod tests {
         t.app.auth.assign_site(uid, id, Role::Readonly).await.unwrap();
         let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/database/adminer"), Some(&ro), None)).await;
         assert_eq!(s, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn backups_run_as_jobs_and_restore_only_known_snapshots() {
+        let t = setup().await;
+        let (admin, id) = site_with_files(&t).await;
+        let (s, resp, _) = call(&t, req("POST", &format!("/api/sites/{id}/backups"), Some(&admin), None)).await;
+        assert_eq!(s, StatusCode::ACCEPTED);
+        assert_eq!(wait_job(&t, resp["job"].as_i64().unwrap()).await.status, "done");
+        let (_, list, _) = call(&t, req("GET", &format!("/api/sites/{id}/backups"), Some(&admin), None)).await;
+        assert_eq!(list["runs"][0]["snapshot_id"], "abcdef12");
+        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/backups/deadbeef/restore"), Some(&admin), Some(serde_json::json!({"mode": "full"})))).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        let (s, resp, _) = call(&t, req("POST", &format!("/api/sites/{id}/backups/abcdef12/restore"), Some(&admin), Some(serde_json::json!({"mode": "files"})))).await;
+        assert_eq!(s, StatusCode::ACCEPTED);
+        assert_eq!(wait_job(&t, resp["job"].as_i64().unwrap()).await.status, "done");
+        assert!(t.app.ctx.host.calls().iter().any(|c| c == "restore sona_it abcdef12 files=true db=-"));
+    }
+
+    #[tokio::test]
+    async fn recovery_kit_is_admin_only_and_resolves_the_reminder() {
+        let mut t = setup().await;
+        t.app = t.app.clone().with_recovery(vec![("RESTIC_PASSWORD".into(), "segreta".into())]);
+        t.app.ctx.store.raise_alert(None, "recovery-kit", "scarica il kit").await.unwrap();
+        let (_, user) = token_for(&t, "g@example.org", false).await;
+        let (s, _, _) = call(&t, req("GET", "/api/admin/recovery-kit", Some(&user), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let resp = router(t.app.clone()).oneshot(req("GET", "/api/admin/recovery-kit", Some(&admin), None)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let text = String::from_utf8(resp.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+        assert!(text.contains("RESTIC_PASSWORD=segreta"));
+        assert!(t.app.ctx.store.open_alerts(None).await.unwrap().is_empty());
     }
 
     fn cookie_of(headers: &axum::http::HeaderMap) -> String {

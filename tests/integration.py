@@ -142,6 +142,8 @@ def main():
                 f"ALVEARE_ADMIN_EMAIL=admin@example.org\n"
                 f"ALVEARE_PANEL_HOST={PANEL}\n"
                 f"ALVEARE_ADMINER_HOST=adminer.test\n"
+                f"RESTIC_REPOSITORY=/srv/backups/repo\n"
+                f"RESTIC_PASSWORD={secrets.token_hex(16)}\n"
                 f"ALVEARE_INSECURE_COOKIE=1\n"
                 f"ALVEARE_CLOUDFLARED_NETWORK={NETWORK}\n"
             )
@@ -212,6 +214,8 @@ def main():
         assert "sona_test.conf" not in pools and "upupa_test.conf" in pools, pools
         passwd = sh(*compose, "exec", "-T", "php", "cat", "/etc/passwd", cwd=work)
         assert "sona_test:" not in passwd, "utente Unix rimasto"
+        _, alerts = http.call("GET", "/api/alerts", expect=200)
+        assert not any(a["kind"] == "backup" for a in alerts), alerts
         trash = sh(*compose, "exec", "-T", "panel", "ls", "/srv/trash", cwd=work)
         assert trash.startswith("sona_test-"), trash
         status, _ = page("upupa.test")
@@ -242,6 +246,12 @@ def main():
         status, _ = page("adminer.test", "/?server=mariadb&username=root")
         assert status == 403, "Adminer accessibile senza token"
 
+        print("backup restic prima dell'import")
+        run_job(http, "POST", f"/api/sites/{site_b}/backups")
+        _, backups = http.call("GET", f"/api/sites/{site_b}/backups", expect=200)
+        snapshot = backups["runs"][0]["snapshot_id"]
+        assert backups["runs"][0]["status"] == "done" and snapshot, backups
+
         print("file manager: upload a blocchi e import del dump")
         data = gzip.compress(sql.replace("Upupa", "Upupa importata").encode())
         _, up = http.call("POST", f"/api/sites/{site_b}/files/uploads", {"path": "import.sql.gz", "size": len(data)}, expect=201)
@@ -251,6 +261,14 @@ def main():
         run_job(http, "POST", f"/api/sites/{site_b}/database/import", {"path": "import.sql.gz"})
         status, html = page("upupa.test")
         assert "Upupa importata" in html, "dump importato non visibile"
+
+        print("restore del solo database dallo snapshot")
+        run_job(http, "POST", f"/api/sites/{site_b}/backups/{snapshot[:12]}/restore", {"mode": "database"})
+        status, html = page("upupa.test")
+        assert status == 200 and "Upupa importata" not in html and "Upupa" in html, "restore non applicato"
+
+        kit = raw_get(http, "/api/admin/recovery-kit").decode()
+        assert "RESTIC_PASSWORD=" in kit and "ALVEARE_SECRET_KEY=" in kit
 
         print("riavvio del pannello: lo stato si rigenera")
         sh(*compose, "restart", "panel", cwd=work)

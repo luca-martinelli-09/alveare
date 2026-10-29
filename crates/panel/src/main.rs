@@ -68,7 +68,10 @@ async fn main() -> Result<()> {
         global_env: cfg.site_env.clone(),
         backups: cfg.restic_repository.is_some(),
     };
-    let app = App::new(ctx, auth, paths.templates.clone(), cfg.secure_cookie).with_adminer(cfg.adminer_host.clone());
+    let app = App::new(ctx, auth, paths.templates.clone(), cfg.secure_cookie)
+        .with_adminer(cfg.adminer_host.clone())
+        .with_recovery(cfg.recovery.clone());
+    remind_recovery_kit(&app).await?;
     tokio::spawn(apply_when_ready(app.clone()));
     tokio::spawn(scheduler::run(app.clone()));
 
@@ -98,6 +101,15 @@ async fn bootstrap_admin(auth: &Auth, email: Option<&str>) -> Result<()> {
     };
     let (_, temp) = auth.create_user(email, "Amministratore", true).await?;
     tracing::warn!("creato l'admin {email} con password temporanea {temp} (va cambiata al primo accesso)");
+    Ok(())
+}
+
+/// Il kit va riscaricato ogni volta che una chiave cambia.
+async fn remind_recovery_kit(app: &App<SystemHost>) -> Result<()> {
+    let current = backup::kit_fingerprint(&app.recovery_kit());
+    if app.ctx.store.setting("recovery_kit_fingerprint").await?.as_deref() != Some(current.as_str()) {
+        app.ctx.store.raise_alert(None, "recovery-kit", "Scarica il kit di ripristino e conservalo fuori dal server: le chiavi sono nuove o cambiate.").await?;
+    }
     Ok(())
 }
 
