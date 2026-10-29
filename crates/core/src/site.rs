@@ -6,11 +6,31 @@ pub struct InvalidDomain;
 
 pub const SLUG_MAX: usize = 24;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct Slug(String);
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct InvalidSlug;
+
+impl std::fmt::Display for InvalidSlug {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("slug non valido")
+    }
+}
+
+impl TryFrom<String> for Slug {
+    type Error = InvalidSlug;
+    fn try_from(s: String) -> Result<Self, InvalidSlug> {
+        Self::parse(&s)
+    }
+}
+
+impl From<Slug> for String {
+    fn from(s: Slug) -> String {
+        s.0
+    }
+}
 
 impl Slug {
     /// Il valore entra in path, nomi utente e nomi DB: niente oltre [a-z0-9_].
