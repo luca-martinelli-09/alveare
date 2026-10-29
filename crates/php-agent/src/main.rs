@@ -38,6 +38,12 @@ fn main() {
         libc::signal(libc::SIGTERM, on_term as extern "C" fn(libc::c_int) as libc::sighandler_t);
         libc::signal(libc::SIGINT, on_term as extern "C" fn(libc::c_int) as libc::sighandler_t);
     }
+    // Il pannello scrive i pool in staging prima che questo container parta.
+    match pool::apply_pools(Path::new(STAGING_DIR), Path::new(ACTIVE_DIR), validate_pool) {
+        Ok(r) if !r.rejected.is_empty() => eprintln!("php-agent: pool rifiutati all'avvio: {:?}", r.rejected),
+        Ok(_) => {}
+        Err(e) => eprintln!("php-agent: applicazione dei pool all'avvio: {e}"),
+    }
     thread::spawn(serve);
     supervise_fpm();
 }
