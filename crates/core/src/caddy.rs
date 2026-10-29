@@ -32,7 +32,7 @@ pub fn render_caddyfile(cfg: &CaddyConfig) -> String {
 "
     );
     if let Some(host) = &cfg.panel_host {
-        write!(out, "\nhttp://{} {{\n\treverse_proxy panel:8080\n}}\n", host.as_str()).unwrap();
+        write!(out, "\nhttp://{} {{\n\treverse_proxy panel:8080 {{\n\t\theader_up X-Real-IP {{client_ip}}\n\t}}\n}}\n", host.as_str()).unwrap();
     }
     let mut sites: Vec<&CaddySite> = cfg.sites.iter().collect();
     sites.sort_by(|a, b| a.slug.as_str().cmp(b.slug.as_str()));
@@ -144,7 +144,8 @@ mod tests {
     #[test]
     fn panel_host_proxies_to_panel() {
         let c = render_caddyfile(&cfg());
-        assert!(c.contains("\nhttp://pannello.example.org {\n\treverse_proxy panel:8080\n}\n"));
+        // Il pannello riceve l'IP reale già risolto da Caddy (blocco tentativi per IP).
+        assert!(c.contains("\nhttp://pannello.example.org {\n\treverse_proxy panel:8080 {\n\t\theader_up X-Real-IP {client_ip}\n\t}\n}\n"));
     }
 
     #[test]
