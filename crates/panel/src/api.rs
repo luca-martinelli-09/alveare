@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use alveare_core::site::{Domain, Slug};
-use axum::extract::{Path, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
@@ -12,7 +12,9 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::auth::{Auth, AuthError, Need, Role, Stage, User};
+use crate::files::{FileError, SiteFiles, CHUNK, EDITOR_LIMIT};
 use crate::flows::{self, CreateSite, Ctx, Host};
+use crate::host::Paths;
 use crate::jobs::Jobs;
 use crate::store::StoreError;
 use crate::template::Template;
@@ -27,6 +29,10 @@ pub struct App<H> {
     pub templates: PathBuf,
     /// `Secure` sul cookie: sempre in produzione (HTTPS al bordo di Cloudflare).
     pub secure_cookie: bool,
+    pub paths: Paths,
+    /// I file scritti dal file manager tornano all'utente del sito (false solo nei test senza root).
+    pub chown: bool,
+    uploads: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl<H> Clone for App<H> {
@@ -37,6 +43,9 @@ impl<H> Clone for App<H> {
             jobs: self.jobs.clone(),
             templates: self.templates.clone(),
             secure_cookie: self.secure_cookie,
+            paths: self.paths.clone(),
+            chown: self.chown,
+            uploads: self.uploads.clone(),
         }
     }
 }
@@ -44,7 +53,11 @@ impl<H> Clone for App<H> {
 impl<H: Host> App<H> {
     pub fn new(ctx: Ctx<H>, auth: Auth, templates: PathBuf, secure_cookie: bool) -> Self {
         let jobs = Jobs::new(ctx.store.pool().clone());
-        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie }
+        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default() }
+    }
+
+    pub fn with_files(self, paths: Paths, chown: bool) -> Self {
+        Self { paths, chown, ..self }
     }
 }
 
@@ -99,6 +112,19 @@ impl From<sqlx::Error> for ApiError {
         match e {
             sqlx::Error::RowNotFound => Self::new(StatusCode::NOT_FOUND, "non trovato"),
             e => internal(e),
+        }
+    }
+}
+
+impl From<FileError> for ApiError {
+    fn from(e: FileError) -> Self {
+        match e {
+            FileError::Io(io) if io.kind() == std::io::ErrorKind::NotFound => Self::new(StatusCode::NOT_FOUND, "file non trovato"),
+            // cap-std rifiuta gli accessi fuori dalla cartella con PermissionDenied.
+            FileError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied => Self::bad_request("percorso non valido"),
+            FileError::Io(io) if io.kind() == std::io::ErrorKind::AlreadyExists => Self::new(StatusCode::CONFLICT, "esiste già"),
+            FileError::Io(io) => internal(io),
+            e => Self::bad_request(e.to_string()),
         }
     }
 }
@@ -180,6 +206,13 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/sites", get(list_sites::<H>).post(create_site::<H>))
         .route("/api/sites/{id}", get(get_site::<H>).delete(delete_site::<H>))
         .route("/api/sites/{id}/audit", get(site_audit::<H>))
+        .route("/api/sites/{id}/files", get(list_files::<H>))
+        .route("/api/sites/{id}/files/content", get(read_file::<H>).put(write_file::<H>).layer(DefaultBodyLimit::max(EDITOR_LIMIT as usize + 1024)))
+        .route("/api/sites/{id}/files/download", get(download_file::<H>))
+        .route("/api/sites/{id}/files/ops", post(file_op::<H>))
+        .route("/api/sites/{id}/files/uploads", post(upload_start::<H>))
+        .route("/api/sites/{id}/files/uploads/{upload}", get(upload_status::<H>))
+        .route("/api/sites/{id}/files/uploads/{upload}/{n}", put(upload_chunk::<H>).layer(DefaultBodyLimit::max(CHUNK as usize + 1024)))
         .route("/api/jobs/{id}", get(get_job::<H>))
         .with_state(app)
 }
@@ -429,6 +462,118 @@ async fn site_audit<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: 
     Ok(Json(app.auth.audit_for_site(id, 200).await?).into_response())
 }
 
+/// File manager: serve il ruolo di gestore. Le operazioni sui file sono sincrone: girano fuori dal runtime.
+async fn site_files<H: Host>(app: &App<H>, user: &User, id: i64) -> ApiResult<SiteFiles> {
+    require_site(app, user, id, Need::Manage).await?;
+    let site = app.ctx.store.site(id).await?;
+    let (paths, uid) = (app.paths.clone(), app.chown.then(|| site.uid()));
+    Ok(tokio::task::spawn_blocking(move || SiteFiles::open(&paths, &site.slug, uid)).await.map_err(internal)??)
+}
+
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, FileError> + Send + 'static) -> ApiResult<T> {
+    Ok(tokio::task::spawn_blocking(f).await.map_err(internal)??)
+}
+
+#[derive(Deserialize)]
+struct PathQuery {
+    #[serde(default)]
+    path: String,
+}
+
+async fn list_files<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, Query(q): Query<PathQuery>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    let files = site_files(&app, &user, id).await?;
+    Ok(Json(blocking(move || files.list(&q.path)).await?).into_response())
+}
+
+async fn read_file<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, Query(q): Query<PathQuery>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    let files = site_files(&app, &user, id).await?;
+    let content = blocking(move || files.read_text(&q.path)).await?;
+    Ok(Json(json!({ "content": content })).into_response())
+}
+
+async fn write_file<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, Query(q): Query<PathQuery>, m: Method, h: HeaderMap, body: axum::body::Bytes) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    let files = site_files(&app, &user, id).await?;
+    let path = q.path.clone();
+    blocking(move || files.write(&path, &body)).await?;
+    app.auth.audit(Some(user.id), "file.write", Some(id), &q.path).await?;
+    Ok(Json(json!({})).into_response())
+}
+
+async fn download_file<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, Query(q): Query<PathQuery>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    let files = site_files(&app, &user, id).await?;
+    let path = q.path.clone();
+    let file = blocking(move || files.open_read(&path)).await?;
+    let name = std::path::Path::new(&q.path).file_name().map(|n| n.to_string_lossy().replace('"', "")).unwrap_or_default();
+    let stream = tokio_util::io::ReaderStream::new(tokio::fs::File::from_std(file));
+    Ok((
+        [(header::CONTENT_TYPE, "application/octet-stream".to_string()), (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\""))],
+        axum::body::Body::from_stream(stream),
+    )
+        .into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase")]
+enum FileOp {
+    Mkdir { path: String },
+    Rename { path: String, to: String },
+    Delete { path: String },
+    Chmod { path: String, mode: u32 },
+}
+
+async fn file_op<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(op): Json<FileOp>) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    let files = site_files(&app, &user, id).await?;
+    let (action, detail) = match &op {
+        FileOp::Mkdir { path } => ("file.mkdir", path.clone()),
+        FileOp::Rename { path, to } => ("file.rename", format!("{path} → {to}")),
+        FileOp::Delete { path } => ("file.delete", path.clone()),
+        FileOp::Chmod { path, mode } => ("file.chmod", format!("{path} {mode:o}")),
+    };
+    blocking(move || match op {
+        FileOp::Mkdir { path } => files.mkdir(&path),
+        FileOp::Rename { path, to } => files.rename(&path, &to),
+        FileOp::Delete { path } => files.delete(&path, now()),
+        FileOp::Chmod { path, mode } => files.chmod(&path, mode),
+    })
+    .await?;
+    app.auth.audit(Some(user.id), action, Some(id), &detail).await?;
+    Ok(Json(json!({})).into_response())
+}
+
+#[derive(Deserialize)]
+struct UploadReq {
+    path: String,
+    size: u64,
+}
+
+async fn upload_start<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(r): Json<UploadReq>) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    let files = site_files(&app, &user, id).await?;
+    let path = r.path.clone();
+    let info = blocking(move || files.upload_start(&path, r.size)).await?;
+    app.auth.audit(Some(user.id), "file.upload", Some(id), &r.path).await?;
+    Ok((StatusCode::CREATED, Json(info)).into_response())
+}
+
+async fn upload_status<H: Host>(State(app): State<App<H>>, Path((id, upload)): Path<(i64, String)>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    let files = site_files(&app, &user, id).await?;
+    Ok(Json(blocking(move || files.upload_status(&upload)).await?).into_response())
+}
+
+async fn upload_chunk<H: Host>(State(app): State<App<H>>, Path((id, upload, n)): Path<(i64, String, u64)>, m: Method, h: HeaderMap, body: axum::body::Bytes) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    let files = site_files(&app, &user, id).await?;
+    // Un blocco alla volta: l'ultimo sposta il file, due "ultimi" in parallelo si pesterebbero.
+    let _turn = app.uploads.lock().await;
+    Ok(Json(blocking(move || files.upload_chunk(&upload, n, &body)).await?).into_response())
+}
+
 async fn get_job<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
     let job = app.jobs.get(id).await?;
@@ -467,7 +612,8 @@ mod tests {
         std::fs::create_dir_all(templates.path().join("wordpress")).unwrap();
         std::fs::write(templates.path().join("wordpress/template.toml"), "name = \"WordPress\"\nkind = \"wordpress\"\n").unwrap();
         let ctx = Ctx { store: store.clone(), host: FakeHost::default(), key: key.clone(), db_host: "mariadb".into(), global_env: Default::default() };
-        let app = App::new(ctx, Auth::new(store.pool().clone(), key), templates.path().to_path_buf(), false);
+        let paths = crate::host::Paths::under(&templates.path().join("data"));
+        let app = App::new(ctx, Auth::new(store.pool().clone(), key), templates.path().to_path_buf(), false).with_files(paths, false);
         T { app, _templates: templates }
     }
 
@@ -595,6 +741,68 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         panic!("eliminazione non terminata");
+    }
+
+    async fn site_with_files(t: &T) -> (String, i64) {
+        let (_, admin) = token_for(t, "admin@example.org", true).await;
+        let id = create_site(t, &admin, "sona.it").await;
+        // FakeHost non crea cartelle: le crea il test come farebbe l'host reale.
+        crate::host::create_dirs(&t.app.paths, &alveare_core::site::Slug::parse("sona_it").unwrap(), None).unwrap();
+        (admin, id)
+    }
+
+    fn raw(method: &str, uri: &str, auth: &str, body: Vec<u8>) -> Request<Body> {
+        Request::builder().method(method).uri(uri).header("authorization", format!("Bearer {auth}")).body(Body::from(body)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn file_manager_edits_and_lists_site_files() {
+        let t = setup().await;
+        let (admin, id) = site_with_files(&t).await;
+        let (s, _, _) = call(&t, raw("PUT", &format!("/api/sites/{id}/files/content?path=public/index.php"), &admin, b"<?php echo 1;".to_vec())).await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, body, _) = call(&t, req("GET", &format!("/api/sites/{id}/files/content?path=public/index.php"), Some(&admin), None)).await;
+        assert_eq!((s, body["content"].as_str()), (StatusCode::OK, Some("<?php echo 1;")));
+        let (_, list, _) = call(&t, req("GET", &format!("/api/sites/{id}/files?path=public"), Some(&admin), None)).await;
+        assert_eq!(list[0]["name"], "index.php");
+        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/files/ops"), Some(&admin), Some(serde_json::json!({"op": "rename", "path": "public/index.php", "to": "public/home.php"})))).await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/files/ops"), Some(&admin), Some(serde_json::json!({"op": "delete", "path": "public/home.php"})))).await;
+        assert_eq!(s, StatusCode::OK);
+        let (_, list, _) = call(&t, req("GET", &format!("/api/sites/{id}/files?path=public"), Some(&admin), None)).await;
+        assert!(list.as_array().unwrap().is_empty());
+        let (_, audit, _) = call(&t, req("GET", &format!("/api/sites/{id}/audit"), Some(&admin), None)).await;
+        assert!(audit.as_array().unwrap().iter().any(|a| a["action"] == "file.delete"));
+    }
+
+    #[tokio::test]
+    async fn file_manager_rejects_escapes_and_readonly_users() {
+        let t = setup().await;
+        let (_, id) = site_with_files(&t).await;
+        let (uid, ro) = token_for(&t, "ro@example.org", false).await;
+        t.app.auth.assign_site(uid, id, Role::Readonly).await.unwrap();
+        let (s, _, _) = call(&t, req("GET", &format!("/api/sites/{id}/files?path=public"), Some(&ro), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (_, admin) = token_for(&t, "admin2@example.org", true).await;
+        let (s, _, _) = call(&t, req("GET", &format!("/api/sites/{id}/files/content?path=../../etc/passwd"), Some(&admin), None)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn chunked_upload_over_http() {
+        let t = setup().await;
+        let (admin, id) = site_with_files(&t).await;
+        let size = crate::files::CHUNK as usize + 10;
+        let (s, up, _) = call(&t, req("POST", &format!("/api/sites/{id}/files/uploads"), Some(&admin), Some(serde_json::json!({"path": "public/big.bin", "size": size})))).await;
+        assert_eq!(s, StatusCode::CREATED);
+        let uid = up["id"].as_str().unwrap().to_string();
+        let (s, st, _) = call(&t, raw("PUT", &format!("/api/sites/{id}/files/uploads/{uid}/0"), &admin, vec![1u8; crate::files::CHUNK as usize])).await;
+        assert_eq!((s, st["complete"].as_bool()), (StatusCode::OK, Some(false)));
+        let (_, st, _) = call(&t, raw("PUT", &format!("/api/sites/{id}/files/uploads/{uid}/1"), &admin, vec![2u8; 10])).await;
+        assert_eq!(st["complete"], true);
+        let resp = router(t.app.clone()).oneshot(req("GET", &format!("/api/sites/{id}/files/download?path=public/big.bin"), Some(&admin), None)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.into_body().collect().await.unwrap().to_bytes().len(), size);
     }
 
     fn cookie_of(headers: &axum::http::HeaderMap) -> String {
