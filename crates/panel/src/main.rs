@@ -6,6 +6,7 @@ mod flows;
 mod host;
 mod jobs;
 mod logs;
+mod scheduler;
 mod secrets;
 mod store;
 mod template;
@@ -53,6 +54,7 @@ async fn main() -> Result<()> {
     let ctx = Ctx { store: store.clone(), host, key: cfg.key.clone(), db_host: cfg.db_host.clone(), global_env: cfg.site_env.clone() };
     let app = App::new(ctx, auth, paths.templates.clone(), cfg.secure_cookie);
     tokio::spawn(apply_when_ready(app.clone()));
+    tokio::spawn(scheduler::run(app.clone()));
 
     let router = api::router(app).route("/healthz", get(|| async { "ok" }));
     let listener = tokio::net::TcpListener::bind(&cfg.listen).await?;

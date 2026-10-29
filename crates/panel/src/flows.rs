@@ -32,6 +32,10 @@ pub trait Host: Send + Sync + 'static {
     fn sync_php(&self, users: &[SitePhp], pools: &[SitePhp]) -> impl Future<Output = Result<Vec<String>>> + Send;
     fn sync_caddy(&self, sites: &[CaddySite]) -> impl Future<Output = Result<()>> + Send;
     fn wp(&self, slug: &Slug, args: &[String]) -> impl Future<Output = Result<String>> + Send;
+    /// Come `wp`, ma un'uscita con errore non è un errore: (riuscito, output).
+    fn wp_output(&self, slug: &Slug, args: &[String]) -> impl Future<Output = Result<(bool, String)>> + Send;
+    /// Fa riaprire a PHP-FPM i log dopo la rotazione.
+    fn reopen_fpm_logs(&self) -> impl Future<Output = Result<()>> + Send;
 }
 
 pub struct Ctx<H> {

@@ -47,6 +47,15 @@ text_enum!(SiteKind { Wordpress = "wordpress", Php = "php", Laravel = "laravel" 
 text_enum!(SiteStatus { Creating = "creating", Active = "active", Suspended = "suspended", Error = "error", Deleting = "deleting" });
 text_enum!(DomainKind { Primary = "primary", Alias = "alias", Redirect = "redirect" });
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Alert {
+    pub id: i64,
+    pub site_id: Option<i64>,
+    pub kind: String,
+    pub message: String,
+    pub created_at: String,
+}
+
 pub struct NewSite {
     pub primary: Domain,
     pub kind: SiteKind,
@@ -248,6 +257,44 @@ impl Store {
         Ok((r.try_get("db_name")?, r.try_get("db_user")?, r.try_get("password_enc")?))
     }
 
+    /// Un solo avviso aperto per sito e tipo: il nuovo messaggio sostituisce il vecchio.
+    pub async fn raise_alert(&self, site_id: Option<i64>, kind: &str, message: &str) -> Result<()> {
+        let updated = sqlx::query("UPDATE alerts SET message = ?, created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE site_id IS ? AND kind = ? AND resolved_at IS NULL")
+            .bind(message)
+            .bind(site_id)
+            .bind(kind)
+            .execute(&self.pool)
+            .await?;
+        if updated.rows_affected() == 0 {
+            sqlx::query("INSERT INTO alerts (site_id, kind, message) VALUES (?, ?, ?)").bind(site_id).bind(kind).bind(message).execute(&self.pool).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn resolve_alerts(&self, site_id: i64, kind: &str) -> Result<()> {
+        sqlx::query("UPDATE alerts SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE site_id = ? AND kind = ? AND resolved_at IS NULL")
+            .bind(site_id)
+            .bind(kind)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// `visible = None`: tutti (admin), compresi gli avvisi globali.
+    pub async fn open_alerts(&self, visible: Option<&[i64]>) -> Result<Vec<Alert>> {
+        let rows = sqlx::query("SELECT id, site_id, kind, message, created_at FROM alerts WHERE resolved_at IS NULL ORDER BY id DESC")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out = Vec::new();
+        for r in rows {
+            let site_id: Option<i64> = r.try_get("site_id")?;
+            if visible.is_none_or(|v| site_id.is_some_and(|s| v.contains(&s))) {
+                out.push(Alert { id: r.try_get("id")?, site_id, kind: r.try_get("kind")?, message: r.try_get("message")?, created_at: r.try_get("created_at")? });
+            }
+        }
+        Ok(out)
+    }
+
     /// Siti serviti da Caddy: solo quelli attivi.
     pub async fn caddy_sites(&self) -> Result<Vec<CaddySite>> {
         let mut out = Vec::new();
@@ -358,6 +405,23 @@ mod tests {
         }
         let slugs: Vec<String> = s.pooled_sites().await.unwrap().into_iter().map(|p| p.slug.as_str().to_string()).collect();
         assert_eq!(slugs, ["a_it", "d_it"]);
+    }
+
+    #[tokio::test]
+    async fn alerts_are_deduplicated_resolved_and_filtered() {
+        let s = store().await;
+        let a = s.create_site(&new_site("a.it")).await.unwrap();
+        let b = s.create_site(&new_site("b.it")).await.unwrap();
+        s.raise_alert(Some(a.id), "integrity", "file modificati: 1").await.unwrap();
+        s.raise_alert(Some(a.id), "integrity", "file modificati: 2").await.unwrap();
+        s.raise_alert(Some(b.id), "integrity", "x").await.unwrap();
+        let open = s.open_alerts(None).await.unwrap();
+        assert_eq!(open.len(), 2);
+        let mine = s.open_alerts(Some(&[a.id])).await.unwrap();
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].message, "file modificati: 2");
+        s.resolve_alerts(a.id, "integrity").await.unwrap();
+        assert!(s.open_alerts(Some(&[a.id])).await.unwrap().is_empty());
     }
 
     #[tokio::test]

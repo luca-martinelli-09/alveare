@@ -215,6 +215,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/sites/{id}/files/uploads/{upload}/{n}", put(upload_chunk::<H>).layer(DefaultBodyLimit::max(CHUNK as usize + 1024)))
         .route("/api/sites/{id}/logs/{kind}", get(read_log::<H>).delete(clear_log::<H>))
         .route("/api/sites/{id}/logs/{kind}/stream", get(stream_log::<H>))
+        .route("/api/alerts", get(list_alerts::<H>))
         .route("/api/jobs/{id}", get(get_job::<H>))
         .with_state(app)
 }
@@ -665,6 +666,12 @@ async fn stream_log<H: Host>(State(app): State<App<H>>, Path((id, kind)): Path<(
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()).into_response())
 }
 
+async fn list_alerts<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    let visible = app.auth.visible_sites(&user).await?;
+    Ok(Json(app.ctx.store.open_alerts(visible.as_deref()).await?).into_response())
+}
+
 async fn get_job<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
     let job = app.jobs.get(id).await?;
@@ -927,6 +934,23 @@ mod tests {
         let (s, body, _) = call(&t, req("GET", &format!("/api/sites/{id}/logs/wp-debug"), Some(&admin), None)).await;
         assert_ne!(s, StatusCode::OK, "{body}");
         assert!(!body.to_string().contains("root:"));
+    }
+
+    #[tokio::test]
+    async fn alerts_are_filtered_by_visible_sites() {
+        let t = setup().await;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let a = create_site(&t, &admin, "a.it").await;
+        let b = create_site(&t, &admin, "b.it").await;
+        t.app.ctx.store.raise_alert(Some(a), "integrity", "x").await.unwrap();
+        t.app.ctx.store.raise_alert(Some(b), "integrity", "y").await.unwrap();
+        let (uid, user) = token_for(&t, "g@example.org", false).await;
+        t.app.auth.assign_site(uid, a, Role::Readonly).await.unwrap();
+        let (_, list, _) = call(&t, req("GET", "/api/alerts", Some(&user), None)).await;
+        assert_eq!(list.as_array().unwrap().len(), 1);
+        assert_eq!(list[0]["site_id"], a);
+        let (_, all, _) = call(&t, req("GET", "/api/alerts", Some(&admin), None)).await;
+        assert_eq!(all.as_array().unwrap().len(), 2);
     }
 
     fn cookie_of(headers: &axum::http::HeaderMap) -> String {

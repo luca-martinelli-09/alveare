@@ -285,6 +285,40 @@ impl SiteFiles {
         }
         Ok(status)
     }
+
+    /// File eseguibili da PHP dentro uploads: non dovrebbero mai esserci.
+    pub fn php_in_uploads(&self) -> Result<Vec<String>> {
+        let uploads = Path::new("public/wp-content/uploads");
+        let dir = match self.root.open_dir(uploads) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+            Err(e) => return Err(e.into()),
+        };
+        let mut found = Vec::new();
+        walk_php(&dir, PathBuf::new(), &mut found)?;
+        found.sort();
+        Ok(found)
+    }
+}
+
+fn is_php_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    [".php", ".phtml", ".phar"].iter().any(|e| lower.ends_with(e)) || lower.rsplit('.').next().is_some_and(|x| x.len() == 4 && x.starts_with("php"))
+}
+
+fn walk_php(dir: &Dir, prefix: PathBuf, found: &mut Vec<String>) -> Result<()> {
+    for entry in dir.entries()? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let path = prefix.join(&name);
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            walk_php(&entry.open_dir()?, path, found)?;
+        } else if is_php_name(&name.to_string_lossy()) {
+            found.push(path.to_string_lossy().into_owned());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -423,6 +457,22 @@ mod tests {
         assert!(f.upload_start("../fuori.bin", 10).is_err());
         assert!(f.upload_start(".env", 10).is_err());
         assert!(f.upload_start("public/x", UPLOAD_LIMIT + 1).is_err());
+    }
+
+    #[test]
+    fn php_files_in_uploads_are_found() {
+        let (_t, _p, f) = site();
+        f.write("public/wp-content/uploads/2026/11/foto.jpg", b"x").unwrap();
+        f.write("public/wp-content/uploads/2026/11/shell.PHP", b"x").unwrap();
+        f.write("public/wp-content/uploads/cache/x.phtml", b"x").unwrap();
+        f.write("public/wp-content/plugins/ok.php", b"x").unwrap();
+        assert_eq!(f.php_in_uploads().unwrap(), ["2026/11/shell.PHP", "cache/x.phtml"]);
+    }
+
+    #[test]
+    fn php_scan_without_uploads_folder_is_empty() {
+        let (_t, _p, f) = site();
+        assert!(f.php_in_uploads().unwrap().is_empty());
     }
 
     #[test]

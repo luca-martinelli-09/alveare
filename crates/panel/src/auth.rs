@@ -349,6 +349,12 @@ impl Auth {
         self.clear_failures(&keys).await
     }
 
+    pub async fn purge_sessions(&self, now: i64) -> Result<()> {
+        sqlx::query("DELETE FROM sessions WHERE last_used <= ?").bind(now - IDLE_SECS).execute(&self.pool).await?;
+        sqlx::query("DELETE FROM login_failures WHERE locked_until < ? AND locked_until > 0").bind(now).execute(&self.pool).await?;
+        Ok(())
+    }
+
     pub async fn logout(&self, token: &str) -> Result<()> {
         sqlx::query("DELETE FROM sessions WHERE id = ?").bind(sha256_hex(token)).execute(&self.pool).await?;
         Ok(())

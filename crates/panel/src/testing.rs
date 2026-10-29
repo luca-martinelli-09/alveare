@@ -70,5 +70,11 @@ impl Host for FakeHost {
     async fn wp(&self, slug: &Slug, args: &[String]) -> anyhow::Result<String> {
         self.record("wp", format!("{} {}", slug.as_str(), args.join(" "))).map(|_| String::new())
     }
+    async fn wp_output(&self, slug: &Slug, args: &[String]) -> anyhow::Result<(bool, String)> {
+        self.record("wp", format!("{} {}", slug.as_str(), args.join(" "))).map(|_| (true, String::new()))
+    }
+    async fn reopen_fpm_logs(&self) -> anyhow::Result<()> {
+        self.record("reopen_fpm_logs", String::new())
+    }
 }
 

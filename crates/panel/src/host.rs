@@ -289,11 +289,24 @@ impl Host for SystemHost {
     }
 
     async fn wp(&self, slug: &Slug, args: &[String]) -> Result<String> {
-        let resp = self.agent(Command::Wp { slug: slug.clone(), args: args.to_vec() }).await?;
-        if !resp.ok {
-            bail!("wp {}: {}", args.join(" "), resp.output.trim());
+        let (ok, output) = self.wp_output(slug, args).await?;
+        if !ok {
+            bail!("wp {}: {}", args.join(" "), output.trim());
         }
-        Ok(resp.output)
+        Ok(output)
+    }
+
+    async fn wp_output(&self, slug: &Slug, args: &[String]) -> Result<(bool, String)> {
+        let resp = self.agent(Command::Wp { slug: slug.clone(), args: args.to_vec() }).await?;
+        Ok((resp.ok, resp.output))
+    }
+
+    async fn reopen_fpm_logs(&self) -> Result<()> {
+        let resp = self.agent(Command::FpmReopenLogs).await?;
+        if !resp.ok {
+            bail!("riapertura dei log di FPM: {}", resp.output);
+        }
+        Ok(())
     }
 }
 
