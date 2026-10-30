@@ -53,6 +53,30 @@ pub fn parse_summary(out: &str) -> Option<Snapshot> {
 }
 
 /// Id di snapshot (anche abbreviato): solo esadecimale minuscolo, 8–64 caratteri.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SnapEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub mtime: String,
+}
+
+/// Figli diretti di `dir` dall'output di `restic ls --json` (una riga JSON per nodo).
+pub fn parse_ls(out: &str, dir: &str) -> Vec<SnapEntry> {
+    let dir = dir.trim_end_matches('/');
+    out.lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v["struct_type"] == "node")
+        .filter(|v| v["path"].as_str().and_then(|p| p.rsplit_once('/')).is_some_and(|(parent, _)| parent == dir))
+        .map(|v| SnapEntry {
+            name: v["name"].as_str().unwrap_or_default().to_string(),
+            is_dir: v["type"] == "dir",
+            size: v["size"].as_u64().unwrap_or(0),
+            mtime: v["mtime"].as_str().unwrap_or_default().to_string(),
+        })
+        .collect()
+}
+
 pub fn valid_snapshot(id: &str) -> bool {
     (8..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
@@ -102,6 +126,22 @@ pub fn kit_fingerprint(kit: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_listing_keeps_only_direct_children() {
+        let out = r#"{"time":"2026-10-01T02:00:00Z","struct_type":"snapshot","id":"abc"}
+{"name":"wp-content","type":"dir","path":"/srv/sites/sona_it/public/wp-content","mtime":"2026-09-30T10:00:00+02:00","struct_type":"node"}
+{"name":"index.php","type":"file","path":"/srv/sites/sona_it/public/index.php","size":405,"mtime":"2026-09-30T10:00:00+02:00","struct_type":"node"}
+{"name":"themes","type":"dir","path":"/srv/sites/sona_it/public/wp-content/themes","mtime":"2026-09-30T10:00:00+02:00","struct_type":"node"}
+{"name":"public","type":"dir","path":"/srv/sites/sona_it/public","mtime":"2026-09-30T10:00:00+02:00","struct_type":"node"}
+{"name":"link","type":"symlink","path":"/srv/sites/sona_it/public/link","struct_type":"node"}
+"#;
+        let entries = parse_ls(out, "/srv/sites/sona_it/public");
+        assert_eq!(entries.len(), 3);
+        assert_eq!((entries[0].name.as_str(), entries[0].is_dir), ("wp-content", true));
+        assert_eq!((entries[1].name.as_str(), entries[1].size), ("index.php", 405));
+        assert_eq!(entries[2].name, "link");
+    }
     use alveare_core::site::Slug;
 
     fn slug() -> Slug {

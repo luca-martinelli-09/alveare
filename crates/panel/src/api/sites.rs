@@ -387,6 +387,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn snapshot_browsing_and_partial_or_new_domain_restores() {
+        let t = setup().await;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let id = create_site(&t, &admin, "sona.it").await;
+        let manager = user_with_role(&t, "g@example.org", id, Role::Manager).await;
+        let job = call(&t, req("POST", &format!("/api/sites/{id}/backups"), Some(&admin), None)).await.1["job"].as_i64().unwrap();
+        wait_job(&t, job).await;
+        let base = format!("/api/sites/{id}/backups/abcdef12");
+        let (s, body, _) = call(&t, req("GET", &format!("{base}/files?path=public"), Some(&manager), None)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(body[0]["name"], "wp-content");
+        let (s, _, _) = call(&t, req("GET", &format!("{base}/files?path=../x"), Some(&manager), None)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let (s, body, _) = call(&t, req("POST", &format!("{base}/restore"), Some(&manager), Some(json!({"mode": "path", "path": "public/wp-content/themes/x"})))).await;
+        assert_eq!(s, StatusCode::ACCEPTED);
+        assert_eq!(wait_job(&t, body["job"].as_i64().unwrap()).await.status, "done");
+        let (s, _, _) = call(&t, req("POST", &format!("{base}/restore"), Some(&manager), Some(json!({"mode": "new_domain", "domain": "verifica.sona.it"})))).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "un sito nuovo lo crea solo l'admin");
+        let (s, body, _) = call(&t, req("POST", &format!("{base}/restore"), Some(&admin), Some(json!({"mode": "new_domain", "domain": "verifica.sona.it"})))).await;
+        assert_eq!(s, StatusCode::ACCEPTED);
+        let job = wait_job(&t, body["job"].as_i64().unwrap()).await;
+        assert_eq!(job.status, "done", "{:?}", job.log);
+        assert_ne!(job.site_id, Some(id));
+    }
+
+    #[tokio::test]
     async fn panel_hostnames_are_reserved() {
         let mut t = setup().await;
         t.app = t.app.clone().with_reserved_hosts(vec![alveare_core::site::Domain::parse("pannello.sona.it").unwrap()]);

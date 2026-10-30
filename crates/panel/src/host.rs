@@ -17,7 +17,7 @@ use sqlx::Row;
 
 use crate::backup::{backup_args, forget_args, parse_summary, valid_snapshot, Retention, Snapshot};
 use crate::database::TableInfo;
-use crate::flows::{DbCreds, Dump, Host, Installed};
+use crate::flows::{DbCreds, Dump, FilesScope, Host, Installed};
 use crate::template::{env_file, Template, Vars};
 
 /// Il timeout dell'agente per WP-CLI è 600 s: il pannello aspetta un po' di più.
@@ -499,17 +499,22 @@ impl Host for SystemHost {
         self.restic(&args).await.map(drop)
     }
 
-    async fn restore(&self, slug: &Slug, snapshot: &str, files: bool, db: Option<&DbCreds>) -> Result<()> {
+    async fn restore(&self, slug: &Slug, snapshot: &str, target: &Slug, target_uid: u32, files: &FilesScope, db: Option<&DbCreds>) -> Result<()> {
         if !valid_snapshot(snapshot) {
             bail!("snapshot non valido: {snapshot}");
         }
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        let staging = self.paths.backups.join(format!("restore-{}-{now}", slug.as_str()));
-        let site_dir = self.paths.sites.join(slug.as_str());
+        let staging = self.paths.backups.join(format!("restore-{}-{now}", target.as_str()));
+        let (src_dir, target_dir) = (self.paths.sites.join(slug.as_str()), self.paths.sites.join(target.as_str()));
         let dump = self.paths.backups.join(slug.as_str()).join("db.sql");
+        let wanted = match files {
+            FilesScope::None => None,
+            FilesScope::All => Some(PathBuf::new()),
+            FilesScope::Path(rel) => Some(PathBuf::from(crate::flows::site_rel_path(rel)?)),
+        };
         let mut args = vec!["restore".to_string(), snapshot.to_string(), "--target".into(), staging.to_string_lossy().into_owned()];
-        if files {
-            args.extend(["--include".into(), site_dir.to_string_lossy().into_owned()]);
+        if let Some(rel) = &wanted {
+            args.extend(["--include".into(), src_dir.join(rel).to_string_lossy().into_owned()]);
         }
         if db.is_some() {
             args.extend(["--include".into(), dump.to_string_lossy().into_owned()]);
@@ -518,17 +523,23 @@ impl Host for SystemHost {
             self.restic(&args).await?;
             // restic ricrea i percorsi assoluti sotto la cartella di destinazione.
             let inside = |p: &Path| staging.join(p.strip_prefix("/").unwrap_or(p));
-            if files {
-                let restored = inside(&site_dir);
-                if !restored.is_dir() {
-                    bail!("lo snapshot non contiene i file del sito");
+            if let Some(rel) = &wanted {
+                let restored = inside(&src_dir.join(rel));
+                if fs::symlink_metadata(&restored).is_err() {
+                    bail!("lo snapshot non contiene {}", if rel.as_os_str().is_empty() { "i file del sito".into() } else { rel.display().to_string() });
                 }
-                let old = self.paths.trash.join(format!("{}-{now}", slug.as_str()));
-                fs::create_dir_all(&old)?;
-                if site_dir.exists() {
-                    fs::rename(&site_dir, old.join("site"))?;
+                let (current, old) = (target_dir.join(rel), self.paths.trash.join(format!("{}-{now}", target.as_str())).join("site").join(rel));
+                if fs::symlink_metadata(&current).is_ok() {
+                    fs::create_dir_all(old.parent().context("percorso senza cartella")?)?;
+                    fs::rename(&current, &old)?;
                 }
-                fs::rename(&restored, &site_dir)?;
+                if let Some(parent) = current.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::rename(&restored, &current)?;
+                if target != slug {
+                    chown_tree(&current, Some(target_uid))?;
+                }
             }
             if let Some(db) = db {
                 let restored = inside(&dump);
@@ -542,6 +553,17 @@ impl Host for SystemHost {
         .await;
         let _ = fs::remove_dir_all(&staging);
         result
+    }
+
+    async fn snapshot_ls(&self, slug: &Slug, snapshot: &str, rel: &str) -> Result<Vec<crate::backup::SnapEntry>> {
+        if !valid_snapshot(snapshot) {
+            bail!("snapshot non valido: {snapshot}");
+        }
+        let site_dir = self.paths.sites.join(slug.as_str());
+        let dir = if rel.trim_matches('/').is_empty() { site_dir } else { site_dir.join(crate::flows::site_rel_path(rel)?) };
+        let dir = dir.to_string_lossy().into_owned();
+        let out = self.restic(&["ls".into(), "--json".into(), snapshot.into(), dir.clone()]).await?;
+        Ok(crate::backup::parse_ls(&out, &dir))
     }
 
     async fn backup_panel(&self, store: &crate::store::Store, env_enc: &[u8]) -> Result<Snapshot> {

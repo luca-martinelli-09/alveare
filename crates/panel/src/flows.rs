@@ -53,8 +53,11 @@ pub trait Host: Send + Sync + 'static {
     fn prune(&self, slug: &Slug, keep: Retention) -> impl Future<Output = Result<()>> + Send;
     /// Snapshot di siti eliminati: restano 30 giorni.
     fn expire_deleted(&self, slug: &str) -> impl Future<Output = Result<()>> + Send;
-    /// Ripristina file e/o database dallo snapshot (dopo un backup dello stato attuale fatto dal flusso).
-    fn restore(&self, slug: &Slug, snapshot: &str, files: bool, db: Option<&DbCreds>) -> impl Future<Output = Result<()>> + Send;
+    /// Ripristina file e/o database dello snapshot di `slug` nel sito `target` (lo stesso, o una
+    /// copia su un nuovo dominio). Ciò che viene sostituito finisce nel cestino.
+    fn restore(&self, slug: &Slug, snapshot: &str, target: &Slug, target_uid: u32, files: &FilesScope, db: Option<&DbCreds>) -> impl Future<Output = Result<()>> + Send;
+    /// Contenuto di una cartella del sito (relativa) dentro lo snapshot.
+    fn snapshot_ls(&self, slug: &Slug, snapshot: &str, rel: &str) -> impl Future<Output = Result<Vec<crate::backup::SnapEntry>>> + Send;
     /// panel.db, template e configurazione cifrata, con il tag `panel`.
     fn backup_panel(&self, store: &Store, env_enc: &[u8]) -> impl Future<Output = Result<Snapshot>> + Send;
     /// Riscrive l'ACL di Redis e la fa ricaricare.
@@ -83,6 +86,25 @@ pub struct Imported {
     pub table_prefix: Option<String>,
     /// Se mancano wp-includes e wp-admin, il core va scaricato.
     pub has_core: bool,
+}
+
+/// Quali file ripristinare.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FilesScope {
+    None,
+    All,
+    /// Un file o una cartella, relativi alla cartella del sito.
+    Path(String),
+}
+
+impl std::fmt::Display for FilesScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => f.write_str("none"),
+            Self::All => f.write_str("all"),
+            Self::Path(p) => f.write_str(p),
+        }
+    }
 }
 
 pub struct Installed {
@@ -279,43 +301,17 @@ pub async fn clone_site<H: Host>(c: &Ctx<H>, src_id: i64, domain: &Domain, log: 
     let site = c.store.create_site(&NewSite { primary: domain.clone(), kind: src.kind, template: src.template.clone() }).await?;
     log.push(format!("sito {} registrato come copia di {}", site.slug.as_str(), src.slug.as_str()));
     let mut undo = vec![Undo::Row(site.id)];
-    let req = CreateSite {
-        domain: domain.clone(),
-        kind: src.kind,
-        template: src.template.clone(),
-        title: src_env.get("SMTP_FROM_NAME").cloned().unwrap_or_else(|| domain.as_str().into()),
-        admin_email: String::new(),
-        table_prefix: src_env.get("TABLE_PREFIX").cloned().unwrap_or_else(|| "wp_".into()),
-    };
     let steps = async {
         let db = new_database(c, &site, &mut undo, log).await?;
         c.host.copy_site_files(&src.slug, &site.slug, site.uid()).await?;
         log.push("file copiati");
-        let redis_password = random_password();
-        c.store.save_redis_password(site.id, &c.key.encrypt(&redis_password)).await?;
-        let (_, mut env) = site_vars(c, &req, &site, &db, &redis_password);
-        env.insert("WP_ENVIRONMENT_TYPE".into(), "staging".into());
-        if let Some(rule) = src_env.get("ALVEARE_UPDATE_RULE") {
-            env.insert("ALVEARE_UPDATE_RULE".into(), rule.clone());
-        }
-        c.host.write_site_env(&site.slug, site.uid(), &env).await?;
-        c.sync_redis().await?;
-        check_own_pool(c, &site).await?;
+        configure_copy(c, &site, domain, &db, &src_env).await?;
         let src_db = c.db_creds(src_id).await?;
         let dump = c.host.db_dump(&src_db.name, &[]).await?;
         c.host.db_import(&db.name, dump.reader).await?;
         dump.finished.await?;
         log.push("database copiato");
-        let (from, to) = (format!("//{}", src_domain.as_str()), format!("//{}", domain.as_str()));
-        let args: Vec<String> = ["search-replace", &from, &to, "--all-tables", "--skip-columns=guid"].map(String::from).to_vec();
-        c.host.wp(&site.slug, &args).await?;
-        log.push(format!("search-replace {from} → {to}"));
-        let password = random_password();
-        c.store.set_staging(site.id, Some((&c.key.encrypt(&password), &bcrypt::hash(&password, bcrypt::DEFAULT_COST)?))).await?;
-        c.store.set_status(site.id, SiteStatus::Active).await?;
-        c.sync_caddy().await?;
-        log.push(format!("copia attiva e protetta (utente staging): aggiungi {} al tunnel Cloudflare", domain.as_str()));
-        Ok::<_, anyhow::Error>(())
+        publish_copy(c, &site, &src_domain, domain, log).await
     };
     match steps.await {
         Ok(()) => Ok(c.store.site(site.id).await?),
@@ -479,6 +475,44 @@ pub async fn save_template<H: Host>(c: &Ctx<H>, id: i64, name: &Slug, title: &st
     Ok(())
 }
 
+/// `.env` nuovo per una copia (clone o restore su nuovo dominio): credenziali e salt nuovi,
+/// prefisso, nome e regola di aggiornamento della sorgente, ambiente `staging`. Poi Redis e pool.
+async fn configure_copy<H: Host>(c: &Ctx<H>, site: &Site, domain: &Domain, db: &DbCreds, src_env: &Vars) -> Result<()> {
+    let req = CreateSite {
+        domain: domain.clone(),
+        kind: site.kind,
+        template: site.template.clone(),
+        title: src_env.get("SMTP_FROM_NAME").cloned().unwrap_or_else(|| domain.as_str().into()),
+        admin_email: String::new(),
+        table_prefix: src_env.get("TABLE_PREFIX").cloned().unwrap_or_else(|| "wp_".into()),
+    };
+    let redis_password = random_password();
+    c.store.save_redis_password(site.id, &c.key.encrypt(&redis_password)).await?;
+    let (_, mut env) = site_vars(c, &req, site, db, &redis_password);
+    env.insert("WP_ENVIRONMENT_TYPE".into(), "staging".into());
+    if let Some(rule) = src_env.get("ALVEARE_UPDATE_RULE") {
+        env.insert("ALVEARE_UPDATE_RULE".into(), rule.clone());
+    }
+    c.host.write_site_env(&site.slug, site.uid(), &env).await?;
+    c.sync_redis().await?;
+    check_own_pool(c, site).await
+}
+
+/// Porta il database della copia sul nuovo dominio, la protegge e la mette online.
+async fn publish_copy<H: Host>(c: &Ctx<H>, site: &Site, src_domain: &Domain, domain: &Domain, log: &mut JobLog) -> Result<()> {
+    if site.kind == SiteKind::Wordpress {
+        let (from, to) = (format!("//{}", src_domain.as_str()), format!("//{}", domain.as_str()));
+        c.host.wp(&site.slug, &["search-replace", &from, &to, "--all-tables", "--skip-columns=guid"].map(String::from)).await?;
+        log.push(format!("search-replace {from} → {to}"));
+    }
+    let password = random_password();
+    c.store.set_staging(site.id, Some((&c.key.encrypt(&password), &bcrypt::hash(&password, bcrypt::DEFAULT_COST)?))).await?;
+    c.store.set_status(site.id, SiteStatus::Active).await?;
+    c.sync_caddy().await?;
+    log.push(format!("copia attiva e protetta (utente staging): aggiungi {} al tunnel Cloudflare", domain.as_str()));
+    Ok(())
+}
+
 /// Database e cartelle di un sito appena registrato, con i passi per annullarli.
 async fn new_database<H: Host>(c: &Ctx<H>, site: &Site, undo: &mut Vec<Undo>, log: &mut JobLog) -> Result<DbCreds> {
     let slug = &site.slug;
@@ -619,8 +653,7 @@ pub async fn backup_site<H: Host>(c: &Ctx<H>, site_id: i64, log: &mut JobLog) ->
     result
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestoreMode {
     Full,
     Files,
@@ -632,9 +665,9 @@ pub async fn restore_site<H: Host>(c: &Ctx<H>, site_id: i64, snapshot: &str, mod
     let site = c.store.site(site_id).await?;
     backup_site(c, site_id, log).await.context("backup prima del ripristino")?;
     let db = c.db_creds(site_id).await?;
-    let files = mode != RestoreMode::Database;
+    let files = if mode == RestoreMode::Database { FilesScope::None } else { FilesScope::All };
     let with_db = (mode != RestoreMode::Files).then_some(&db);
-    c.host.restore(&site.slug, snapshot, files, with_db).await?;
+    c.host.restore(&site.slug, snapshot, &site.slug, site.uid(), &files, with_db).await?;
     log.push(format!("ripristinato {snapshot} ({})", match mode { RestoreMode::Full => "file e database", RestoreMode::Files => "solo file", RestoreMode::Database => "solo database" }));
     c.sync_php().await?;
     c.sync_caddy().await?;
@@ -678,6 +711,53 @@ pub async fn set_staging<H: Host>(c: &Ctx<H>, id: i64, on: bool) -> Result<Optio
 
 pub async fn staging_password<H>(c: &Ctx<H>, id: i64) -> Result<Option<String>> {
     Ok(c.store.staging_password(id).await?.map(|enc| c.key.decrypt(&enc)).transpose()?)
+}
+
+/// Percorso relativo alla cartella del sito, senza `..` né il `.env`.
+pub fn site_rel_path(path: &str) -> Result<String> {
+    let p = std::path::Path::new(path.trim_matches('/'));
+    let ok = p.components().all(|c| matches!(c, std::path::Component::Normal(_)))
+        && p.components().next().is_some_and(|c| c.as_os_str() != ".env");
+    if !ok {
+        bail!("percorso non valido: {path:?}");
+    }
+    Ok(p.to_string_lossy().into_owned())
+}
+
+/// Ripristina un solo file o cartella (un tema cancellato, un'immagine): la versione attuale va nel cestino.
+pub async fn restore_path<H: Host>(c: &Ctx<H>, id: i64, snapshot: &str, path: &str, log: &mut JobLog) -> Result<()> {
+    let site = c.store.site(id).await?;
+    let rel = site_rel_path(path)?;
+    c.host.restore(&site.slug, snapshot, &site.slug, site.uid(), &FilesScope::Path(rel.clone()), None).await?;
+    log.push(format!("ripristinato {rel} da {snapshot}; la versione sostituita è nel cestino"));
+    Ok(())
+}
+
+/// Ripristina uno snapshot come sito nuovo, protetto come staging: verifica un backup senza toccare l'originale.
+pub async fn restore_as_new_site<H: Host>(c: &Ctx<H>, src_id: i64, snapshot: &str, domain: &Domain, log: &mut JobLog) -> Result<Site> {
+    let src = c.store.site(src_id).await?;
+    let src_domain = c.store.domains(src_id).await?.into_iter().next().map(|(d, _)| d).context("sito senza dominio")?;
+    let site = c.store.create_site(&NewSite { primary: domain.clone(), kind: src.kind, template: src.template.clone() }).await?;
+    log.push(format!("sito {} registrato per il ripristino di {snapshot}", site.slug.as_str()));
+    let mut undo = vec![Undo::Row(site.id)];
+    let steps = async {
+        let db = new_database(c, &site, &mut undo, log).await?;
+        c.host.restore(&src.slug, snapshot, &site.slug, site.uid(), &FilesScope::All, Some(&db)).await?;
+        log.push("file e database ripristinati");
+        let old_env = c.host.read_site_env(&site.slug).await?;
+        configure_copy(c, &site, domain, &db, &old_env).await?;
+        publish_copy(c, &site, &src_domain, domain, log).await?;
+        flush_object_cache(c, &site, log).await;
+        Ok::<_, anyhow::Error>(())
+    };
+    match steps.await {
+        Ok(()) => Ok(c.store.site(site.id).await?),
+        Err(e) => {
+            log.push(format!("errore: {e:#}"));
+            rollback(c, undo, log).await;
+            Err(e)
+        }
+    }
 }
 
 /// Elimina un sito. Va solo avanti: se si ferma, il sito resta in `deleting` e si può rilanciare.
@@ -1010,7 +1090,7 @@ mod tests {
             [
                 "backup sona_it sona_it",
                 "prune sona_it 7",
-                "restore sona_it abcdef12 files=false db=sona_it",
+                "restore sona_it abcdef12 -> sona_it files=none db=sona_it",
                 "sync_php users=sona_it pools=sona_it",
                 "sync_caddy sona_it",
                 "wp sona_it cache flush",
@@ -1058,6 +1138,45 @@ mod tests {
         assert!(set_staging(&c, site.id, false).await.unwrap().is_none());
         assert!(c.store.caddy_sites().await.unwrap()[0].staging_hash.is_none());
         assert!(staging_password(&c, site.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn single_path_restore_touches_only_that_path() {
+        let c = ctx_with_backups(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        restore_path(&c, site.id, "abcdef12", "public/wp-content/themes/tema", &mut JobLog::default()).await.unwrap();
+        assert_eq!(c.host.calls(), ["restore sona_it abcdef12 -> sona_it files=public/wp-content/themes/tema db=-"]);
+        for bad in ["../altro", "public/../../etc", "", ".env"] {
+            assert!(restore_path(&c, site.id, "abcdef12", bad, &mut JobLog::default()).await.is_err(), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_on_new_domain_builds_a_protected_copy_from_the_snapshot() {
+        let c = ctx_with_backups(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        let copy = restore_as_new_site(&c, site.id, "abcdef12", &Domain::parse("verifica.sona.it").unwrap(), &mut JobLog::default()).await.unwrap();
+        assert_eq!(
+            c.host.calls(),
+            [
+                "create_database verifica_sona_it",
+                "create_site_dirs verifica_sona_it",
+                "restore sona_it abcdef12 -> verifica_sona_it files=all db=verifica_sona_it",
+                "read_site_env verifica_sona_it",
+                "write_site_env verifica_sona_it",
+                "sync_redis sona_it,verifica_sona_it",
+                "sync_php users=sona_it,verifica_sona_it pools=sona_it,verifica_sona_it",
+                "wp verifica_sona_it search-replace //sona.it //verifica.sona.it --all-tables --skip-columns=guid",
+                "sync_caddy sona_it,verifica_sona_it",
+                "wp verifica_sona_it cache flush",
+            ]
+        );
+        let copy = c.store.site(copy.id).await.unwrap();
+        assert!(copy.staging && copy.status == SiteStatus::Active);
+        // Nessun backup: lo snapshot esiste già e il sito di origine non si tocca.
+        assert!(!c.host.ops().contains(&"backup".to_string()));
     }
 
     #[tokio::test]

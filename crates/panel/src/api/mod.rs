@@ -256,6 +256,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/sites/{id}/database/adminer", post(database_adminer::<H>))
         .route("/api/sites/{id}/backups", get(list_backups::<H>).post(backup_now::<H>))
         .route("/api/sites/{id}/backups/{snapshot}/restore", post(restore_backup::<H>))
+        .route("/api/sites/{id}/backups/{snapshot}/files", get(snapshot_files::<H>))
         .route("/api/admin/recovery-kit", get(recovery_kit::<H>))
         .route("/api/alerts", get(list_alerts::<H>))
         .route("/api/jobs/{id}", get(get_job::<H>))
@@ -843,31 +844,84 @@ async fn backup_now<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: 
 }
 
 #[derive(Deserialize)]
-struct RestoreReq {
-    mode: flows::RestoreMode,
+#[serde(tag = "mode", rename_all = "snake_case")]
+enum RestoreReq {
+    Full,
+    Files,
+    Database,
+    /// Un file o una cartella scelti dalla vista dello snapshot.
+    Path { path: String },
+    /// Lo snapshot come sito nuovo (solo admin): verifica senza toccare l'originale.
+    NewDomain { domain: String },
+}
+
+/// Solo snapshot di questo sito: l'id arriva dallo storico del sito, non da restic.
+async fn known_snapshot<H>(app: &App<H>, id: i64, snapshot: &str) -> ApiResult<()> {
+    if !crate::backup::valid_snapshot(snapshot) {
+        return Err(ApiError::bad_request("snapshot non valido"));
+    }
+    let known = app.ctx.store.backup_runs(id, 10_000).await?.into_iter().any(|run| run.snapshot_id.as_deref().is_some_and(|s| s.starts_with(snapshot)));
+    if !known {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "snapshot non trovato per questo sito"));
+    }
+    Ok(())
 }
 
 async fn restore_backup<H: Host>(State(app): State<App<H>>, Path((id, snapshot)): Path<(i64, String)>, m: Method, h: HeaderMap, Json(r): Json<RestoreReq>) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
     require_site(&app, &user, id, Need::Manage).await?;
-    if !crate::backup::valid_snapshot(&snapshot) {
-        return Err(ApiError::bad_request("snapshot non valido"));
-    }
-    // Solo snapshot di questo sito: l'id arriva dallo storico del sito, non da restic.
-    let known = app.ctx.store.backup_runs(id, 10_000).await?.into_iter().any(|run| run.snapshot_id.as_deref().is_some_and(|s| s.starts_with(&snapshot)));
-    if !known {
-        return Err(ApiError::new(StatusCode::NOT_FOUND, "snapshot non trovato per questo sito"));
-    }
-    let (ctx, auth, uid) = (app.ctx.clone(), app.auth.clone(), user.id);
+    known_snapshot(&app, id, &snapshot).await?;
+    let new_domain = match &r {
+        RestoreReq::NewDomain { domain } => {
+            require_admin(&user)?;
+            Some(sites::free_domain(&app, domain).await?)
+        }
+        RestoreReq::Path { path } => {
+            flows::site_rel_path(path).map_err(|e| ApiError::bad_request(e.to_string()))?;
+            None
+        }
+        _ => None,
+    };
+    let (ctx, auth, jobs, uid) = (app.ctx.clone(), app.auth.clone(), app.jobs.clone(), user.id);
     let job = app
         .jobs
         .spawn("site.restore", Some(id), Some(user.id), move |mut log| async move {
-            flows::restore_site(&ctx, id, &snapshot, r.mode, &mut log).await?;
-            auth.audit(Some(uid), "backup.restore", Some(id), &snapshot).await?;
+            let detail = match (r, new_domain) {
+                (RestoreReq::Path { path }, _) => {
+                    flows::restore_path(&ctx, id, &snapshot, &path, &mut log).await?;
+                    format!("{snapshot}: {path}")
+                }
+                (RestoreReq::NewDomain { .. }, Some(domain)) => {
+                    let site = flows::restore_as_new_site(&ctx, id, &snapshot, &domain, &mut log).await?;
+                    jobs.set_site(log.job_id, site.id).await?;
+                    format!("{snapshot} → {}", domain.as_str())
+                }
+                (mode, _) => {
+                    let mode = match mode {
+                        RestoreReq::Files => flows::RestoreMode::Files,
+                        RestoreReq::Database => flows::RestoreMode::Database,
+                        _ => flows::RestoreMode::Full,
+                    };
+                    flows::restore_site(&ctx, id, &snapshot, mode, &mut log).await?;
+                    snapshot.clone()
+                }
+            };
+            auth.audit(Some(uid), "backup.restore", Some(id), &detail).await?;
             Ok(log)
         })
         .await?;
     Ok((StatusCode::ACCEPTED, Json(json!({ "job": job }))).into_response())
+}
+
+async fn snapshot_files<H: Host>(State(app): State<App<H>>, Path((id, snapshot)): Path<(i64, String)>, Query(q): Query<PathQuery>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_site(&app, &user, id, Need::Manage).await?;
+    known_snapshot(&app, id, &snapshot).await?;
+    if !q.path.trim_matches('/').is_empty() {
+        flows::site_rel_path(&q.path).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    }
+    let site = app.ctx.store.site(id).await?;
+    Ok(Json(app.ctx.host.snapshot_ls(&site.slug, &snapshot, &q.path).await?).into_response())
 }
 
 /// Il kit contiene le chiavi in chiaro: solo admin, sempre nell'audit log.
@@ -1198,7 +1252,7 @@ mod tests {
         let (s, resp, _) = call(&t, req("POST", &format!("/api/sites/{id}/backups/abcdef12/restore"), Some(&admin), Some(serde_json::json!({"mode": "files"})))).await;
         assert_eq!(s, StatusCode::ACCEPTED);
         assert_eq!(wait_job(&t, resp["job"].as_i64().unwrap()).await.status, "done");
-        assert!(t.app.ctx.host.calls().iter().any(|c| c == "restore sona_it abcdef12 files=true db=-"));
+        assert!(t.app.ctx.host.calls().iter().any(|c| c == "restore sona_it abcdef12 -> sona_it files=all db=-"));
     }
 
     #[tokio::test]

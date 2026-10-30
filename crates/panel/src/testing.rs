@@ -11,7 +11,7 @@ use tokio::io::AsyncRead;
 
 use crate::backup::{Retention, Snapshot};
 use crate::database::TableInfo;
-use crate::flows::{DbCreds, Dump, Host, Imported, Installed};
+use crate::flows::{DbCreds, Dump, FilesScope, Host, Imported, Installed};
 use crate::template::Vars;
 
 #[derive(Default)]
@@ -115,8 +115,12 @@ impl Host for FakeHost {
     async fn expire_deleted(&self, slug: &str) -> anyhow::Result<()> {
         self.record("expire_deleted", slug.to_string())
     }
-    async fn restore(&self, slug: &Slug, snapshot: &str, files: bool, db: Option<&DbCreds>) -> anyhow::Result<()> {
-        self.record("restore", format!("{} {snapshot} files={files} db={}", slug.as_str(), db.map_or("-", |d| d.name.as_str())))
+    async fn restore(&self, slug: &Slug, snapshot: &str, target: &Slug, _uid: u32, files: &FilesScope, db: Option<&DbCreds>) -> anyhow::Result<()> {
+        self.record("restore", format!("{} {snapshot} -> {} files={files} db={}", slug.as_str(), target.as_str(), db.map_or("-", |d| d.name.as_str())))
+    }
+    async fn snapshot_ls(&self, slug: &Slug, snapshot: &str, rel: &str) -> anyhow::Result<Vec<crate::backup::SnapEntry>> {
+        self.record("snapshot_ls", format!("{} {snapshot} {rel}", slug.as_str()))?;
+        Ok(vec![crate::backup::SnapEntry { name: "wp-content".into(), is_dir: true, size: 0, mtime: String::new() }])
     }
     async fn backup_panel(&self, _store: &crate::store::Store, _env: &[u8]) -> anyhow::Result<Snapshot> {
         self.record("backup_panel", String::new())?;

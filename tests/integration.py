@@ -6,6 +6,9 @@ Solo libreria standard. Lavora in una cartella temporanea e la ripulisce alla fi
 """
 import base64
 import gzip
+import io
+import tarfile
+import zipfile
 import hashlib
 import http.cookiejar as http_cookiejar
 import hmac
@@ -91,13 +94,23 @@ def wait(what, fn, timeout=300, every=2):
     raise AssertionError(f"timeout: {what} ({last})")
 
 
-def page(host, path="/"):
-    req = urllib.request.Request(f"http://127.0.0.1:{PORT}{path}", headers={"Host": host, "CF-Connecting-IP": VISITOR_IP, "X-Forwarded-Proto": "https"})
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def page(host, path="/", auth=None, headers=False):
+    """(status, html) della pagina; con `headers=True` anche gli header. I redirect non si seguono."""
+    h = {"Host": host, "CF-Connecting-IP": VISITOR_IP, "X-Forwarded-Proto": "https"}
+    if auth:
+        h["Authorization"] = "Basic " + base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode()
+    req = urllib.request.Request(f"http://127.0.0.1:{PORT}{path}", headers=h)
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return r.status, r.read().decode(errors="replace")
+        with urllib.request.build_opener(NoRedirect).open(req, timeout=30) as r:
+            out = (r.status, r.read().decode(errors="replace"), r.headers)
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode(errors="replace")
+        out = (e.code, e.read().decode(errors="replace"), e.headers)
+    return out if headers else out[:2]
 
 
 def raw_get(http, path):
@@ -124,6 +137,16 @@ def agent(compose, work, cmd):
 def read_env(work, slug, key):
     text = sh("docker", "compose", "-p", PROJECT, "exec", "-T", "panel", "cat", f"/srv/sites/{slug}/.env", cwd=work)
     return re.search(rf"^{key}='([^']*)'", text, re.M).group(1)
+
+
+def upload_import(http, name, data):
+    _, up = http.call("POST", "/api/imports/uploads", {"path": name, "size": len(data)}, expect=201)
+    for n in range(up["chunks"]):
+        raw_put(http, f"/api/imports/uploads/{up['id']}/{n}", data[n * up["chunk_size"]:(n + 1) * up["chunk_size"]])
+
+
+def wp_home(compose, work, slug):
+    return agent(compose, work, {"cmd": "wp", "slug": slug, "args": ["option", "get", "home"]}).strip()
 
 
 def run_job(http, method, path, body=None):
@@ -300,6 +323,72 @@ def main():
         run_job(http, "POST", f"/api/sites/{site_b}/backups/{snapshot[:12]}/restore", {"mode": "database"})
         status, html = page("upupa.test")
         assert status == 200 and "Upupa importata" not in html and "Upupa" in html, "restore non applicato"
+
+
+        print("fase 2: sospensione, staging e domini")
+        http.call("PATCH", f"/api/sites/{site_b}", {"suspended": True}, expect=200)
+        status, html, hdrs = page("upupa.test", headers=True)
+        assert status == 503 and "manutenzione" in html and hdrs["Retry-After"] == "3600", (status, html[:200])
+        http.call("PATCH", f"/api/sites/{site_b}", {"suspended": False}, expect=200)
+        wait("sito riattivato", lambda: page("upupa.test")[0] == 200, timeout=30)
+        _, st = http.call("PATCH", f"/api/sites/{site_b}", {"staging": True}, expect=200)
+        creds = (st["staging"]["user"], st["staging"]["password"])
+        assert page("upupa.test")[0] == 401, "staging senza password"
+        status, _, hdrs = page("upupa.test", auth=creds, headers=True)
+        assert status == 200 and hdrs["X-Robots-Tag"] == "noindex, nofollow", (status, dict(hdrs))
+        http.call("PATCH", f"/api/sites/{site_b}", {"staging": False}, expect=200)
+        assert page("upupa.test")[0] == 200
+        http.call("POST", f"/api/sites/{site_b}/domains", {"hostname": "www.upupa.test", "kind": "redirect"}, expect=201)
+        status, _, hdrs = page("www.upupa.test", "/chi-siamo/", headers=True)
+        assert status == 308 and hdrs["Location"] == "https://upupa.test/chi-siamo/", (status, dict(hdrs))
+
+        print("clona upupa.test su copia.test")
+        clone = run_job(http, "POST", f"/api/sites/{site_b}/clone", {"domain": "copia.test"})
+        _, cdetail = http.call("GET", f"/api/sites/{clone['site_id']}", expect=200)
+        ccreds = (cdetail["staging"]["user"], cdetail["staging"]["password"])
+        assert page("copia.test")[0] == 401, "la copia deve nascere protetta"
+        status, html = page("copia.test", auth=ccreds)
+        assert status == 200 and "Upupa" in html and "copia.test" in html and "//upupa.test" not in html, html[:500]
+        assert wp_home(compose, work, "copia_test") == "https://copia.test"
+
+        print("esporta upupa.test")
+        run_job(http, "POST", f"/api/sites/{site_b}/export")
+        _, exports = http.call("GET", f"/api/sites/{site_b}/exports", expect=200)
+        archive = tarfile.open(fileobj=io.BytesIO(raw_get(http, f"/api/exports/{exports[0]['token']}")), mode="r:gz")
+        names = archive.getnames()
+        for needed in ["upupa_test/public/wp-config.php", "upupa_test/database.sql", "upupa_test/LEGGIMI.txt", "upupa_test/.env.example"]:
+            assert needed in names, f"manca {needed}"
+        assert "upupa_test/.env" not in names, "il .env non deve uscire"
+        example = archive.extractfile("upupa_test/.env.example").read().decode()
+        assert "DB_PASSWORD='DA_IMPOSTARE'" in example and read_env(work, "upupa_test", "DB_PASSWORD") not in example
+        exported_sql = archive.extractfile("upupa_test/database.sql").read()
+        assert b"CREATE TABLE `wp_posts`" in exported_sql
+
+        print("salva come template e crea un sito dal template")
+        run_job(http, "POST", f"/api/sites/{site_b}/template", {"name": "upupa_tpl", "title": "Upupa pronta"})
+        _, tpls = http.call("GET", "/api/templates", expect=200)
+        assert any(t["id"] == "upupa_tpl" and t["snapshot"] for t in tpls), tpls
+        run_job(http, "POST", "/api/sites", {"domain": "nuovo.test", "template": "upupa_tpl", "title": "Nuovo"})
+        status, html = page("nuovo.test")
+        assert status == 200 and "Upupa" in html and "nuovo.test" in html and "template.local" not in html, html[:500]
+
+        print("importa un sito da archivio e dump (prefisso tabelle diverso)")
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for m in archive.getmembers():
+                if m.isfile() and m.name.startswith("upupa_test/public/"):
+                    rel = m.name[len("upupa_test/public/"):]
+                    data = archive.extractfile(m).read()
+                    if rel == "wp-config.php":
+                        data = b"<?php\n$table_prefix = 'vk_';\n"
+                    z.writestr("public_html/" + rel, data)
+        upload_import(http, "vecchio.zip", buf.getvalue())
+        upload_import(http, "vecchio.sql.gz", gzip.compress(exported_sql.replace(b"`wp_", b"`vk_").replace(b"'wp_", b"'vk_")))
+        run_job(http, "POST", "/api/sites/import", {"domain": "importato.test", "title": "Importato", "archive": "vecchio.zip", "dump": "vecchio.sql.gz"})
+        assert read_env(work, "importato_test", "TABLE_PREFIX") == "vk_"
+        status, html = page("importato.test")
+        assert status == 200 and "Upupa" in html and "importato.test" in html, html[:500]
+        assert wp_home(compose, work, "importato_test") == "https://importato.test"
 
         kit = raw_get(http, "/api/admin/recovery-kit").decode()
         assert "RESTIC_PASSWORD=" in kit and "ALVEARE_SECRET_KEY=" in kit
