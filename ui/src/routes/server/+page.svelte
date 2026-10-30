@@ -7,13 +7,14 @@
 	import { Progress } from '$lib/components/ui/progress';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import OverrideEditor from '$lib/components/app/override-editor.svelte';
+	import CloudflareCard from '$lib/components/app/cloudflare-card.svelte';
 	import { api, errorMessage } from '$lib/api';
 	import { toast } from 'svelte-sonner';
 
 	type Budget = { pools_mb: number; reserved_mb: number; total_mb: number; ram_mb: number; percent: number };
 	type SiteBudget = { id: number; slug: string; domain: string | null; status: string; pool_mb: number; settings: { memory_limit_mb: number; max_children: number } };
 	type Block = { id: number; site_id: number | null; cidr: string; expires_at: number | null };
-	let server = $state<{ budget: Budget; sites: SiteBudget[] } | null>(null);
+	let server = $state<{ budget: Budget; sites: SiteBudget[]; version: string } | null>(null);
 	let blocks = $state<Block[]>([]);
 
 	async function load() {
@@ -37,7 +38,10 @@
 	const siteName = (id: number | null) => (id === null ? 'tutti i siti' : (server?.sites.find((s) => s.id === id)?.domain ?? `sito ${id}`));
 </script>
 
-<h1 class="text-2xl font-semibold">Server</h1>
+<div class="flex items-baseline gap-3">
+	<h1 class="text-2xl font-semibold">Server</h1>
+	{#if server}<span class="text-muted-foreground text-sm">Alveare {server.version}</span>{/if}
+</div>
 
 {#if !server}
 	<Skeleton class="h-40 w-full" />
@@ -94,6 +98,8 @@
 		description="Snippet riusabili dai siti con import, per esempio (sicurezza) {'{'} header X-Frame-Options DENY {'}'}."
 		filename="Caddyfile"
 	/>
+
+	<CloudflareCard />
 
 	<Card.Root>
 		<Card.Header>

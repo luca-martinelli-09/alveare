@@ -29,6 +29,16 @@
 		}
 	}
 
+	async function cloudflare(what: 'sync' | 'rules') {
+		try {
+			const r = await api.post<{ log?: string[] } | { zone: string; rules?: number; error?: string }[]>(`/api/sites/${detail.site.id}/cloudflare/${what}`);
+			const lines = Array.isArray(r) ? r.map((z) => `${z.zone}: ${z.error ?? `${z.rules} regole`}`) : (r.log ?? []);
+			toast.info(lines.join('\n') || 'Fatto');
+		} catch (err) {
+			toast.error(errorMessage(err));
+		}
+	}
+
 	async function remove(h: string) {
 		try {
 			await api.del(`${base}/${encodeURIComponent(h)}`);
@@ -60,7 +70,7 @@
 		{/each}
 	</Card.Content>
 	{#if session.user?.is_admin}
-		<Card.Footer>
+		<Card.Footer class="flex flex-col gap-3">
 			<form class="flex w-full flex-wrap items-end gap-2" onsubmit={add}>
 				<Field.Field class="min-w-48 flex-1">
 					<Field.FieldLabel for="new-host">Nuovo hostname</Field.FieldLabel>
@@ -77,6 +87,10 @@
 				</Select.Root>
 				<Button type="submit">Aggiungi</Button>
 			</form>
+			<div class="flex w-full flex-wrap gap-2">
+				<Button variant="outline" size="sm" onclick={() => cloudflare('sync')}>Sincronizza il tunnel Cloudflare</Button>
+				<Button variant="outline" size="sm" onclick={() => cloudflare('rules')}>Applica le regole Cloudflare</Button>
+			</div>
 		</Card.Footer>
 	{/if}
 </Card.Root>
