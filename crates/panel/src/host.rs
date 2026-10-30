@@ -17,7 +17,7 @@ use sqlx::Row;
 
 use crate::backup::{backup_args, forget_args, parse_summary, valid_snapshot, Retention, Snapshot};
 use crate::database::TableInfo;
-use crate::flows::{DbCreds, Dump, Host};
+use crate::flows::{DbCreds, Dump, Host, Installed};
 use crate::template::{env_file, Template, Vars};
 
 /// Il timeout dell'agente per WP-CLI è 600 s: il pannello aspetta un po' di più.
@@ -348,14 +348,14 @@ impl Host for SystemHost {
         trash_dirs(&self.paths, slug, now)
     }
 
-    async fn install_template(&self, slug: &Slug, uid: u32, template: &str, vars: &Vars, env: &Vars) -> Result<Vec<Vec<String>>> {
+    async fn install_template(&self, slug: &Slug, uid: u32, template: &str, vars: &Vars, env: &Vars) -> Result<Installed> {
         let name = Slug::parse(template).map_err(|_| anyhow::anyhow!("nome di template non valido: {template}"))?;
         let tpl = Template::load(&self.paths.templates.join(name.as_str()))?;
         let dest = self.paths.sites.join(slug.as_str());
         tpl.install(&dest, vars)?;
         write_env(&self.paths, slug, env, None)?;
         chown_tree(&dest, Some(uid))?;
-        tpl.post_create(vars)
+        Ok(Installed { commands: tpl.post_create(vars)?, sql: tpl.sql_path().map(|p| (p, tpl.manifest.sql_domain.clone())) })
     }
 
     async fn sync_php(&self, users: &[SitePhp], pools: &[SitePhp]) -> Result<Vec<String>> {

@@ -33,8 +33,8 @@ pub trait Host: Send + Sync + 'static {
     fn create_site_dirs(&self, slug: &Slug, uid: u32) -> impl Future<Output = Result<()>> + Send;
     fn remove_site_dirs(&self, slug: &Slug) -> impl Future<Output = Result<()>> + Send;
     fn trash_site_dirs(&self, slug: &Slug) -> impl Future<Output = Result<()>> + Send;
-    /// Copia il template, scrive il `.env` e restituisce i comandi WP-CLI da eseguire dopo.
-    fn install_template(&self, slug: &Slug, uid: u32, template: &str, vars: &Vars, env: &Vars) -> impl Future<Output = Result<Vec<Vec<String>>>> + Send;
+    /// Copia il template, scrive il `.env` e dice cosa resta da fare (dump, comandi WP-CLI).
+    fn install_template(&self, slug: &Slug, uid: u32, template: &str, vars: &Vars, env: &Vars) -> impl Future<Output = Result<Installed>> + Send;
     /// Rigenera passwd, group e pool; restituisce i file di pool rifiutati.
     fn sync_php(&self, users: &[SitePhp], pools: &[SitePhp]) -> impl Future<Output = Result<Vec<String>>> + Send;
     fn sync_caddy(&self, sites: &[CaddySite]) -> impl Future<Output = Result<()>> + Send;
@@ -65,6 +65,12 @@ pub trait Host: Send + Sync + 'static {
     fn set_site_env(&self, slug: &Slug, uid: u32, key: &str, value: &str) -> impl Future<Output = Result<()>> + Send;
 }
 
+pub struct Installed {
+    pub commands: Vec<Vec<String>>,
+    /// Dump di un template snapshot, con il suo dominio fittizio.
+    pub sql: Option<(std::path::PathBuf, String)>,
+}
+
 pub struct Dump {
     pub reader: Pin<Box<dyn AsyncRead + Send>>,
     pub finished: Pin<Box<dyn Future<Output = Result<()>> + Send>>,
@@ -87,6 +93,7 @@ pub struct CreateSite {
     pub template: String,
     pub title: String,
     pub admin_email: String,
+    pub table_prefix: String,
 }
 
 /// Log di un job; con `live` ogni riga è subito visibile a chi legge il job in corso.
@@ -158,7 +165,7 @@ fn site_vars<H>(c: &Ctx<H>, req: &CreateSite, site: &Site, db: &DbCreds, redis_p
         ("DB_USER".into(), db.user.clone()),
         ("DB_PASSWORD".into(), db.password.clone()),
         ("DB_HOST".into(), c.db_host.clone()),
-        ("TABLE_PREFIX".into(), "wp_".into()),
+        ("TABLE_PREFIX".into(), req.table_prefix.clone()),
         ("WP_HOME".into(), url.clone()),
         ("WP_SITEURL".into(), url.clone()),
         ("WP_ENVIRONMENT_TYPE".into(), "production".into()),
@@ -216,7 +223,8 @@ async fn create_steps<H: Host>(c: &Ctx<H>, req: &CreateSite, site: &Site, undo: 
     let redis_password = random_password();
     c.store.save_redis_password(site.id, &c.key.encrypt(&redis_password)).await?;
     let (vars, env) = site_vars(c, req, site, &db, &redis_password);
-    let commands = c.host.install_template(slug, site.uid(), &req.template, &vars, &env).await?;
+    let installed = c.host.install_template(slug, site.uid(), &req.template, &vars, &env).await?;
+    let commands = installed.commands;
     log.push(format!("template {} installato", req.template));
     c.sync_redis().await?;
     log.push("utente Redis creato");
@@ -227,6 +235,13 @@ async fn create_steps<H: Host>(c: &Ctx<H>, req: &CreateSite, site: &Site, undo: 
         bail!("il pool PHP del sito non è valido");
     }
     log.push("pool PHP attivo");
+
+    if let Some((sql, fake_domain)) = &installed.sql {
+        c.host.db_import(&db.name, open_sql(sql).await?).await.context("import del dump del template")?;
+        let args: Vec<String> = ["search-replace", fake_domain, req.domain.as_str(), "--all-tables", "--skip-columns=guid"].map(String::from).to_vec();
+        c.host.wp(slug, &args).await?;
+        log.push(format!("dump del template importato e portato su {}", req.domain.as_str()));
+    }
 
     for args in &commands {
         c.host.wp(slug, args).await.with_context(|| format!("wp {}", args.first().map_or("", String::as_str)))?;
@@ -297,6 +312,17 @@ pub async fn import_database<H: Host>(
     }
     flush_object_cache(c, &site, log).await;
     Ok(())
+}
+
+/// Un dump su file, compresso (.gz) o no, come flusso per `db_import`.
+pub async fn open_sql(path: &std::path::Path) -> Result<Pin<Box<dyn AsyncRead + Send>>> {
+    let file = tokio::fs::File::open(path).await.with_context(|| format!("apertura di {}", path.display()))?;
+    let reader = tokio::io::BufReader::new(file);
+    Ok(if path.extension().is_some_and(|e| e == "gz") {
+        Box::pin(async_compression::tokio::bufread::GzipDecoder::new(reader))
+    } else {
+        Box::pin(reader)
+    })
 }
 
 /// Dump compresso su file; fallisce se mariadb-dump non arriva in fondo.
@@ -462,6 +488,7 @@ mod tests {
             template: "wordpress".into(),
             title: "Sona".into(),
             admin_email: "admin@sona.it".into(),
+            table_prefix: "wp_".into(),
         }
     }
 
@@ -483,6 +510,22 @@ mod tests {
             ]
         );
         assert_eq!(c.store.site(site.id).await.unwrap().status, SiteStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn snapshot_template_imports_its_dump_and_moves_it_to_the_new_domain() {
+        let sql = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(sql.path(), "-- snapshot").unwrap();
+        let c = ctx(FakeHost { snapshot_sql: Some(sql.path().to_path_buf()), ..Default::default() }).await;
+        let mut r = req("sona.it");
+        r.table_prefix = "pl_".into();
+        create_site(&c, &r, &mut JobLog::default()).await.unwrap();
+        let calls = c.host.calls();
+        let at = |prefix: &str| calls.iter().position(|x| x.starts_with(prefix)).unwrap_or_else(|| panic!("manca {prefix}: {calls:?}"));
+        assert!(at("sync_php") < at("db_import sona_it -- snapshot"));
+        assert!(at("db_import") < at("wp sona_it search-replace template.local sona.it --all-tables --skip-columns=guid"));
+        assert!(at("wp sona_it search-replace") < at("wp sona_it core install"));
+        assert_eq!(c.host.env.lock().unwrap()["TABLE_PREFIX"], "pl_");
     }
 
     #[tokio::test]

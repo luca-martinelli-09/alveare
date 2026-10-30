@@ -469,6 +469,7 @@ async fn create_site<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap
         template: r.template.clone(),
         title: r.title.trim().to_string(),
         admin_email: r.admin_email.unwrap_or_else(|| user.email.clone()),
+        table_prefix: template.manifest.table_prefix.clone().unwrap_or_else(|| "wp_".into()),
     };
     let (ctx, auth, jobs, uid) = (app.ctx.clone(), app.auth.clone(), app.jobs.clone(), user.id);
     let job = app

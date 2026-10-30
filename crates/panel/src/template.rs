@@ -18,6 +18,23 @@ pub struct Manifest {
     pub render: Vec<PathBuf>,
     #[serde(default)]
     pub post_create: Vec<Vec<String>>,
+    /// Template snapshot: dump (.sql o .sql.gz) esportato con il dominio fittizio `sql_domain`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sql: Option<PathBuf>,
+    #[serde(default = "default_sql_domain")]
+    pub sql_domain: String,
+    /// Prefisso delle tabelle del dump, se non è `wp_`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_prefix: Option<String>,
+}
+
+fn default_sql_domain() -> String {
+    "template.local".into()
+}
+
+/// Prefisso delle tabelle WordPress: finisce nel .env e nelle query, quindi solo [A-Za-z0-9_].
+pub fn valid_table_prefix(p: &str) -> bool {
+    !p.is_empty() && p.len() <= 20 && p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 pub struct Template {
@@ -58,8 +75,11 @@ impl Template {
     pub fn load(dir: &Path) -> Result<Self> {
         let text = fs::read_to_string(dir.join("template.toml")).context("lettura di template.toml")?;
         let manifest: Manifest = toml::from_str(&text).context("template.toml non valido")?;
-        if let Some(p) = manifest.render.iter().find(|p| !is_plain_relative(p)) {
-            bail!("percorso di render non valido: {}", p.display());
+        if let Some(p) = manifest.render.iter().chain(&manifest.sql).find(|p| !is_plain_relative(p)) {
+            bail!("percorso non valido nel template: {}", p.display());
+        }
+        if manifest.table_prefix.as_deref().is_some_and(|p| !valid_table_prefix(p)) {
+            bail!("prefisso delle tabelle non valido");
         }
         Ok(Self { dir: dir.to_path_buf(), manifest })
     }
@@ -74,6 +94,10 @@ impl Template {
             fs::write(&path, rendered)?;
         }
         Ok(())
+    }
+
+    pub fn sql_path(&self) -> Option<PathBuf> {
+        self.manifest.sql.as_ref().map(|p| self.dir.join(p))
     }
 
     pub fn post_create(&self, vars: &Vars) -> Result<Vec<Vec<String>>> {
@@ -178,6 +202,18 @@ post_create = [["option", "update", "home", "https://{{DOMAIN}}"]]
         std::os::unix::fs::symlink("/etc/passwd", t.path().join("files/public/link")).unwrap();
         let dest = tempfile::tempdir().unwrap();
         assert!(Template::load(t.path()).unwrap().install(dest.path(), &vars()).is_err());
+    }
+
+    #[test]
+    fn snapshot_manifest_points_to_its_dump() {
+        let t = template("name = \"Pro Loco\"\nkind = \"wordpress\"\nsql = \"db.sql.gz\"\ntable_prefix = \"pl_\"\n");
+        let tpl = Template::load(t.path()).unwrap();
+        assert_eq!(tpl.sql_path(), Some(t.path().join("db.sql.gz")));
+        assert_eq!(tpl.manifest.sql_domain, "template.local");
+        assert_eq!(tpl.manifest.table_prefix.as_deref(), Some("pl_"));
+        assert_eq!(Template::load(template(MANIFEST).path()).unwrap().sql_path(), None);
+        assert!(Template::load(template("name = \"x\"\nkind = \"wordpress\"\nsql = \"../db.sql\"\n").path()).is_err());
+        assert!(Template::load(template("name = \"x\"\nkind = \"wordpress\"\ntable_prefix = \"x'; --\"\n").path()).is_err());
     }
 
     #[test]

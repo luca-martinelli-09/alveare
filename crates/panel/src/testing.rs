@@ -11,7 +11,7 @@ use tokio::io::AsyncRead;
 
 use crate::backup::{Retention, Snapshot};
 use crate::database::TableInfo;
-use crate::flows::{DbCreds, Dump, Host};
+use crate::flows::{DbCreds, Dump, Host, Installed};
 use crate::template::Vars;
 
 #[derive(Default)]
@@ -20,6 +20,7 @@ pub struct FakeHost {
     pub fail_on: Option<&'static str>,
     pub reject_pool: bool,
     pub env: Mutex<Vars>,
+    pub snapshot_sql: Option<std::path::PathBuf>,
 }
 
 impl FakeHost {
@@ -61,10 +62,11 @@ impl Host for FakeHost {
     async fn trash_site_dirs(&self, slug: &Slug) -> anyhow::Result<()> {
         self.record("trash_site_dirs", slug.as_str().into())
     }
-    async fn install_template(&self, slug: &Slug, _uid: u32, template: &str, _vars: &Vars, env: &Vars) -> anyhow::Result<Vec<Vec<String>>> {
+    async fn install_template(&self, slug: &Slug, _uid: u32, template: &str, _vars: &Vars, env: &Vars) -> anyhow::Result<Installed> {
         *self.env.lock().unwrap() = env.clone();
         self.record("install_template", format!("{} {template}", slug.as_str()))?;
-        Ok(vec![vec!["core".into(), "install".into()]])
+        let sql = self.snapshot_sql.clone().map(|p| (p, "template.local".to_string()));
+        Ok(Installed { commands: vec![vec!["core".into(), "install".into()]], sql })
     }
     async fn sync_php(&self, users: &[SitePhp], pools: &[SitePhp]) -> anyhow::Result<Vec<String>> {
         self.record("sync_php", format!("users={} pools={}", slugs(users.iter().map(|u| &u.slug)), slugs(pools.iter().map(|p| &p.slug))))?;
