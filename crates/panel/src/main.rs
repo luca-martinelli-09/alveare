@@ -19,6 +19,7 @@ mod secrets;
 mod store;
 mod template;
 mod ui;
+mod upgrade;
 mod wordpress;
 #[cfg(test)]
 mod testing;
@@ -35,7 +36,7 @@ use sqlx::mysql::MySqlPoolOptions;
 use crate::api::App;
 use crate::auth::Auth;
 use crate::config::Config;
-use crate::flows::Ctx;
+use crate::flows::{Ctx, Host};
 use crate::host::{agent_call, caddy_load, write_php_files, Paths, SystemHost};
 use crate::store::{OverrideKind, Store};
 
@@ -53,8 +54,13 @@ async fn main() -> Result<()> {
         bail!("il pannello deve girare come root nel suo container");
     }
     let paths = Paths::production();
-    std::fs::create_dir_all("/srv/panel")?;
-    let store = Store::open(std::path::Path::new("/srv/panel/panel.db")).await?;
+    let panel_dir = std::path::Path::new("/srv/panel");
+    std::fs::create_dir_all(panel_dir)?;
+    let upgraded = upgrade::before_migrations(panel_dir, upgrade::VERSION, chrono::Utc::now().timestamp())?;
+    if let Some(copy) = &upgraded {
+        tracing::info!("nuova versione {}: copia di panel.db in {}", upgrade::VERSION, copy.display());
+    }
+    let store = Store::open(&panel_dir.join("panel.db")).await?;
     let auth = Auth::new(store.pool().clone(), cfg.key.clone());
     bootstrap_admin(&auth, cfg.admin_email.as_deref()).await?;
     write_state_to_disk(&store, &paths, &cfg).await?;
@@ -89,6 +95,18 @@ async fn main() -> Result<()> {
         .with_reserved_hosts(cfg.panel_host.iter().chain(&cfg.adminer_host).cloned().collect())
         .with_recovery(cfg.recovery.clone());
     remind_recovery_kit(&app).await?;
+    upgrade::mark_started(panel_dir, upgrade::VERSION)?;
+    if upgraded.is_some() && app.ctx.backups {
+        // Backup restic dello stato appena migrato: con la copia locale, il punto di ritorno.
+        let ctx = app.ctx.clone();
+        tokio::spawn(async move {
+            let env = backup::panel_env(std::env::vars());
+            match ctx.host.backup_panel(&ctx.store, &ctx.key.encrypt(&env)).await {
+                Ok(s) => tracing::info!("backup del pannello dopo l'aggiornamento: {}", s.snapshot_id),
+                Err(e) => tracing::error!("backup del pannello dopo l'aggiornamento: {e:#}"),
+            }
+        });
+    }
     tokio::spawn(apply_when_ready(app.clone()));
     tokio::spawn(scheduler::run(app.clone()));
 
