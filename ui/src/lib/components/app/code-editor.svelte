@@ -2,6 +2,7 @@
 	// Editor CodeMirror con evidenziazione scelta dall'estensione del file.
 	import { untrack } from 'svelte';
 	import { EditorView, basicSetup } from 'codemirror';
+	import { EditorState } from '@codemirror/state';
 	import { php } from '@codemirror/lang-php';
 	import { javascript } from '@codemirror/lang-javascript';
 	import { css } from '@codemirror/lang-css';
@@ -12,7 +13,12 @@
 	import { properties } from '@codemirror/legacy-modes/mode/properties';
 
 	// class: altezza decisa da chi lo usa (il file manager lo vuole grande, le configurazioni compatte).
-	let { value = $bindable(), filename, class: className = 'h-[60vh]' }: { value: string; filename: string; class?: string } = $props();
+	let {
+		value = $bindable(),
+		filename,
+		readonly = false,
+		class: className = 'h-[60vh]'
+	}: { value: string; filename: string; readonly?: boolean; class?: string } = $props();
 	let host: HTMLDivElement;
 
 	// Colori dai token del pannello (layout.css): l'editor segue il tema chiaro o scuro.
@@ -66,6 +72,7 @@
 				syntaxHighlighting(highlight),
 				basicSetup,
 				...language(filename),
+				EditorState.readOnly.of(readonly),
 				EditorView.updateListener.of((u) => {
 					if (u.docChanged) value = u.state.doc.toString();
 				})

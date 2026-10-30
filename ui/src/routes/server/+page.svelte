@@ -8,6 +8,10 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import OverrideEditor from '$lib/components/app/override-editor.svelte';
+	import CodeEditor from '$lib/components/app/code-editor.svelte';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import FileCodeIcon from '@lucide/svelte/icons/file-code';
+	import DownloadIcon from '@lucide/svelte/icons/download';
 	import CloudflareCard from '$lib/components/app/cloudflare-card.svelte';
 	import { api, errorMessage } from '$lib/api';
 	import { toast } from 'svelte-sonner';
@@ -38,6 +42,22 @@
 
 	const gb = (mb: number) => `${(mb / 1024).toFixed(1)} GB`;
 	const siteName = (id: number | null) => (id === null ? 'tutti i siti' : (server?.sites.find((s) => s.id === id)?.domain ?? `sito ${id}`));
+
+	let caddyfile = $state<string | null>(null);
+	async function showCaddyfile() {
+		try {
+			caddyfile = (await api.get<{ content: string }>('/api/server/caddyfile')).content;
+		} catch (e) {
+			toast.error(errorMessage(e));
+		}
+	}
+	function downloadCaddyfile() {
+		const a = document.createElement('a');
+		a.href = URL.createObjectURL(new Blob([caddyfile ?? ''], { type: 'text/plain' }));
+		a.download = 'Caddyfile';
+		a.click();
+		URL.revokeObjectURL(a.href);
+	}
 </script>
 
 <PageHeader title="Server" description={server ? `Alveare ${server.version}${server.build && server.build !== `v${server.version}` ? ` (${server.build})` : ''} · ${server.sites.length} ${server.sites.length === 1 ? 'sito' : 'siti'} · ${gb(server.budget.ram_mb)} di RAM` : undefined} />
@@ -95,6 +115,12 @@
 		</div>
 	</section>
 
+	<SettingsSection title="Caddy in uso">
+		<SettingRow label="Caddyfile completo" help="Generato dal pannello a ogni modifica e accettato da Caddy: è quello che sta servendo le richieste. Solo lettura; si cambia dalle impostazioni dei siti e da Caddy globale.">
+			<Button size="sm" onclick={showCaddyfile}><FileCodeIcon data-icon="inline-start" /> Mostra</Button>
+		</SettingRow>
+	</SettingsSection>
+
 	<SettingsSection title="Configurazione globale">
 		<OverrideEditor
 			base="/api/config/php"
@@ -118,3 +144,17 @@
 		{/each}
 	</SettingsSection>
 {/if}
+
+<Dialog.Root open={caddyfile !== null} onOpenChange={(o) => !o && (caddyfile = null)}>
+	<Dialog.Content class="sm:max-w-5xl">
+		<Dialog.Header>
+			<Dialog.Title>Caddyfile in uso</Dialog.Title>
+			<Dialog.Description>data/caddy/Caddyfile · {caddyfile?.split('\n').length ?? 0} righe</Dialog.Description>
+		</Dialog.Header>
+		{#if caddyfile !== null}<CodeEditor value={caddyfile} filename="Caddyfile" readonly class="h-[65vh]" />{/if}
+		<Dialog.Footer>
+			<Button variant="ghost" onclick={() => navigator.clipboard.writeText(caddyfile ?? '').then(() => toast.success('Copiato'))}>Copia</Button>
+			<Button onclick={downloadCaddyfile}><DownloadIcon data-icon="inline-start" /> Scarica</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>

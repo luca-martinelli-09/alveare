@@ -8,6 +8,7 @@ pub(super) fn routes<H: Host>() -> Router<App<H>> {
     Router::new()
         .route("/api/sites/{id}", patch(update_site::<H>))
         .route("/api/server", get(server::<H>))
+        .route("/api/server/caddyfile", get(caddyfile::<H>))
         .route("/api/sites/{id}/monitor", get(monitor::<H>))
         .route("/api/sites/{id}/uptime", get(uptime_history::<H>))
         .route("/api/activity", get(activity::<H>))
@@ -245,6 +246,17 @@ async fn server<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> 
     Ok(Json(json!({ "budget": budget, "sites": sites, "setup": setup, "version": crate::upgrade::VERSION, "build": crate::upgrade::BUILD.filter(|b| !b.is_empty()) })).into_response())
 }
 
+/// Il Caddyfile in uso (admin): quello su disco è l'ultimo che Caddy ha accettato.
+async fn caddyfile<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    require_admin(&caller(&app, &m, &h).await?)?;
+    let path = app.paths.caddy.join("Caddyfile");
+    let content = tokio::fs::read_to_string(&path).await.map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => ApiError::new(StatusCode::NOT_FOUND, "Caddy non ha ancora una configurazione"),
+        _ => internal(e),
+    })?;
+    Ok(Json(json!({ "content": content })).into_response())
+}
+
 const EXPORT_DAYS: i64 = 7;
 
 async fn export_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
@@ -467,6 +479,14 @@ mod tests {
         assert_eq!(body["setup"], json!({"backups": true, "cloudflare": false, "email": false}), "cosa resta da configurare");
         let (s, _, _) = call(&t, req("GET", "/api/server", Some(&manager), None)).await;
         assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, _, _) = call(&t, req("GET", "/api/server/caddyfile", Some(&admin), None)).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "Caddy non ha ancora una config");
+        std::fs::create_dir_all(&t.app.paths.caddy).unwrap();
+        std::fs::write(t.app.paths.caddy.join("Caddyfile"), "sona.it {\n\troot * /srv/sites/sona_it/public\n}\n").unwrap();
+        let (s, body, _) = call(&t, req("GET", "/api/server/caddyfile", Some(&admin), None)).await;
+        assert_eq!((s, body["content"].as_str()), (StatusCode::OK, Some("sona.it {\n\troot * /srv/sites/sona_it/public\n}\n")));
+        let (s, _, _) = call(&t, req("GET", "/api/server/caddyfile", Some(&manager), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "contiene le password delle copie di prova");
         // Un sito nuovo con i pool già al 200%: serve la conferma.
         let (s, body, _) = call(&t, req("POST", "/api/sites", Some(&admin), Some(json!({"domain": "nuovo.it", "template": "wordpress", "title": "x"})))).await;
         assert_eq!(s, StatusCode::CONFLICT, "{body}");
