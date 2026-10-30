@@ -505,7 +505,7 @@ async fn delete_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m:
     let job = app
         .jobs
         .spawn("site.delete", Some(id), Some(user.id), move |mut log| async move {
-            flows::delete_site(&ctx, id, &mut log).await?;
+            flows::delete_site(&ctx, id, flows::DeleteMode::Normal, &mut log).await?;
             auth.audit(Some(uid), "site.delete", Some(id), site.slug.as_str()).await?;
             Ok(log)
         })

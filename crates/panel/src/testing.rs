@@ -27,6 +27,8 @@ pub struct FakeHost {
     /// (.env.example, LEGGIMI.txt) dell'ultima esportazione.
     pub exported: Mutex<Option<(String, String)>>,
     pub stored_manifest: Mutex<Option<crate::template::Manifest>>,
+    /// Stato HTTP restituito da `probe` (default 200).
+    pub probe_status: Option<u16>,
 }
 
 impl FakeHost {
@@ -149,6 +151,10 @@ impl Host for FakeHost {
     async fn store_template(&self, slug: &Slug, name: &Slug, manifest: &crate::template::Manifest, sql_file: &str) -> anyhow::Result<()> {
         *self.stored_manifest.lock().unwrap() = Some(manifest.clone());
         self.record("store_template", format!("{} {} {sql_file}", slug.as_str(), name.as_str()))
+    }
+    async fn probe(&self, host: &alveare_core::site::Domain, auth: Option<(&str, &str)>) -> anyhow::Result<u16> {
+        self.record("probe", format!("{} {}", host.as_str(), auth.map_or("-".to_string(), |(u, _)| format!("{u}:"))))?;
+        Ok(self.probe_status.unwrap_or(200))
     }
     async fn copy_site_files(&self, from: &Slug, to: &Slug, _uid: u32) -> anyhow::Result<()> {
         self.record("copy_site_files", format!("{} {}", from.as_str(), to.as_str()))

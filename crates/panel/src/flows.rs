@@ -76,6 +76,8 @@ pub trait Host: Send + Sync + 'static {
     /// Crea `templates/<name>/` con i file del sito (senza `.env`), il dump in `db.sql` e il manifest.
     /// `sql_file` è nella cartella tmp del sito, dove l'ha scritto WP-CLI.
     fn store_template(&self, slug: &Slug, name: &Slug, manifest: &crate::template::Manifest, sql_file: &str) -> impl Future<Output = Result<()>> + Send;
+    /// GET / di un sito attraverso Caddy (con la password dello staging se serve): lo stato HTTP.
+    fn probe(&self, host: &Domain, auth: Option<(&str, &str)>) -> impl Future<Output = Result<u16>> + Send;
     /// Riscrive una chiave del .env del sito.
     fn set_site_env(&self, slug: &Slug, uid: u32, key: &str, value: &str) -> impl Future<Output = Result<()>> + Send;
 }
@@ -760,10 +762,20 @@ pub async fn restore_as_new_site<H: Host>(c: &Ctx<H>, src_id: i64, snapshot: &st
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteMode {
+    /// Backup finale obbligatorio e file nel cestino per 7 giorni.
+    Normal,
+    /// Copie usa e getta (restore di prova): niente backup, file eliminati subito.
+    Discard,
+}
+
 /// Elimina un sito. Va solo avanti: se si ferma, il sito resta in `deleting` e si può rilanciare.
-pub async fn delete_site<H: Host>(c: &Ctx<H>, id: i64, log: &mut JobLog) -> Result<()> {
+pub async fn delete_site<H: Host>(c: &Ctx<H>, id: i64, mode: DeleteMode, log: &mut JobLog) -> Result<()> {
     let site = c.store.site(id).await?;
-    if c.backups {
+    if mode == DeleteMode::Discard {
+        log.push("copia usa e getta: nessun backup finale");
+    } else if c.backups {
         backup_site(c, id, log).await.context("backup finale obbligatorio")?;
     } else {
         log.push("ATTENZIONE: backup non configurati, nessun backup finale");
@@ -773,8 +785,13 @@ pub async fn delete_site<H: Host>(c: &Ctx<H>, id: i64, log: &mut JobLog) -> Resu
     c.sync_caddy().await?;
     c.sync_php().await?;
     log.push("route e pool rimossi");
-    c.host.trash_site_dirs(&site.slug).await?;
-    log.push("file spostati nel cestino (7 giorni)");
+    if mode == DeleteMode::Discard {
+        c.host.remove_site_dirs(&site.slug).await?;
+        log.push("file eliminati");
+    } else {
+        c.host.trash_site_dirs(&site.slug).await?;
+        log.push("file spostati nel cestino (7 giorni)");
+    }
     if let Some((name, user, _)) = db {
         c.host.drop_database(&name, &user).await?;
         log.push("database eliminato");
@@ -784,6 +801,46 @@ pub async fn delete_site<H: Host>(c: &Ctx<H>, id: i64, log: &mut JobLog) -> Resu
     c.sync_redis().await?;
     log.push(format!("sito {} eliminato", site.slug.as_str()));
     Ok(())
+}
+
+/// Restore di prova: l'ultimo snapshot diventa un sito su un dominio interno, si controlla che
+/// risponda, poi si elimina senza lasciare tracce. L'esito resta in un avviso e nelle impostazioni.
+pub async fn test_restore<H: Host>(c: &Ctx<H>, id: i64, log: &mut JobLog) -> Result<()> {
+    let site = c.store.site(id).await?;
+    let result = test_restore_steps(c, &site, log).await;
+    let (ok, detail) = match &result {
+        Ok(snap) => (true, format!("snapshot {snap} ripristinato e raggiungibile")),
+        Err(e) => (false, format!("{e:#}")),
+    };
+    let record = serde_json::json!({ "at": chrono::Utc::now().to_rfc3339(), "ok": ok, "detail": detail });
+    c.store.set_setting(&format!("restore_test:{id}"), &record.to_string()).await?;
+    if ok {
+        c.store.resolve_alerts(id, "restore-test").await?;
+    } else {
+        c.store.raise_alert(Some(id), "restore-test", &format!("restore di prova fallito: {detail}")).await?;
+    }
+    log.push(detail);
+    result.map(drop)
+}
+
+async fn test_restore_steps<H: Host>(c: &Ctx<H>, site: &Site, log: &mut JobLog) -> Result<String> {
+    let snapshot = c
+        .store
+        .backup_runs(site.id, 100)
+        .await?
+        .into_iter()
+        .find_map(|r| r.snapshot_id.filter(|_| r.status == "done"))
+        .context("nessun backup riuscito da verificare")?;
+    let domain = Domain::parse(&format!("verifica-{}.alveare.invalid", site.slug.as_str().replace('_', "-")))
+        .map_err(|_| anyhow::anyhow!("dominio di verifica non valido"))?;
+    let copy = restore_as_new_site(c, site.id, &snapshot, &domain, log).await?;
+    let password = staging_password(c, copy.id).await?.unwrap_or_default();
+    let probe = c.host.probe(&domain, Some(("staging", &password))).await;
+    delete_site(c, copy.id, DeleteMode::Discard, log).await.context("eliminazione della copia di prova")?;
+    match probe? {
+        s if (200..400).contains(&s) => Ok(snapshot),
+        s => bail!("la copia ripristinata risponde {s}"),
+    }
 }
 
 #[cfg(test)]
@@ -1064,7 +1121,7 @@ mod tests {
         let c = ctx_with_backups(FakeHost::default()).await;
         let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
         c.host.calls.lock().unwrap().clear();
-        delete_site(&c, site.id, &mut JobLog::default()).await.unwrap();
+        delete_site(&c, site.id, DeleteMode::Normal, &mut JobLog::default()).await.unwrap();
         assert_eq!(c.host.ops()[..2], ["backup", "prune"]);
     }
 
@@ -1072,7 +1129,7 @@ mod tests {
     async fn failed_final_backup_stops_the_deletion_and_alerts() {
         let c = ctx_with_backups(FakeHost::failing("backup")).await;
         let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
-        assert!(delete_site(&c, site.id, &mut JobLog::default()).await.is_err());
+        assert!(delete_site(&c, site.id, DeleteMode::Normal, &mut JobLog::default()).await.is_err());
         assert_eq!(c.store.site(site.id).await.unwrap().status, SiteStatus::Active);
         let alerts = c.store.open_alerts(None).await.unwrap();
         assert_eq!(alerts[0].kind, "backup");
@@ -1180,12 +1237,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_restore_checks_the_copy_answers_then_discards_it() {
+        let c = ctx_with_backups(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        backup_site(&c, site.id, &mut JobLog::default()).await.unwrap();
+        c.store.raise_alert(Some(site.id), "restore-test", "vecchio").await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        test_restore(&c, site.id, &mut JobLog::default()).await.unwrap();
+        let calls = c.host.calls();
+        assert!(calls.contains(&"restore sona_it abcdef12 -> verifica_sona_it_alveare files=all db=verifica_sona_it_alveare".to_string()), "{calls:?}");
+        let probe = calls.iter().position(|x| x.starts_with("probe verifica-sona-it.alveare.invalid staging:")).unwrap();
+        let removed = calls.iter().position(|x| x == "remove_site_dirs verifica_sona_it_alveare").unwrap();
+        assert!(probe < removed);
+        assert!(!calls.iter().any(|x| x.starts_with("backup ") || x.starts_with("trash_site_dirs")), "la copia di prova non si salva: {calls:?}");
+        assert_eq!(c.store.sites().await.unwrap().len(), 1);
+        assert!(c.store.open_alerts(None).await.unwrap().is_empty());
+        assert!(c.store.setting(&format!("restore_test:{}", site.id)).await.unwrap().unwrap().contains("\"ok\":true"));
+    }
+
+    #[tokio::test]
+    async fn failed_test_restore_alerts_and_still_removes_the_copy() {
+        let c = ctx_with_backups(FakeHost { probe_status: Some(500), ..Default::default() }).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        backup_site(&c, site.id, &mut JobLog::default()).await.unwrap();
+        assert!(test_restore(&c, site.id, &mut JobLog::default()).await.is_err());
+        assert_eq!(c.store.sites().await.unwrap().len(), 1);
+        let alerts = c.store.open_alerts(None).await.unwrap();
+        assert_eq!(alerts[0].kind, "restore-test");
+        assert!(alerts[0].message.contains("500"), "{}", alerts[0].message);
+    }
+
+    #[tokio::test]
+    async fn test_restore_needs_a_backup() {
+        let c = ctx_with_backups(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        assert!(test_restore(&c, site.id, &mut JobLog::default()).await.is_err());
+        assert_eq!(c.store.open_alerts(None).await.unwrap()[0].kind, "restore-test");
+    }
+
+    #[tokio::test]
     async fn delete_site_removes_route_and_pool_before_files_and_database() {
         let c = ctx(FakeHost::default()).await;
         let keep = create_site(&c, &req("upupa.it"), &mut JobLog::default()).await.unwrap();
         let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
         c.host.calls.lock().unwrap().clear();
-        delete_site(&c, site.id, &mut JobLog::default()).await.unwrap();
+        delete_site(&c, site.id, DeleteMode::Normal, &mut JobLog::default()).await.unwrap();
         assert_eq!(
             c.host.calls(),
             [

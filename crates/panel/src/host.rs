@@ -287,6 +287,24 @@ pub async fn redis_acl_load(addr: &str, admin_password: &str) -> Result<()> {
     Ok(())
 }
 
+/// GET / con `Host` e, se serve, Basic auth: solo lo stato HTTP. Come dietro Cloudflare,
+/// con X-Forwarded-Proto https, così WordPress non risponde con un redirect a https.
+pub async fn http_probe(addr: &str, host: &Domain, auth: Option<(&str, &str)>, timeout: Duration) -> Result<u16> {
+    use base64::Engine;
+    let call = async {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.with_context(|| format!("connessione a {addr}"))?;
+        let auth = auth
+            .map(|(u, p)| format!("Authorization: Basic {}\r\n", base64::engine::general_purpose::STANDARD.encode(format!("{u}:{p}"))))
+            .unwrap_or_default();
+        let req = format!("GET / HTTP/1.1\r\nHost: {}\r\nX-Forwarded-Proto: https\r\nUser-Agent: alveare-probe\r\n{auth}Connection: close\r\n\r\n", host.as_str());
+        stream.write_all(req.as_bytes()).await?;
+        let mut line = String::new();
+        BufReader::new(stream).read_line(&mut line).await?;
+        line.split(' ').nth(1).and_then(|c| c.parse().ok()).with_context(|| format!("risposta non HTTP: {}", line.trim()))
+    };
+    tokio::time::timeout(timeout, call).await.context("il sito non ha risposto in tempo")?
+}
+
 pub struct SystemHost {
     pub paths: Paths,
     pub mysql: MySqlPool,
@@ -297,6 +315,8 @@ pub struct SystemHost {
     pub root_password: String,
     pub redis_addr: String,
     pub redis_admin_password: String,
+    /// Caddy in HTTP sulla rete interna, per le sonde (restore di prova, monitoraggio).
+    pub caddy_http: String,
 }
 
 impl SystemHost {
@@ -661,6 +681,10 @@ impl Host for SystemHost {
         .await?
     }
 
+    async fn probe(&self, host: &Domain, auth: Option<(&str, &str)>) -> Result<u16> {
+        http_probe(&self.caddy_http, host, auth, Duration::from_secs(30)).await
+    }
+
     async fn copy_site_files(&self, from: &Slug, to: &Slug, uid: u32) -> Result<()> {
         let (src, dest) = (self.paths.sites.join(from.as_str()), self.paths.sites.join(to.as_str()));
         tokio::task::spawn_blocking(move || {
@@ -720,6 +744,24 @@ mod tests {
 
     fn php(s: &str, uid: u32) -> SitePhp {
         SitePhp { slug: slug(s), uid, settings: PhpSettings::default() }
+    }
+
+    #[tokio::test]
+    async fn probe_sends_host_and_basic_auth_and_reads_the_status() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 2048];
+            let n = sock.read(&mut buf).await.unwrap();
+            sock.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        });
+        let status = http_probe(&addr, &Domain::parse("sona.it").unwrap(), Some(("staging", "pw")), Duration::from_secs(5)).await.unwrap();
+        let request = server.await.unwrap();
+        assert_eq!(status, 503);
+        assert!(request.contains("Host: sona.it\r\n") && request.contains("X-Forwarded-Proto: https\r\n"));
+        assert!(request.contains("Authorization: Basic c3RhZ2luZzpwdw==\r\n"), "{request}");
     }
 
     #[test]

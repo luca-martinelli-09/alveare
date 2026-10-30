@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use chrono::{DateTime, Timelike};
+use chrono::{DateTime, Datelike, Timelike};
 use chrono_tz::Tz;
 
 use crate::api::App;
@@ -27,6 +27,8 @@ pub enum Task {
     PanelBackup,
     RotateLogs,
     Integrity(i64),
+    /// Restore di prova mensile su un dominio interno: un backup mai ripristinato non conta.
+    RestoreTest(i64),
     Cleanup,
 }
 
@@ -85,6 +87,10 @@ pub fn due(now: DateTime<Tz>, sites: &[SiteRef]) -> Vec<Task> {
         if crate::backup::backup_slot(s.id) == (h as u32, m as u32) {
             out.push(Task::Backup(s.id));
         }
+        // Un sito al giorno al massimo (fino a 28 siti), alle 6 dopo i backup.
+        if now.day() as i64 == 1 + (s.id * 11).rem_euclid(28) && (h, m) == (6, (s.id * 7) % 60) {
+            out.push(Task::RestoreTest(s.id));
+        }
     }
     for s in sites.iter().filter(|s| s.active && s.wordpress) {
         if m % 5 == s.id % 5 {
@@ -127,6 +133,7 @@ pub async fn run<H: Host>(app: App<H>) {
                     Task::Backup(id) => (id, "backup"),
                     Task::PanelBackup => (0, "panel-backup"),
                     Task::Integrity(id) => (id, "integrity"),
+                    Task::RestoreTest(id) => (id, "restore-test"),
                     Task::RotateLogs => (0, "rotate"),
                     Task::Cleanup => (0, "cleanup"),
                 };
@@ -171,6 +178,16 @@ async fn execute<H: Host>(app: &App<H>, task: Task) -> anyhow::Result<()> {
         Task::Backup(_) | Task::PanelBackup => {}
         Task::RotateLogs => rotate_all(app).await?,
         Task::Integrity(id) => integrity(app, id).await?,
+        Task::RestoreTest(id) if app.ctx.backups => {
+            let ctx = app.ctx.clone();
+            app.jobs
+                .spawn("site.restore_test", Some(id), None, move |mut log| async move {
+                    flows::test_restore(&ctx, id, &mut log).await?;
+                    Ok(log)
+                })
+                .await?;
+        }
+        Task::RestoreTest(_) => {}
         Task::Cleanup => cleanup(app).await?,
     }
     Ok(())
@@ -291,6 +308,21 @@ mod tests {
         let (h, m) = crate::backup::backup_slot(2);
         assert!(backups.contains(&&(h, m, Task::Backup(2))));
         assert_eq!(all.iter().filter(|(h, m, t)| *t == Task::PanelBackup && (*h, *m) == (1, 50)).count(), 1);
+    }
+
+    #[test]
+    fn each_active_site_gets_one_test_restore_a_month() {
+        let sites = [wp(1), SiteRef { id: 2, wordpress: false, active: true }, SiteRef { id: 3, wordpress: true, active: false }];
+        let mut runs = Vec::new();
+        for day in 1..=30 {
+            for i in 0..24 * 60 {
+                let t = chrono_tz::Europe::Rome.with_ymd_and_hms(2026, 11, day, i / 60, i % 60, 0).unwrap();
+                runs.extend(due(t, &sites).into_iter().filter(|t| matches!(t, Task::RestoreTest(_))).map(|t| (day, i / 60, t)));
+            }
+        }
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        assert!(runs.iter().all(|(d, h, _)| *d <= 28 && *h == 6), "dopo i backup notturni, mai oltre il 28: {runs:?}");
+        assert_ne!(runs[0].0, runs[1].0, "siti diversi in giorni diversi");
     }
 
     #[test]

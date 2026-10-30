@@ -64,6 +64,7 @@ async fn main() -> Result<()> {
         root_password: cfg.root_password.clone(),
         redis_addr: cfg.redis_addr.clone(),
         redis_admin_password: cfg.redis_admin_password.clone(),
+        caddy_http: "caddy:80".into(),
     };
     let ctx = Ctx {
         store: store.clone(),

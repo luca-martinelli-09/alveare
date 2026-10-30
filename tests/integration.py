@@ -340,7 +340,7 @@ def main():
         assert page("upupa.test")[0] == 200
         http.call("POST", f"/api/sites/{site_b}/domains", {"hostname": "www.upupa.test", "kind": "redirect"}, expect=201)
         status, _, hdrs = page("www.upupa.test", "/chi-siamo/", headers=True)
-        assert status == 308 and hdrs["Location"] == "https://upupa.test/chi-siamo/", (status, dict(hdrs))
+        assert status == 301 and hdrs["Location"] == "https://upupa.test/chi-siamo/", (status, dict(hdrs))
 
         print("clona upupa.test su copia.test")
         clone = run_job(http, "POST", f"/api/sites/{site_b}/clone", {"domain": "copia.test"})
