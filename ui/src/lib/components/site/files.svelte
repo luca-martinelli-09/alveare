@@ -15,6 +15,7 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import { api, errorMessage, formatBytes } from '$lib/api';
 	import { uploadTo } from '$lib/upload';
+	import { entriesOf, filesFromEntries, type Dropped } from '$lib/dropped';
 	import { toast } from 'svelte-sonner';
 	import { cn } from '$lib/utils';
 	import FolderIcon from '@lucide/svelte/icons/folder';
@@ -105,6 +106,12 @@
 		return {
 			'data-drop': over === dir ? 'true' : undefined,
 			ondragover: (ev: DragEvent) => {
+				if (fromComputer(ev)) {
+					ev.preventDefault();
+					ev.stopPropagation();
+					over = dir;
+					return;
+				}
 				if (!canDrop(dir)) return;
 				ev.preventDefault();
 				if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
@@ -114,6 +121,7 @@
 				if (over === dir) over = null;
 			},
 			ondrop: async (ev: DragEvent) => {
+				if (fromComputer(ev)) return dropFiles(ev, dir);
 				ev.preventDefault();
 				const from = dragging;
 				dragging = over = null;
@@ -172,26 +180,62 @@
 	// Da una cartella ogni file porta il percorso relativo ("tema/css/a.css"): il server crea le sottocartelle.
 	// Le cartelle vuote il browser non le elenca, quindi non arrivano.
 	async function upload(files: FileList | null) {
-		const list = [...(files ?? [])];
+		await uploadAll([...(files ?? [])].map((file) => ({ file, path: file.webkitRelativePath || file.name })), path);
+		picker.value = folderPicker.value = '';
+	}
+
+	// Ogni file con il suo percorso relativo dentro `dir`: il server crea le sottocartelle.
+	async function uploadAll(list: Dropped[], dir: string) {
 		let failed = 0;
-		for (const [i, file] of list.entries()) {
-			const name = file.webkitRelativePath || file.name;
+		for (const [i, { file, path: rel }] of list.entries()) {
 			try {
 				progress = 0;
-				await uploadTo(`${base}/files/uploads`, join(name), file, (f) => (progress = (i + f) / list.length));
+				await uploadTo(`${base}/files/uploads`, dir ? `${dir}/${rel}` : rel, file, (f) => (progress = (i + f) / list.length));
 			} catch (e) {
 				failed++;
-				toast.error(`${name}: ${errorMessage(e)}`);
+				toast.error(`${rel}: ${errorMessage(e)}`);
 			}
 		}
-		if (list.length && !failed) toast.success(list.length === 1 ? `${list[0].name} caricato` : `${list.length} file caricati`);
+		if (list.length && !failed) toast.success(list.length === 1 ? `${list[0].file.name} caricato` : `${list.length} file caricati`);
 		progress = null;
-		picker.value = folderPicker.value = '';
 		await load();
+	}
+
+	// File e cartelle trascinati dal computer: sulla lista vanno nella cartella aperta, su una riga cartella dentro quella.
+	let dropping = $state(false);
+	const fromComputer = (ev: DragEvent) => dragging === null && !!ev.dataTransfer?.types.includes('Files');
+	async function dropFiles(ev: DragEvent, dir: string) {
+		ev.preventDefault();
+		ev.stopPropagation();
+		dropping = false;
+		over = null;
+		if (!ev.dataTransfer || progress !== null) return;
+		// Entry e file vanno letti subito: dopo il primo await il browser svuota il DataTransfer.
+		const entries = entriesOf(ev.dataTransfer);
+		const plain = [...ev.dataTransfer.files].map((file) => ({ file, path: file.name }));
+		await uploadAll(entries.length ? await filesFromEntries(entries) : plain, dir);
 	}
 </script>
 
-<div class="flex flex-col gap-4 pt-4">
+<div
+	class="relative flex flex-col gap-4 pt-4"
+	role="region"
+	aria-label="File"
+	ondragover={(ev) => {
+		if (!fromComputer(ev)) return;
+		ev.preventDefault();
+		dropping = true;
+	}}
+	ondragleave={(ev) => {
+		if (!(ev.currentTarget as HTMLElement).contains(ev.relatedTarget as Node | null)) dropping = false;
+	}}
+	ondrop={(ev) => fromComputer(ev) && dropFiles(ev, path)}
+>
+	{#if dropping && over === null}
+		<div class="border-primary bg-background/80 pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg border-2 border-dashed">
+			<p class="flex items-center gap-2 font-medium"><UploadIcon class="size-5" /> Rilascia per caricare in <span class="font-mono">{path || 'radice'}</span></p>
+		</div>
+	{/if}
 	<div class="flex flex-wrap items-center gap-2">
 		<Breadcrumb.Root>
 			<Breadcrumb.List class="gap-1 sm:gap-1">
