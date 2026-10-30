@@ -31,14 +31,12 @@ async fn run<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method,
         return Err(ApiError::bad_request(format!("{} non si esegue su questo sito", r.kind.as_str())));
     }
     let action = prepare(r.kind, &r.command, &[]).map_err(ApiError::bad_request)?;
-    // Nel log e nell'audit il comando intero, con il suo prefisso ("wp plugin list").
-    let prefix = match r.kind {
-        CronKind::Wp => "wp",
-        CronKind::Artisan => "php artisan",
-        _ => "php",
+    // Nel log e nell'audit il comando intero ("wp plugin list"), con le password come ***.
+    let shown = match &action {
+        Action::Wp(args) => format!("wp {}", crate::host::shown_args(args)),
+        Action::Php(args) => format!("php {}", crate::host::shown_args(args)),
+        Action::Http { .. } => unreachable!("rifiutato sopra"),
     };
-    let command = r.command.trim();
-    let shown = if command.starts_with(&format!("{prefix} ")) { command.to_string() } else { format!("{prefix} {command}") };
     let (ctx, auth, uid) = (app.ctx.clone(), app.auth.clone(), user.id);
     let job = app
         .jobs
@@ -94,6 +92,12 @@ mod tests {
         let job = wait_job(&t, body["job"].as_i64().unwrap()).await;
         assert_eq!((job.status.as_str(), job.log.first().map(String::as_str)), ("done", Some("$ wp option get blogname")));
         assert!(t.app.ctx.host.calls().contains(&"wp sona_it option get blogname".to_string()));
+        let (s, body, _) = call(&t, req("POST", &url, Some(&manager), Some(json!({"kind": "wp", "command": "user update anna --user_pass=Segreta123 --skip-email"})))).await;
+        assert_eq!(s, StatusCode::ACCEPTED);
+        let job = wait_job(&t, body["job"].as_i64().unwrap()).await;
+        assert_eq!(job.log.first().map(String::as_str), Some("$ wp user update anna --user_pass=*** --skip-email"), "password mai nel log");
+        let (_, audit, _) = call(&t, req("GET", &format!("/api/sites/{id}/audit"), Some(&admin), None)).await;
+        assert!(!audit.to_string().contains("Segreta123"), "né nell'audit");
         let (s, body, _) = call(&t, req("POST", &url, Some(&manager), Some(json!({"kind": "php", "command": "public/script.php --x"})))).await;
         assert_eq!(s, StatusCode::ACCEPTED);
         let job = wait_job(&t, body["job"].as_i64().unwrap()).await;
