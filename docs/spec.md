@@ -576,6 +576,12 @@ Autenticazione: la UI usa la sessione in cookie, gli script un token API persona
 CLI: un binario Rust (alveare) nello stesso workspace, che usa la stessa API con un token personale e quindi ha esattamente i permessi dell'utente. Comandi principali: sites list, sites create --template, sites clone, sites export, backup run, backup restore, logs tail, wp &lt;sito&gt; -- &lt;comando&gt;, cron run, ip block. Output leggibile o JSON (--json) per gli script. Gira su Linux, macOS e Windows, anche fuori dal server.
 
 ## Roadmap per fasi
+- **Fase 1 · MVP**: compose con Caddy, PHP-FPM, MariaDB, Redis e pannello; immagine PHP multi-arch con agente e WP-CLI. Crea ed elimina sito da template ricetta. File manager base e gestione database (upload a blocchi, editor, dump, Adminer). Log in tempo reale, cron WordPress, backup restic notturni con restore completo. Hardening (IP reale, opcache isolato, checksum notturni, kit di ripristino, test in CI). Multi-utente (password e TOTP, ruoli per sito, token API, audit log).
+- Gate 1 · primo sito reale in produzione: un sito nuovo servito dietro il tunnel, backup e restore di prova riusciti.
+- **Fase 2 · Migrazione**: importa e clona sito, template snapshot, restore parziali e su nuovo dominio. Zip ed estrazione nel file manager, ricerca nei log, errori PHP raggruppati. Vista aggiornamenti WordPress con update in blocco, monitoraggio e avvisi. Cron personalizzati, override di PHP e Caddy, rate limit, restore di prova mensile. Sospensione siti, protezione dello staging, retention dei log, aggiornamento del pannello. Regole di aggiornamento, budget di memoria, blocco IP, regole Cloudflare, esporta sito, CLI.
+- Gate 2 · stack attuali migrati: epops, proloco, upupa e vivosport sul pannello; vecchi compose spenti.
+- **Fase 3 · Estensioni**: login con passkey, inviti via email, gestione delle sessioni dal profilo. Hostname dei tunnel Cloudflare gestiti via API, salva sito come template. Più versioni di PHP, app Laravel con worker e deploy, metriche verso Grafana.
+
 Si passa alla fase successiva solo superato il gate: la fase 2 parte quando un sito vero gira sul pannello con backup verificati, la fase 3 quando i vecchi stack sono spenti.
 
 ## Questioni aperte
