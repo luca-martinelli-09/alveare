@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import * as Card from '$lib/components/ui/card';
+	import SettingsSection from '$lib/components/app/settings-section.svelte';
+	import SettingRow from '$lib/components/app/setting-row.svelte';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -36,62 +37,35 @@
 	}
 </script>
 
-<div class="grid gap-4 pt-4 md:grid-cols-2">
+<div class="flex flex-col gap-6 pt-6">
 	{#if detail.wp_admin_pending}
-		<Card.Root class="md:col-span-2">
-			<Card.Header>
-				<Card.Title>Accesso a WordPress</Card.Title>
-				<Card.Description>La password dell'utente admin si mostra una volta sola, entro 24 ore dalla creazione. Poi c'è "Password dimenticata" di WordPress.</Card.Description>
-			</Card.Header>
-			{#if wpAdmin}
-				<Card.Content>
-					<p class="text-sm">Utente <code>{wpAdmin.user}</code>, password <code class="select-all">{wpAdmin.password}</code></p>
-				</Card.Content>
-			{/if}
-			{#if !wpAdmin}
-				<Card.Footer><Button variant="outline" onclick={revealWpAdmin}>Mostra la password (una volta)</Button></Card.Footer>
-			{/if}
-		</Card.Root>
+		<SettingsSection title="Accesso a WordPress">
+			<SettingRow label="Password dell'utente admin" help={'Si mostra una volta sola, entro 24 ore dalla creazione. Poi c\'è "Password dimenticata" di WordPress.'}>
+				{#snippet extra()}
+					{#if wpAdmin}<p class="mt-1 text-sm">Utente <code>{wpAdmin.user}</code>, password <code class="select-all">{wpAdmin.password}</code></p>{/if}
+				{/snippet}
+				{#if !wpAdmin}<Button onclick={revealWpAdmin}>Mostra la password</Button>{/if}
+			</SettingRow>
+		</SettingsSection>
 	{/if}
-	<DomainsCard {detail} {onchange} />
 	<MonitorCard id={detail.site.id} />
+	<DomainsCard {detail} {onchange} />
 	{#if detail.can_manage}
 		<StateCard {detail} {onchange} />
 		<CopiesCard {detail} />
 	{/if}
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>PHP</Card.Title>
-			<Card.Description>Pool dedicato con l'utente Unix {detail.site.slug}.</Card.Description>
-		</Card.Header>
-		<Card.Content>
-			<dl class="grid grid-cols-2 gap-2 text-sm">
-				<dt class="text-muted-foreground">Tipo</dt>
-				<dd>{detail.site.kind} ({detail.site.template})</dd>
-				<dt class="text-muted-foreground">memory_limit</dt>
-				<dd>{detail.site.settings.memory_limit_mb} MB</dd>
-				<dt class="text-muted-foreground">Upload massimo</dt>
-				<dd>{detail.site.settings.upload_max_mb} MB</dd>
-				<dt class="text-muted-foreground">Tempo massimo</dt>
-				<dd>{detail.site.settings.max_execution_time_s} s</dd>
-				<dt class="text-muted-foreground">Processi massimi</dt>
-				<dd>{detail.site.settings.max_children}</dd>
-			</dl>
-		</Card.Content>
-	</Card.Root>
+	<SettingsSection title="PHP" description={`Pool dedicato con l'utente Unix ${detail.site.slug}.`}>
+		<SettingRow label={`PHP ${detail.site.php_version}`} help={`memory_limit ${detail.site.settings.memory_limit_mb} MB · upload fino a ${detail.site.settings.upload_max_mb} MB · ${detail.site.settings.max_execution_time_s} s per richiesta · ${detail.site.settings.max_children} processi`}>
+			{#if detail.can_manage}<Button variant="outline" size="sm" href="?tab=settings">Cambia</Button>{/if}
+		</SettingRow>
+	</SettingsSection>
 	{#if session.user?.is_admin}
-		<Card.Root class="md:col-span-2">
-			<Card.Header>
-				<Card.Title>Elimina sito</Card.Title>
-				<Card.Description>
-					Prima un backup finale, poi route, pool, file (nel cestino per 7 giorni), database e utente.
-				</Card.Description>
-			</Card.Header>
-			<Card.Footer>
+		<SettingsSection title="Zona pericolosa">
+			<SettingRow label="Elimina il sito" help="Prima un backup finale, poi route, pool, file (nel cestino per 7 giorni), database e utente.">
 				<AlertDialog.Root>
 					<AlertDialog.Trigger>
 						{#snippet child({ props })}
-							<Button variant="destructive" {...props}>Elimina {detail.site.slug}</Button>
+							<Button variant="destructive" size="sm" {...props}>Elimina…</Button>
 						{/snippet}
 					</AlertDialog.Trigger>
 					<AlertDialog.Content>
@@ -105,8 +79,8 @@
 						</AlertDialog.Footer>
 					</AlertDialog.Content>
 				</AlertDialog.Root>
-			</Card.Footer>
-		</Card.Root>
+			</SettingRow>
+		</SettingsSection>
 	{/if}
 </div>
 

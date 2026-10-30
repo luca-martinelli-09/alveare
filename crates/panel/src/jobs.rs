@@ -28,7 +28,43 @@ pub struct JobView {
     pub finished_at: Option<String>,
 }
 
+/// Riga dell'attività recente: un job con l'ultima riga del suo log.
+#[derive(Debug, serde::Serialize)]
+pub struct Activity {
+    pub id: i64,
+    pub kind: String,
+    pub site_id: Option<i64>,
+    pub status: String,
+    pub detail: String,
+    pub started_at: String,
+}
+
 impl Jobs {
+    /// Ultimi job, solo dei siti in `visible` se c'è (senza i job del pannello).
+    pub async fn recent(&self, visible: Option<&[i64]>, limit: i64) -> sqlx::Result<Vec<Activity>> {
+        let rows = sqlx::query("SELECT id, kind, site_id, status, log, started_at FROM jobs ORDER BY id DESC LIMIT ?").bind(limit * 4).fetch_all(&self.pool).await?;
+        let mut out = Vec::new();
+        for r in rows {
+            let site_id: Option<i64> = r.try_get("site_id")?;
+            if visible.is_some_and(|v| !site_id.is_some_and(|s| v.contains(&s))) {
+                continue;
+            }
+            let log: String = r.try_get("log")?;
+            out.push(Activity {
+                id: r.try_get("id")?,
+                kind: r.try_get("kind")?,
+                site_id,
+                status: r.try_get("status")?,
+                detail: log.lines().rev().find(|l| !l.is_empty()).unwrap_or_default().to_string(),
+                started_at: r.try_get("started_at")?,
+            });
+            if out.len() as i64 == limit {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool, live: Default::default(), serial: Default::default() }
     }

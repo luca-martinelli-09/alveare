@@ -851,6 +851,24 @@ impl Store {
         Ok(())
     }
 
+    /// Un controllo di raggiungibilità; quelli più vecchi di 30 giorni se ne vanno.
+    pub async fn record_uptime(&self, site_id: i64, at: i64, ms: u64, ok: bool) -> Result<()> {
+        sqlx::query("INSERT INTO uptime_samples (site_id, at, ms, ok) VALUES (?, ?, ?, ?)").bind(site_id).bind(at).bind(ms as i64).bind(ok).execute(&self.pool).await?;
+        sqlx::query("DELETE FROM uptime_samples WHERE at < ?").bind(at - 30 * 86400).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// (inizio intervallo, ms medi, quota di controlli riusciti) per intervalli di `bucket` secondi.
+    pub async fn uptime_series(&self, site_id: i64, since: i64, bucket: i64) -> Result<Vec<(i64, f64, f64)>> {
+        let rows = sqlx::query("SELECT (at / ?1) * ?1 AS b, AVG(ms) AS ms, AVG(ok) AS ok FROM uptime_samples WHERE site_id = ?2 AND at >= ?3 GROUP BY b ORDER BY b")
+            .bind(bucket)
+            .bind(site_id)
+            .bind(since)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(|r| (r.get("b"), r.get("ms"), r.get("ok"))).collect())
+    }
+
     pub async fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
             .bind(key)

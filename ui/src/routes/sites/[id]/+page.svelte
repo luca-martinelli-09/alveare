@@ -4,7 +4,7 @@
 	import * as Breadcrumb from '$lib/components/ui/breadcrumb';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
-	import StatusDot from '$lib/components/app/status-dot.svelte';
+	import StatusPill from '$lib/components/app/status-pill.svelte';
 	import { sites } from '$lib/sites.svelte';
 	import { health } from '$lib/health';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
@@ -64,17 +64,15 @@
 	<header class="-mt-2 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
 		<div class="flex min-w-0 flex-col gap-1.5">
 			<h1 class="flex items-center gap-3 text-2xl font-semibold tracking-tight">
-				{#if h}<StatusDot level={h.level} label={h.label} class="size-2.5" />{/if}
 				<span class="truncate">{primary?.hostname ?? detail.site.slug}</span>
+				{#if h}<StatusPill level={h.level} label={h.label} class="tracking-normal" />{/if}
 			</h1>
 			<p class="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-				<span>{h?.label ?? detail.site.status}</span>
-				<span aria-hidden="true">·</span>
 				<span>{kinds[detail.site.kind] ?? detail.site.kind}</span>
 				<span aria-hidden="true">·</span>
 				<span>PHP {detail.site.php_version}</span>
 				{#if detail.site.staging}<Badge variant="outline">staging</Badge>{/if}
-				{#if h && h.issues.length}<span class="text-warning-text">· {h.issues.join(', ')}</span>{/if}
+				{#if h && h.issues.length}<span class={h.level === 'down' ? 'text-destructive' : 'text-warning-text'}>· {h.issues.join(', ')}</span>{/if}
 			</p>
 		</div>
 		{#if primary}

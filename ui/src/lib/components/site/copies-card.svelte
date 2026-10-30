@@ -1,7 +1,8 @@
 <script lang="ts">
 	// Esporta (gestore), clona e salva come template (admin): tutti job con log.
 	import { goto } from '$app/navigation';
-	import * as Card from '$lib/components/ui/card';
+	import SettingsSection from '$lib/components/app/settings-section.svelte';
+	import SettingRow from '$lib/components/app/setting-row.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Field from '$lib/components/ui/field';
 	import { Button } from '$lib/components/ui/button';
@@ -44,32 +45,28 @@
 	const date = (s: number) => new Date(s * 1000).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' });
 </script>
 
-<Card.Root>
-	<Card.Header>
-		<Card.Title>Copie ed esportazioni</Card.Title>
-		<Card.Description>L'esportazione è un tar.gz con file, dump e LEGGIMI, senza password; resta scaricabile per 7 giorni.</Card.Description>
-	</Card.Header>
-	<Card.Content class="flex flex-col gap-2">
-		{#each exports as e (e.token)}
-			<div class="flex items-center justify-between gap-2 text-sm">
-				<a class="flex items-center gap-1 truncate underline-offset-4 hover:underline" href={`/api/exports/${e.token}`} download>
-					<DownloadIcon class="shrink-0" />
-					{e.file}
+<SettingsSection title="Copie">
+	<SettingRow label="Esporta il sito" help="Un tar.gz con file, dump e LEGGIMI, senza password; resta scaricabile per 7 giorni.">
+		{#snippet extra()}
+			{#each exports as e (e.token)}
+				<a class="mt-1 flex items-center gap-1 text-sm underline-offset-4 hover:underline" href={`/api/exports/${e.token}`} download>
+					<DownloadIcon class="size-3.5 shrink-0" />
+					<span class="truncate">{e.file}</span>
+					<span class="text-muted-foreground shrink-0">· {formatBytes(e.size)} · scade {date(e.expires_at)}</span>
 				</a>
-				<span class="text-muted-foreground shrink-0">{formatBytes(e.size)} · scade {date(e.expires_at)}</span>
-			</div>
-		{:else}
-			<p class="text-muted-foreground text-sm">Nessuna esportazione recente.</p>
-		{/each}
-	</Card.Content>
-	<Card.Footer class="flex flex-wrap gap-2">
-		<Button variant="outline" onclick={() => run(`/api/sites/${id}/export`, undefined, 'Esportazione', () => loadExports())}>Esporta sito</Button>
-		{#if session.user?.is_admin}
-			<Button variant="outline" onclick={() => (form = 'clone')}>Clona</Button>
-			<Button variant="outline" onclick={() => (form = 'template')}>Salva come template</Button>
-		{/if}
-	</Card.Footer>
-</Card.Root>
+			{/each}
+		{/snippet}
+		<Button variant="outline" size="sm" onclick={() => run(`/api/sites/${id}/export`, undefined, 'Esportazione', () => loadExports())}>Esporta</Button>
+	</SettingRow>
+	{#if session.user?.is_admin}
+		<SettingRow label="Clona su un altro dominio" help="File e database copiati, poi search-replace del dominio; la copia nasce protetta da password.">
+			<Button variant="outline" size="sm" onclick={() => (form = 'clone')}>Clona…</Button>
+		</SettingRow>
+		<SettingRow label="Salva come template" help="Snapshot di file e database, riutilizzabile per i siti nuovi.">
+			<Button variant="outline" size="sm" onclick={() => (form = 'template')}>Salva…</Button>
+		</SettingRow>
+	{/if}
+</SettingsSection>
 
 <Dialog.Root open={form !== null} onOpenChange={(o) => !o && (form = null)}>
 	<Dialog.Content>

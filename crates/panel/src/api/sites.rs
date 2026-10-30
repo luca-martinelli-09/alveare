@@ -9,6 +9,8 @@ pub(super) fn routes<H: Host>() -> Router<App<H>> {
         .route("/api/sites/{id}", patch(update_site::<H>))
         .route("/api/server", get(server::<H>))
         .route("/api/sites/{id}/monitor", get(monitor::<H>))
+        .route("/api/sites/{id}/uptime", get(uptime_history::<H>))
+        .route("/api/activity", get(activity::<H>))
         .route("/api/sites/{id}/wp-admin", post(wp_admin::<H>))
         .route("/api/sites/{id}/clone", post(clone_site::<H>))
         .route("/api/sites/{id}/export", post(export_site::<H>))
@@ -188,6 +190,34 @@ async fn monitor<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Met
     let mut out = monitor_values(&app, id).await?;
     out.insert("disk_alert_mb".into(), json!(app.disk_alert_mb));
     Ok(Json(out).into_response())
+}
+
+#[derive(Deserialize)]
+struct HistoryQuery {
+    hours: i64,
+}
+
+/// Storico della risposta per il grafico: 24 h a intervalli di 5 minuti, 7 giorni di un'ora, 30 di tre.
+async fn uptime_history<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, Query(q): Query<HistoryQuery>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_site(&app, &user, id, Need::Read).await?;
+    let bucket = match q.hours {
+        24 => 300,
+        168 => 3600,
+        720 => 3 * 3600,
+        _ => return Err(ApiError::bad_request("intervallo: 24, 168 o 720 ore")),
+    };
+    let series = app.ctx.store.uptime_series(id, now() - q.hours * 3600, bucket).await?;
+    let availability = if series.is_empty() { None } else { Some((series.iter().map(|p| p.2).sum::<f64>() / series.len() as f64 * 1000.0).round() / 10.0) };
+    let points: Vec<_> = series.iter().map(|(at, ms, ok)| json!({ "at": at, "ms": ms.round(), "ok": ok })).collect();
+    Ok(Json(json!({ "bucket_s": bucket, "points": points, "availability": availability })).into_response())
+}
+
+/// Attività recente (backup, ripristini, aggiornamenti, deploy…) dei siti visibili.
+async fn activity<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    let visible = app.auth.visible_sites(&user).await?;
+    Ok(Json(app.jobs.recent(visible.as_deref(), 20).await.map_err(internal)?).into_response())
 }
 
 /// Pagina del server (admin): RAM e budget di memoria dei pool.
@@ -405,6 +435,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn response_history_is_bucketed_with_availability() {
+        let t = setup().await;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let id = create_site(&t, &admin, "sona.it").await;
+        let reader = user_with_role(&t, "r@example.org", id, Role::Readonly).await;
+        crate::monitor::uptime(&t.app.ctx, id).await.unwrap();
+        crate::monitor::uptime(&t.app.ctx, id).await.unwrap();
+        let (s, body, _) = call(&t, req("GET", &format!("/api/sites/{id}/uptime?hours=24"), Some(&reader), None)).await;
+        assert_eq!(s, StatusCode::OK, "{body}");
+        assert_eq!(body["bucket_s"], 300);
+        assert_eq!(body["points"].as_array().unwrap().len(), 1, "due controlli nello stesso intervallo di 5 minuti");
+        assert_eq!(body["points"][0]["ok"], 1.0);
+        assert_eq!(body["availability"], 100.0);
+        let (_, week, _) = call(&t, req("GET", &format!("/api/sites/{id}/uptime?hours=168"), Some(&reader), None)).await;
+        assert_eq!(week["bucket_s"], 3600);
+        let (s, _, _) = call(&t, req("GET", &format!("/api/sites/{id}/uptime?hours=9999"), Some(&reader), None)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "solo 24, 168 o 720 ore");
+    }
+
+    #[tokio::test]
+    async fn activity_lists_recent_operations_of_visible_sites() {
+        let t = setup().await;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let id = create_site(&t, &admin, "sona.it").await;
+        let (_, all, _) = call(&t, req("GET", "/api/activity", Some(&admin), None)).await;
+        let first = &all.as_array().unwrap()[0];
+        assert_eq!((first["kind"].as_str(), first["site_id"].as_i64(), first["status"].as_str()), (Some("site.create"), Some(id), Some("done")));
+        assert!(first["detail"].is_string(), "ultima riga del log: {first}");
+        let (_, plain) = token_for(&t, "u@example.org", false).await;
+        let (_, none, _) = call(&t, req("GET", "/api/activity", Some(&plain), None)).await;
+        assert!(none.as_array().unwrap().is_empty(), "solo i siti assegnati");
+    }
+
+    #[tokio::test]
     async fn site_list_carries_monitor_and_last_backup_for_the_overview() {
         let t = setup().await;
         let (_, admin) = token_for(&t, "admin@example.org", true).await;
@@ -415,6 +479,7 @@ mod tests {
         assert!(list[0]["last_backup"].is_null());
         assert_eq!(list[0]["backups"], true, "senza backup configurati la panoramica non segnala \"nessun backup\"");
         assert_eq!(list[0]["url"], "https://sona.it");
+        assert_eq!(list[0]["disk_alert_mb"], 10240, "per la barra dello spazio");
         let slug = t.app.ctx.store.site(id).await.unwrap().slug;
         t.app.ctx.store.backup_started(id, &slug).await.unwrap();
         let (_, list, _) = call(&t, req("GET", "/api/sites", Some(&admin), None)).await;

@@ -17,6 +17,7 @@ const site = (over: Partial<SiteRow>): SiteRow => ({
 	last_backup: { started_at: '2026-10-30T02:00:00Z', status: 'done' },
 	backups: true,
 	url: 'https://a.it',
+	disk_alert_mb: 10240,
 	...over
 });
 

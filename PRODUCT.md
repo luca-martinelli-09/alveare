@@ -32,7 +32,8 @@ Leggero e tutto in Docker, senza un container per sito: un pool FPM e un utente 
 - Nome: **Alveare**. Progetto open source pubblico: deve presentarsi bene anche a chi lo scopre su GitHub.
 - Nessun logo o marchio preesistente.
 - Linguaggio visivo: lo standard della categoria (dashboard di hosting), eseguito con cura; scelto il 2026-10-30 al posto delle direzioni più espressive. Riferimenti di livello: Vercel / Railway e la dashboard di Cloudflare.
-- Da evitare: tema api/miele come costume, dashboard SaaS generica (gradienti, metriche finte), più clic o più scroll per le azioni frequenti.
+- Palette miele (2026-10-30, richiesta esplicita): giallo/arancio con gradienti sulle azioni primarie e sulle voci attive, icone nelle tessere, marchio esagonale. Il tema api sta nei colori e nel marchio, non in illustrazioni o decorazioni.
+- Da evitare: dashboard SaaS generica (metriche finte, banner promozionali), più clic o più scroll per le azioni frequenti.
 
 ## Evidence on Hand
 - Specifica completa in docs/spec.md; README con stato per fase.

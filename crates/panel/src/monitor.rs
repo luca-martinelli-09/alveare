@@ -65,6 +65,7 @@ pub async fn uptime<H: Host>(c: &Ctx<H>, id: i64) -> Result<()> {
     let fails = if ok { 0 } else { previous["fails"].as_u64().unwrap_or(0) + 1 };
     let record = json!({ "ok": ok, "status": status, "ms": ms, "fails": fails, "error": error, "at": chrono::Utc::now().timestamp() });
     c.store.set_setting(&key, &record.to_string()).await?;
+    c.store.record_uptime(id, chrono::Utc::now().timestamp(), ms, ok).await?;
     if ok {
         c.store.resolve_alerts(id, "down").await?;
     } else if fails >= DOWN_AFTER {

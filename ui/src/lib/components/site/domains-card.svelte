@@ -1,11 +1,10 @@
 <script lang="ts">
-	import * as Card from '$lib/components/ui/card';
-	import * as Field from '$lib/components/ui/field';
+	import SettingsSection from '$lib/components/app/settings-section.svelte';
+	import SettingRow from '$lib/components/app/setting-row.svelte';
 	import * as Select from '$lib/components/ui/select';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import XIcon from '@lucide/svelte/icons/x';
 	import { api, errorMessage } from '$lib/api';
 	import { session } from '$lib/session.svelte';
 	import { toast } from 'svelte-sonner';
@@ -39,33 +38,20 @@
 	}
 </script>
 
-<Card.Root>
-	<Card.Header>
-		<Card.Title>Domini</Card.Title>
-		<Card.Description>Con un account Cloudflare configurato, hostname e regole vanno sul tunnel da soli; senza, aggiungili a mano verso http://caddy:80.</Card.Description>
-	</Card.Header>
-	<Card.Content class="flex flex-col gap-2">
-		{#each detail.domains as d (d.hostname)}
-			<div class="flex items-center justify-between gap-2">
-				<a class="truncate underline-offset-4 hover:underline" href={d.url} target="_blank" rel="noreferrer">{d.hostname}</a>
-				<div class="flex items-center gap-1">
-					<Badge variant="outline">{kinds[d.kind]}</Badge>
-					{#if session.user?.is_admin && d.kind !== 'primary'}
-						<Button variant="ghost" size="icon-sm" aria-label={`Togli ${d.hostname}`} onclick={() => remove(d.hostname)}>
-							<XIcon />
-						</Button>
-					{/if}
-				</div>
-			</div>
-		{/each}
-	</Card.Content>
+<SettingsSection title="Domini" description="Con un account Cloudflare configurato, hostname e regole vanno sul tunnel da soli; senza, aggiungili a mano verso http://caddy:80.">
+	{#each detail.domains as d (d.hostname)}
+		<SettingRow help={{ primary: 'Dominio principale.', alias: 'Alias: stesso sito, stesso indirizzo nella barra.', redirect: 'Rimanda al dominio principale (301).' }[d.kind]}>
+			{#snippet label()}<a class="font-medium underline-offset-4 hover:underline" href={d.url} target="_blank" rel="noreferrer">{d.hostname}</a>{/snippet}
+			<Badge variant="outline">{kinds[d.kind]}</Badge>
+			{#if session.user?.is_admin && d.kind !== 'primary'}
+				<Button variant="outline" size="sm" onclick={() => remove(d.hostname)}>Togli</Button>
+			{/if}
+		</SettingRow>
+	{/each}
 	{#if session.user?.is_admin}
-		<Card.Footer class="flex flex-col gap-3">
-			<form class="flex w-full flex-wrap items-end gap-2" onsubmit={add}>
-				<Field.Field class="min-w-48 flex-1">
-					<Field.FieldLabel for="new-host">Nuovo hostname</Field.FieldLabel>
-					<Input id="new-host" bind:value={hostname} placeholder="www.esempio.it" required />
-				</Field.Field>
+		<SettingRow label="Aggiungi un hostname" labelFor="new-host" help="Alias o redirect: va sul tunnel da solo.">
+			<form class="flex flex-wrap gap-2" onsubmit={add}>
+				<Input id="new-host" class="w-52" bind:value={hostname} placeholder="www.esempio.it" required />
 				<Select.Root type="single" bind:value={kind}>
 					<Select.Trigger class="w-32" aria-label="Tipo">{kinds[kind]}</Select.Trigger>
 					<Select.Content>
@@ -75,8 +61,8 @@
 						</Select.Group>
 					</Select.Content>
 				</Select.Root>
-				<Button type="submit">Aggiungi</Button>
+				<Button type="submit" variant="outline">Aggiungi</Button>
 			</form>
-		</Card.Footer>
+		</SettingRow>
 	{/if}
-</Card.Root>
+</SettingsSection>

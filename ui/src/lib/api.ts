@@ -57,6 +57,8 @@ export type SiteRow = {
 	/** Backup configurati sul server (RESTIC_REPOSITORY). */
 	backups: boolean;
 	url: string | null;
+	/** Soglia d'avviso dello spazio (file + database). */
+	disk_alert_mb: number;
 };
 export type Job = { id: number; kind: string; site_id: number | null; status: 'running' | 'done' | 'failed'; log: string[] };
 export type Alert = { id: number; site_id: number | null; kind: string; message: string; created_at: string };

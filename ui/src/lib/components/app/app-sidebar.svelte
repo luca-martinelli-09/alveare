@@ -9,6 +9,8 @@
 	import { sites } from '$lib/sites.svelte';
 	import { health, byHealth } from '$lib/health';
 	import { setMode, userPrefersMode } from 'mode-watcher';
+	import { palette } from '$lib/palette.svelte';
+	import SearchIcon from '@lucide/svelte/icons/search';
 	import LayoutGridIcon from '@lucide/svelte/icons/layout-grid';
 	import LayoutTemplateIcon from '@lucide/svelte/icons/layout-template';
 	import UsersIcon from '@lucide/svelte/icons/users';
@@ -44,6 +46,15 @@
 			<Logo />
 			<span class="text-[15px] font-semibold tracking-tight">Alveare</span>
 		</a>
+		<button
+			type="button"
+			class="border-sidebar-border bg-background text-muted-foreground hover:text-foreground flex h-9 items-center gap-2 rounded-md border px-2.5 text-sm"
+			onclick={() => (palette.open = true)}
+		>
+			<SearchIcon class="size-4" />
+			<span class="flex-1 text-left">Cerca siti e azioni</span>
+			<kbd class="border-sidebar-border rounded border px-1.5 font-mono text-[11px]">⌘K</kbd>
+		</button>
 	</Sidebar.Header>
 	<Sidebar.Content>
 		<Sidebar.Group>
