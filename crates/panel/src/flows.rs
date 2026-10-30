@@ -1011,21 +1011,30 @@ pub async fn make_primary<H: Host>(c: &Ctx<H>, site_id: i64, host: &Domain, log:
 
 /// Import di un dump: prima un dump di sicurezza in tmp/<slug>, poi l'import e,
 /// se richiesto, `wp search-replace` (rispetta i dati serializzati di WordPress).
+/// `replace`: il database si svuota prima (un sito intero, come gli export di phpMyAdmin senza DROP TABLE).
 pub async fn import_database<H: Host>(
     c: &Ctx<H>,
     site_id: i64,
     sql: Pin<Box<dyn AsyncRead + Send>>,
     safety: &std::path::Path,
     search_replace: Option<(String, String)>,
+    replace: bool,
     log: &mut JobLog,
 ) -> Result<()> {
     let site = c.store.site(site_id).await?;
     let db = c.db_creds(site_id).await?;
     save_dump(c, &db.name, safety).await.context("dump di sicurezza")?;
     log.push(format!("dump di sicurezza salvato in {}", safety.display()));
+    if replace {
+        c.host.drop_database(&db.name, &db.user).await?;
+        c.host.create_database(&db).await?;
+        log.push("database svuotato");
+    }
     if let Err(e) = c.host.db_import(&db, sql).await {
-        // Fallito a metà: si rimette il dump di sicurezza, così il sito non resta con metà delle tabelle.
+        // Fallito a metà: database vuoto e dump di sicurezza, così non resta niente del tentativo.
         log.push(format!("import fallito, ripristino del dump di sicurezza: {e:#}"));
+        c.host.drop_database(&db.name, &db.user).await?;
+        c.host.create_database(&db).await?;
         c.host.db_import(&db, open_sql(safety).await?).await.context("ripristino del dump di sicurezza dopo l'import fallito")?;
         flush_object_cache(c, &site, log).await;
         return Err(e.context("import fallito; il database è stato rimesso com'era"));
@@ -1382,10 +1391,27 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let safety = tmp.path().join("prima.sql.gz");
         let sql: Pin<Box<dyn AsyncRead + Send>> = Box::pin(std::io::Cursor::new(b"-- ROTTO".to_vec()));
-        let err = import_database(&c, site.id, sql, &safety, None, &mut JobLog::default()).await.unwrap_err();
+        c.host.calls.lock().unwrap().clear();
+        let err = import_database(&c, site.id, sql, &safety, None, false, &mut JobLog::default()).await.unwrap_err();
         assert!(format!("{err:#}").contains("rimesso com'era"), "{err:#}");
-        let imports: Vec<String> = c.host.calls().into_iter().filter(|x| x.starts_with("db_import")).collect();
-        assert_eq!(imports, ["db_import sona_it as sona_it -- ROTTO", "db_import sona_it as sona_it -- dump finto"], "dopo l'errore torna il dump di sicurezza");
+        let db_ops: Vec<String> = c.host.calls().into_iter().filter(|x| x.starts_with("db_import") || x.contains("_database")).collect();
+        assert_eq!(
+            db_ops,
+            ["db_import sona_it as sona_it -- ROTTO", "drop_database sona_it", "create_database sona_it", "db_import sona_it as sona_it -- dump finto"],
+            "dopo l'errore: database vuoto (niente tabelle rimaste a metà) e poi il dump di sicurezza"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_whole_site_dump_replaces_the_database() {
+        let c = ctx(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        c.host.calls.lock().unwrap().clear();
+        let sql: Pin<Box<dyn AsyncRead + Send>> = Box::pin(std::io::Cursor::new(b"-- phpMyAdmin, solo CREATE TABLE".to_vec()));
+        import_database(&c, site.id, sql, &tmp.path().join("prima.sql.gz"), None, true, &mut JobLog::default()).await.unwrap();
+        let db_ops: Vec<String> = c.host.calls().into_iter().filter(|x| x.starts_with("db_") || x.contains("_database")).map(|x| x.trim_end().to_string()).collect();
+        assert_eq!(db_ops, ["db_dump sona_it", "drop_database sona_it", "create_database sona_it", "db_import sona_it as sona_it -- phpMyAdmin, solo CREATE TABLE"], "prima il dump di sicurezza, poi il database vuoto");
     }
 
     #[tokio::test]

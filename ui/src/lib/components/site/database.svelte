@@ -5,6 +5,7 @@
 	import * as Field from '$lib/components/ui/field';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { Switch } from '$lib/components/ui/switch';
 	import JobLog from '$lib/components/app/job-log.svelte';
 	import { api, errorMessage, formatBytes } from '$lib/api';
 	import { askConfirm } from '$lib/ask.svelte';
@@ -18,6 +19,8 @@
 
 	let db = $state<Overview | null>(null);
 	let importPath = $state('');
+	// Un dump è di solito un sito intero (phpMyAdmin non mette DROP TABLE): si parte da un database vuoto.
+	let replaceAll = $state(true);
 	let replaceFrom = $state('');
 	let replaceTo = $state('');
 	let job = $state<number | null>(null);
@@ -38,7 +41,7 @@
 		e.preventDefault();
 		try {
 			const search_replace = replaceFrom && replaceTo ? { from: replaceFrom, to: replaceTo } : undefined;
-			job = (await api.post<{ job: number }>(`/api/sites/${id}/database/import`, { path: importPath, search_replace })).job;
+			job = (await api.post<{ job: number }>(`/api/sites/${id}/database/import`, { path: importPath, search_replace, replace: replaceAll })).job;
 		} catch (err) {
 			toast.error(errorMessage(err));
 		}
@@ -121,6 +124,15 @@
 							<Input id="from" placeholder="vecchio.it" bind:value={replaceFrom} />
 							<Input placeholder="nuovo.it" bind:value={replaceTo} />
 							<Field.FieldDescription>wp search-replace, rispetta i dati serializzati.</Field.FieldDescription>
+						</Field.Field>
+						<Field.Field orientation="horizontal">
+							<Switch id="replace-all" bind:checked={replaceAll} />
+							<Field.Content>
+								<Field.FieldLabel for="replace-all">Sostituisci tutto il database</Field.FieldLabel>
+								<Field.FieldDescription>
+									{replaceAll ? 'Le tabelle attuali si tolgono prima: serve per un sito intero (export di phpMyAdmin compresi).' : 'Le tabelle del dump si aggiungono a quelle che ci sono; se ne esiste già una, l\'import si ferma.'}
+								</Field.FieldDescription>
+							</Field.Content>
 						</Field.Field>
 						<Button type="submit" class="self-end">Importa</Button>
 					</Field.FieldGroup>

@@ -973,6 +973,13 @@ struct ImportReq {
     /// Percorso di un dump già caricato nella cartella del sito (.sql o .sql.gz).
     path: String,
     search_replace: Option<SearchReplace>,
+    /// Svuota il database prima dell'import (predefinito: un dump è un sito intero).
+    #[serde(default = "yes")]
+    replace: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 async fn database_import<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(r): Json<ImportReq>) -> ApiResult<Response> {
@@ -991,7 +998,7 @@ async fn database_import<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>
             let reader = tokio::io::BufReader::new(tokio::fs::File::from_std(file));
             let sql: std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send>> =
                 if gz { Box::pin(async_compression::tokio::bufread::GzipDecoder::new(reader)) } else { Box::pin(reader) };
-            flows::import_database(&ctx, id, sql, &safety, sr, &mut log).await?;
+            flows::import_database(&ctx, id, sql, &safety, sr, r.replace, &mut log).await?;
             auth.audit(Some(uid), "database.import", Some(id), &detail).await?;
             Ok(log)
         })
