@@ -49,6 +49,6 @@ jobs:
       - name: Immagini
         run: |
           printf 'ALVEARE_SECRET_KEY=x\nMARIADB_ROOT_PASSWORD=x\n' > .env
-          docker compose build
+          docker compose --profile php84 build
       - name: Compose completo con WordPress vero
         run: python3 tests/integration.py

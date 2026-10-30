@@ -145,6 +145,14 @@ def upload_import(http, name, data):
         raw_put(http, f"/api/imports/uploads/{up['id']}/{n}", data[n * up["chunk_size"]:(n + 1) * up["chunk_size"]])
 
 
+def agent_rt(compose, work, runtime, cmd):
+    """Come agent(), ma verso l'agente del container di un runtime PHP aggiuntivo."""
+    php = ("$s=stream_socket_client('unix:///run/alveare/agent-" + runtime + ".sock');"
+           "fwrite($s, $argv[1].\"\\n\"); $r=json_decode(fgets($s), true);"
+           "echo $r['output']; exit($r['ok'] ? 0 : 1);")
+    return sh(*compose, "exec", "-T", "php84", "php", "-r", php, json.dumps(cmd), cwd=work)
+
+
 def wp_home(compose, work, slug):
     return agent(compose, work, {"cmd": "wp", "slug": slug, "args": ["option", "get", "home"]}).strip()
 
@@ -164,7 +172,8 @@ def run_job(http, method, path, body=None):
 
 def main():
     work = tempfile.mkdtemp(prefix="alveare-it-")
-    compose = ["docker", "compose", "-p", PROJECT, "-f", "compose.yml", "-f", "compose.test.yml"]
+    # Profili: worker e runtime PHP 8.4, per provare anche i container opzionali.
+    compose = ["docker", "compose", "-p", PROJECT, "-f", "compose.yml", "-f", "compose.test.yml", "--profile", "workers", "--profile", "php84"]
     try:
         shutil.copy(os.path.join(ROOT, "compose.yml"), work)
         shutil.copytree(os.path.join(ROOT, "templates"), os.path.join(work, "templates"))
@@ -181,6 +190,8 @@ def main():
                 f"RESTIC_REPOSITORY=/srv/backups/repo\n"
                 f"RESTIC_PASSWORD={secrets.token_hex(16)}\n"
                 f"ALVEARE_INSECURE_COOKIE=1\n"
+                f"ALVEARE_PHP_RUNTIMES=8.4\n"
+                f"ALVEARE_METRICS_TOKEN=prometheus-prova\n"
                 f"ALVEARE_CLOUDFLARED_NETWORK={NETWORK}\n"
             )
         sh("docker", "network", "create", NETWORK, check=False)
@@ -203,6 +214,14 @@ def main():
         assert me["stage"] == "full"
         _, tok = http.call("POST", "/api/me/tokens", {"name": "integrazione", "days": 1}, expect=201)
         http.token = tok["token"]
+        # Per i test nel browser (ui/e2e) sullo stesso stack: E2E_CONFIG=<cartella>/e2e.json npm run e2e
+        with open(os.path.join(work, "e2e.json"), "w") as f:
+            json.dump({"url": f"http://{PANEL}:{PORT}", "email": "admin@example.org", "password": "una-password-molto-lunga", "totp_secret": setup["secret"]}, f)
+        if os.environ.get("E2E") == "1":
+            print("test nel browser (Playwright)")
+            # Nell'immagine ufficiale di Playwright: browser giusti su qualunque distribuzione.
+            subprocess.run(["docker", "run", "--rm", "--network", "host", "-v", f"{os.path.join(ROOT, 'ui')}:/ui", "-v", f"{work}/e2e.json:/e2e.json:ro",
+                            "-w", "/ui", "-e", "E2E_CONFIG=/e2e.json", "mcr.microsoft.com/playwright:v1.56.1-noble", "npx", "playwright", "test"], check=True)
 
         print("creazione di due siti WordPress dal template (scarica il core)...")
         a = run_job(http, "POST", "/api/sites", {"domain": "sona.test", "template": "wordpress", "title": "Sona d'Arco"})
@@ -389,6 +408,106 @@ def main():
         status, html = page("importato.test")
         assert status == 200 and "Upupa" in html and "importato.test" in html, html[:500]
         assert wp_home(compose, work, "importato_test") == "https://importato.test"
+
+
+        print("restore di un percorso e su nuovo dominio")
+        run_job(http, "POST", f"/api/sites/{site_b}/backups")
+        _, backups = http.call("GET", f"/api/sites/{site_b}/backups", expect=200)
+        snap = backups["runs"][0]["snapshot_id"]
+        _, listing = http.call("GET", f"/api/sites/{site_b}/backups/{snap[:12]}/files?path=public/wp-content", expect=200)
+        assert any(e["name"] == "themes" and e["is_dir"] for e in listing), listing
+        agent(compose, work, {"cmd": "wp", "slug": "upupa_test", "args": ["eval", "file_put_contents(ABSPATH . 'wp-content/themes/index.php', 'rovinato');"]})
+        run_job(http, "POST", f"/api/sites/{site_b}/backups/{snap[:12]}/restore", {"mode": "path", "path": "public/wp-content/themes/index.php"})
+        restored = sh(*compose, "exec", "-T", "php", "cat", "/srv/sites/upupa_test/public/wp-content/themes/index.php", cwd=work)
+        assert "rovinato" not in restored, restored
+        verify = run_job(http, "POST", f"/api/sites/{site_b}/backups/{snap[:12]}/restore", {"mode": "new_domain", "domain": "verifica.test"})
+        _, vdetail = http.call("GET", f"/api/sites/{verify['site_id']}", expect=200)
+        status, html = page("verifica.test", auth=(vdetail["staging"]["user"], vdetail["staging"]["password"]))
+        assert status == 200 and "verifica.test" in html, html[:300]
+
+        print("file manager: comprimi ed estrai")
+        ops = f"/api/sites/{site_b}/files/ops"
+        http.call("POST", ops, {"op": "compress", "paths": ["public/wp-content/themes"], "to": "temi.zip"}, expect=200)
+        http.call("POST", ops, {"op": "extract", "path": "temi.zip", "to": "estratti"}, expect=200)
+        _, listing = http.call("GET", f"/api/sites/{site_b}/files?path=estratti/themes", expect=200)
+        assert listing, "estrazione vuota"
+        owner = sh(*compose, "exec", "-T", "php", "stat", "-c", "%U", "/srv/sites/upupa_test/estratti/themes", cwd=work).strip()
+        assert owner == "upupa_test", f"proprietario {owner}"
+
+        print("log: ricerca, errori raggruppati")
+        page("upupa.test", "/pagina-che-non-esiste/")
+        found = wait("richiesta nel log", lambda: http.call("GET", f"/api/sites/{site_b}/logs/access?q=pagina-che-non-esiste", expect=200)[1]["entries"], timeout=30)
+        assert found[-1]["status"] == 404, found
+        http.call("GET", f"/api/sites/{site_b}/logs/php-error/groups", expect=200)
+
+        print("override: PHP extra, Caddy del sito, rifiuti")
+        http.call("PUT", f"/api/sites/{site_b}/config/php", {"content": "php_value[max_input_vars] = 4321"}, expect=200)
+        sh(*compose, "exec", "-T", "php", "grep", "-q", "max_input_vars", "/srv/php/pools/upupa_test.conf", cwd=work)
+        status, _ = http.call("PUT", f"/api/sites/{site_b}/config/php", {"content": "php_admin_value[open_basedir] = /"})
+        assert status == 400
+        http.call("PUT", f"/api/sites/{site_b}/config/caddy", {"content": "header X-Alveare-Prova si"}, expect=200)
+        _, _, hdrs = page("upupa.test", headers=True)
+        assert hdrs["X-Alveare-Prova"] == "si", dict(hdrs)
+        status, body = http.call("PUT", f"/api/sites/{site_b}/config/caddy", {"content": "root * /etc"})
+        assert status == 400 and "/etc" in body["error"], body
+        status, body = http.call("PUT", f"/api/sites/{site_b}/config/caddy", {"content": "header {"})
+        assert status == 400, body
+        assert page("upupa.test")[0] == 200, "un override rifiutato non deve rompere il sito"
+        http.call("PUT", "/api/config/php", {"content": "max_execution_time = 77"}, expect=200)
+
+        print("blocco IP")
+        _, blk = http.call("POST", f"/api/sites/{site_b}/blocks", {"ip": VISITOR_IP, "duration": "1h", "scope": "site"}, expect=201)
+        assert page("upupa.test")[0] == 403
+        http.call("DELETE", f"/api/blocks/{blk['id']}", expect=200)
+        assert page("upupa.test")[0] == 200
+
+        print("cron personalizzati e aggiornamenti WordPress")
+        _, c1 = http.call("POST", f"/api/sites/{site_b}/cron", {"expression": "0 3 * * *", "kind": "wp", "command": "option get blogname"}, expect=201)
+        run_job(http, "POST", f"/api/sites/{site_b}/cron/{c1['id']}/run")
+        _, c2 = http.call("POST", f"/api/sites/{site_b}/cron", {"expression": "0 3 * * *", "kind": "http", "command": "https://upupa.test/"}, expect=201)
+        run_job(http, "POST", f"/api/sites/{site_b}/cron/{c2['id']}/run")
+        _, wpst = http.call("GET", f"/api/sites/{site_b}/wordpress", expect=200)
+        assert wpst["status"]["core"].startswith("6."), wpst
+        assert any(p["name"] == "redis-cache" for p in wpst["status"]["plugins"]), wpst
+        run_job(http, "POST", f"/api/sites/{site_b}/wordpress/update", {"plugins": {"names": ["redis-cache"]}})
+        run_job(http, "POST", f"/api/sites/{site_b}/wp", {"args": ["option", "get", "blogname"]})
+
+        print("PHP 8.4: il sito passa al runtime aggiuntivo e torna")
+        http.call("PATCH", f"/api/sites/{site_b}", {"php_version": "8.4"}, expect=200)
+        wait("sito su PHP 8.4", lambda: page("upupa.test")[0] == 200, timeout=60)
+        version = agent_rt(compose, work, "8.4", {"cmd": "wp", "slug": "upupa_test", "args": ["eval", "echo PHP_VERSION;"]})
+        assert version.startswith("8.4"), version
+        http.call("PATCH", f"/api/sites/{site_b}", {"php_version": "8.5"}, expect=200)
+        wait("sito di nuovo su 8.5", lambda: page("upupa.test")[0] == 200, timeout=60)
+
+        print("worker supervisionati in php-workers")
+        lar = run_job(http, "POST", "/api/sites", {"domain": "app.test", "template": "laravel", "title": "App"})
+        app_id = lar["site_id"]
+        assert "APP_KEY='base64:" in sh(*compose, "exec", "-T", "panel", "cat", "/srv/sites/app_test/.env", cwd=work)
+        raw_put(http, f"/api/sites/{app_id}/files/content?path=worker.php", b"<?php while (true) { echo date('c'), \" vivo\\n\"; sleep(1); }")
+        http.call("POST", f"/api/sites/{app_id}/workers", {"name": "prova", "command": "php worker.php", "processes": 2, "memory_mb": 64}, expect=201)
+
+        def running():
+            _, w = http.call("GET", f"/api/sites/{app_id}/workers", expect=200)
+            procs = w["workers"][0]["processes"]
+            return len(procs) == 2 and all(p["pid"] for p in procs)
+
+        wait("worker in esecuzione", running, timeout=60)
+        wlog = sh(*compose, "exec", "-T", "php-workers", "cat", "/srv/logs/app_test/worker-prova.log", cwd=work)
+        assert "vivo" in wlog, wlog
+        _, w = http.call("GET", f"/api/sites/{app_id}/workers", expect=200)
+        for proc in w["workers"][0]["processes"]:
+            user = sh(*compose, "exec", "-T", "php-workers", "stat", "-c", "%U", f"/proc/{proc['pid']}", cwd=work).strip()
+            assert user == "app_test", f"worker con l'utente {user!r}"
+        _, key = http.call("POST", f"/api/sites/{app_id}/deploy/key", expect=200)
+        assert key["public_key"].startswith("ssh-ed25519 "), key
+
+        print("monitoraggio e metriche")
+        _, mon = http.call("GET", f"/api/sites/{site_b}/monitor", expect=200)
+        req_ = urllib.request.Request(f"http://127.0.0.1:{PORT}/metrics", headers={"Host": PANEL, "Authorization": "Bearer prometheus-prova"})
+        with urllib.request.urlopen(req_, timeout=30) as r:
+            metrics_text = r.read().decode()
+        assert "alveare_open_alerts" in metrics_text and "caddy_http_requests_total" in metrics_text, metrics_text[:500]
 
         kit = raw_get(http, "/api/admin/recovery-kit").decode()
         assert "RESTIC_PASSWORD=" in kit and "ALVEARE_SECRET_KEY=" in kit
