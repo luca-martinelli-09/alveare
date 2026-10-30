@@ -27,7 +27,7 @@ jobs:
       channel: ${{ steps.v.outputs.channel }}
       registry: ${{ steps.v.outputs.registry }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: v
         run: |
           echo "registry=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/alveare" >> "$GITHUB_OUTPUT"
@@ -54,10 +54,10 @@ jobs:
           # Runtime aggiuntivo (servizio php84 del compose).
           - { image: php, suffix: "-8.4", php: "8.4" }
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -74,7 +74,7 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
       # Mai `latest`: il pannello si aggiorna scegliendo una versione (o il canale dev).
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/${{ matrix.image }}/Dockerfile
@@ -101,7 +101,7 @@ jobs:
     env:
       ALVEARE_BUILD: ${{ needs.meta.outputs.build }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p alveare --target ${{ matrix.target }}
@@ -110,7 +110,7 @@ jobs:
           mkdir dist
           cp target/${{ matrix.target }}/release/${{ matrix.file }} dist/
           cd dist && tar czf "../alveare-$ALVEARE_BUILD-${{ matrix.target }}.tar.gz" ${{ matrix.file }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cli-${{ matrix.target }}
           path: alveare-*.tar.gz
@@ -123,8 +123,8 @@ jobs:
       BUILD: ${{ needs.meta.outputs.build }}
       REGISTRY: ${{ needs.meta.outputs.registry }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: cli-*
           merge-multiple: true
