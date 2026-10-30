@@ -1,6 +1,5 @@
 <script lang="ts">
 	// Override versionato (PHP o Caddy): editor, salvataggio validato dal pannello, storico con diff e ripristino.
-	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Table from '$lib/components/ui/table';
 	import * as Alert from '$lib/components/ui/alert';
@@ -21,6 +20,10 @@
 	let busy = $state(false);
 	let comparing = $state<Version | null>(null);
 	let loaded = $state(false);
+	let editing = $state(false);
+	let showHistory = $state(false);
+	const lines = $derived(saved.split('\n').filter((l, i, all) => l.trim() || i < all.length - 1));
+	const preview = $derived(lines.slice(0, 4).join('\n'));
 
 	async function load() {
 		const cur = await api.get<{ content: string; version: number }>(base);
@@ -42,6 +45,7 @@
 			await api.put(base, body);
 			toast.success(done);
 			comparing = null;
+			editing = false;
 			await load();
 		} catch (e) {
 			error = errorMessage(e);
@@ -51,21 +55,47 @@
 	}
 </script>
 
-<Card.Root>
-	<Card.Header>
-		<Card.Title>{title}</Card.Title>
-		<Card.Description>{description}</Card.Description>
-	</Card.Header>
-	<Card.Content class="flex flex-col gap-3">
-		{#if error}
-			<Alert.Root variant="destructive"><Alert.Description class="whitespace-pre-wrap">{error}</Alert.Description></Alert.Root>
+<div class="flex flex-col gap-3 px-4 py-3.5">
+	<div class="flex flex-wrap items-center gap-x-6 gap-y-3">
+		<div class="min-w-0 flex-[1_1_18rem]">
+			<p class="font-medium">{title}</p>
+			<p class="text-muted-foreground mt-0.5 text-sm">
+				{description}
+				{#if loaded}
+					{saved.trim() ? ` ${lines.length} ${lines.length === 1 ? 'riga' : 'righe'} · v${version}.` : ' Niente di personalizzato.'}
+					{#if history.length > 1}
+						<button type="button" class="hover:text-foreground underline underline-offset-2" onclick={() => (showHistory = !showHistory)}>
+							{showHistory ? 'Nascondi le versioni' : `${history.length} versioni`}
+						</button>
+					{/if}
+				{/if}
+			</p>
+		</div>
+		{#if loaded && !editing}
+			<Button size="sm" onclick={() => ((content = saved), (editing = true))}>{saved.trim() ? 'Modifica' : 'Aggiungi'}</Button>
 		{/if}
-		{#if loaded}
-			{#key version}
-				<CodeEditor bind:value={content} {filename} />
-			{/key}
-		{/if}
-		{#if history.length}
+	</div>
+	{#if error}
+		<Alert.Root variant="destructive"><Alert.Description class="whitespace-pre-wrap">{error}</Alert.Description></Alert.Root>
+	{/if}
+	{#if editing}
+		{#key version}
+			<CodeEditor bind:value={content} {filename} class="max-h-96 min-h-28" />
+		{/key}
+		<div class="flex justify-end gap-2">
+			<Button variant="ghost" size="sm" onclick={() => ((editing = false), (error = ''), (content = saved))}>Annulla</Button>
+			{#if content !== saved}
+				<Button variant="primary" size="sm" disabled={busy} onclick={() => put({ content }, 'Salvato e applicato')}>
+					{#if busy}<Spinner data-icon="inline-start" />{/if}
+					Valida e applica
+				</Button>
+			{/if}
+		</div>
+	{:else if saved.trim()}
+		<pre class="bg-muted/60 text-foreground/80 overflow-hidden rounded-md border px-3 py-2 font-mono text-xs leading-relaxed">{preview}{lines.length > 4 ? `\n… altre ${lines.length - 4} righe` : ''}</pre>
+	{/if}
+	{#if showHistory}
+		<div class="rounded-md border">
 			<Table.Root>
 				<Table.Body>
 					{#each history as v (v.id)}
@@ -75,22 +105,16 @@
 							<Table.Cell class="text-right">
 								{#if v.version !== version}
 									<Button variant="ghost" size="sm" onclick={() => (comparing = v)}>Confronta</Button>
-									<Button variant="outline" size="sm" disabled={busy} onclick={() => put({ restore: v.version }, `Versione ${v.version} ripristinata`)}>Ripristina</Button>
+									<Button size="sm" disabled={busy} onclick={() => put({ restore: v.version }, `Versione ${v.version} ripristinata`)}>Ripristina</Button>
 								{/if}
 							</Table.Cell>
 						</Table.Row>
 					{/each}
 				</Table.Body>
 			</Table.Root>
-		{/if}
-	</Card.Content>
-	<Card.Footer>
-		<Button disabled={busy || content === saved} onclick={() => put({ content }, 'Override salvato e applicato')}>
-			{#if busy}<Spinner data-icon="inline-start" />{/if}
-			Valida e applica
-		</Button>
-	</Card.Footer>
-</Card.Root>
+		</div>
+	{/if}
+</div>
 
 <Dialog.Root open={comparing !== null} onOpenChange={(o) => !o && (comparing = null)}>
 	<Dialog.Content class="sm:max-w-3xl">

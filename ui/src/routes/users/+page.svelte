@@ -85,7 +85,7 @@
 	<Dialog.Root bind:open={() => creating, (o) => ((creating = o), o || (created = null))}>
 		<Dialog.Trigger>
 			{#snippet child({ props })}
-				<Button {...props}><PlusIcon data-icon="inline-start" /> Nuovo utente</Button>
+				<Button variant="primary" {...props}><PlusIcon data-icon="inline-start" /> Nuovo utente</Button>
 			{/snippet}
 		</Dialog.Trigger>
 		<Dialog.Content>
@@ -127,7 +127,7 @@
 							<Checkbox id="admin" bind:checked={isAdmin} />
 							<Field.FieldLabel for="admin">Amministratore (tutti i siti e le impostazioni)</Field.FieldLabel>
 						</Field.Field>
-						<Button type="submit">Crea</Button>
+						<Button variant="primary" type="submit">Crea</Button>
 					</Field.FieldGroup>
 				</form>
 			{/if}

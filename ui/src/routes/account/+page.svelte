@@ -1,7 +1,7 @@
 <script lang="ts">
 	import PageHeader from '$lib/components/app/page-header.svelte';
-	import * as Card from '$lib/components/ui/card';
-	import * as Field from '$lib/components/ui/field';
+	import SettingsSection from '$lib/components/app/settings-section.svelte';
+	import SettingRow from '$lib/components/app/setting-row.svelte';
 	import * as Alert from '$lib/components/ui/alert';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -29,50 +29,29 @@
 </script>
 
 <PageHeader title="Account" description="Password, secondo fattore, passkey, sessioni e token API." />
-<div class="grid gap-4 md:grid-cols-2">
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>Token API</Card.Title>
-			<Card.Description>Per script e per la CLI alveare: hanno i tuoi stessi permessi.</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-4">
-			{#if token}
-				<Alert.Root>
-					<Alert.Title>Copia il token adesso</Alert.Title>
-					<Alert.Description><code class="break-all">{token}</code></Alert.Description>
-				</Alert.Root>
-			{/if}
-			<form onsubmit={createToken}>
-				<Field.FieldGroup>
-					<Field.Field>
-						<Field.FieldLabel for="tname">Nome</Field.FieldLabel>
-						<Input id="tname" placeholder="backup del portatile" bind:value={name} required />
-					</Field.Field>
-					<Field.Field>
-						<Field.FieldLabel for="days">Validità (giorni)</Field.FieldLabel>
-						<Input id="days" type="number" min={1} max={365} bind:value={days} />
-					</Field.Field>
-					<Button type="submit">Crea token</Button>
-				</Field.FieldGroup>
-			</form>
-		</Card.Content>
-	</Card.Root>
-	{#if session.user?.is_admin}
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>Kit di ripristino</Card.Title>
-				<Card.Description>
-					Chiavi e istruzioni per ricostruire il server da zero. Conservalo fuori dal server, per esempio nel
-					password manager; riscaricalo quando una chiave cambia.
-				</Card.Description>
-			</Card.Header>
-			<Card.Footer>
-				<Button href="/api/admin/recovery-kit" variant="outline">
-					<DownloadIcon data-icon="inline-start" />
-					Scarica il kit
-				</Button>
-			</Card.Footer>
-		</Card.Root>
+<SettingsSection title="Token API" description="Per script e per la CLI alveare: hanno i tuoi stessi permessi.">
+	{#if token}
+		<div class="px-4 py-3">
+			<Alert.Root>
+				<Alert.Title>Copia il token adesso: non verrà più mostrato</Alert.Title>
+				<Alert.Description><code class="break-all select-all">{token}</code></Alert.Description>
+			</Alert.Root>
+		</div>
 	{/if}
-	<SecurityCards {refresh} />
-</div>
+	<SettingRow label="Nuovo token" labelFor="tname" help="Un nome per riconoscerlo e quanti giorni vale.">
+		<form class="flex flex-wrap items-center gap-2" onsubmit={createToken}>
+			<Input id="tname" class="w-52" placeholder="backup del portatile" bind:value={name} required />
+			<Input id="days" type="number" min={1} max={365} class="w-20 text-right" aria-label="Validità in giorni" bind:value={days} />
+			<span class="text-muted-foreground text-sm">giorni</span>
+			<Button type="submit" size="sm">Crea token</Button>
+		</form>
+	</SettingRow>
+</SettingsSection>
+<SecurityCards {refresh} />
+{#if session.user?.is_admin}
+	<SettingsSection title="Kit di ripristino">
+		<SettingRow label="Chiavi e istruzioni per ricostruire il server" help="Conservalo fuori dal server, per esempio nel password manager; riscaricalo quando una chiave cambia.">
+			<Button href="/api/admin/recovery-kit" size="sm"><DownloadIcon data-icon="inline-start" /> Scarica il kit</Button>
+		</SettingRow>
+	</SettingsSection>
+{/if}

@@ -81,7 +81,7 @@
 						<Field.FieldLabel for="clone-domain">Nuovo dominio</Field.FieldLabel>
 						<Input id="clone-domain" placeholder="prove.esempio.it" bind:value={cloneDomain} required />
 					</Field.Field>
-					<Dialog.Footer><Button type="submit">Clona</Button></Dialog.Footer>
+					<Dialog.Footer><Button variant="primary" type="submit">Clona</Button></Dialog.Footer>
 				</Field.FieldGroup>
 			</form>
 		{:else if form === 'template'}
@@ -100,7 +100,7 @@
 						<Field.FieldLabel for="tpl-title">Nome mostrato</Field.FieldLabel>
 						<Input id="tpl-title" bind:value={tplTitle} required />
 					</Field.Field>
-					<Dialog.Footer><Button type="submit">Salva</Button></Dialog.Footer>
+					<Dialog.Footer><Button variant="primary" type="submit">Salva</Button></Dialog.Footer>
 				</Field.FieldGroup>
 			</form>
 		{/if}

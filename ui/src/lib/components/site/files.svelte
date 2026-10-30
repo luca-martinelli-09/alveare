@@ -1,4 +1,9 @@
 <script lang="ts">
+	import Maximize2Icon from '@lucide/svelte/icons/maximize-2';
+	import Minimize2Icon from '@lucide/svelte/icons/minimize-2';
+	import * as Breadcrumb from '$lib/components/ui/breadcrumb';
+	import HouseIcon from '@lucide/svelte/icons/house';
+	import { askConfirm, askText } from '$lib/ask.svelte';
 	import * as Table from '$lib/components/ui/table';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -20,7 +25,8 @@
 
 	let path = $state('');
 	let entries = $state<Entry[]>([]);
-	let editing = $state<{ path: string; content: string } | null>(null);
+	let editing = $state<{ path: string; content: string; original: string } | null>(null);
+	let fullscreen = $state(false);
 	let saving = $state(false);
 	let progress = $state<number | null>(null);
 	let picker: HTMLInputElement;
@@ -48,7 +54,7 @@
 		}
 		try {
 			const r = await api.get<{ content: string }>(`${base}/files/content?path=${encodeURIComponent(join(e.name))}`);
-			editing = { path: join(e.name), content: r.content };
+			editing = { path: join(e.name), content: r.content, original: r.content };
 		} catch (err) {
 			toast.error(errorMessage(err));
 		}
@@ -78,30 +84,30 @@
 		}
 	}
 
-	function rename(e: Entry) {
-		const to = prompt('Nuovo nome o percorso', join(e.name));
+	async function rename(e: Entry) {
+		const to = await askText({ title: `Rinomina ${e.name}`, label: 'Nuovo nome o percorso', value: join(e.name), mono: true, confirmLabel: 'Rinomina' });
 		if (to && to !== join(e.name)) op({ op: 'rename', path: join(e.name), to });
 	}
 
-	function mkdir() {
-		const name = prompt('Nome della cartella');
+	async function mkdir() {
+		const name = await askText({ title: 'Nuova cartella', description: path ? `Dentro ${path}` : 'Nella radice del sito', label: 'Nome della cartella', confirmLabel: 'Crea' });
 		if (name) op({ op: 'mkdir', path: join(name) });
 	}
 
 	const isArchive = (name: string) => /\.(zip|tar\.gz|tgz)$/i.test(name);
 
-	function extract(e: Entry) {
-		const to = prompt('Estrai nella cartella', path);
+	async function extract(e: Entry) {
+		const to = await askText({ title: `Estrai ${e.name}`, description: 'Vuota = radice del sito. I file con lo stesso nome vengono sovrascritti.', label: 'Cartella di destinazione', value: path, mono: true, allowEmpty: true, confirmLabel: 'Estrai' });
 		if (to !== null) op({ op: 'extract', path: join(e.name), to });
 	}
 
-	function compress(e: Entry) {
-		const to = prompt('Nome dell\'archivio (.zip o .tar.gz)', join(`${e.name}.zip`));
+	async function compress(e: Entry) {
+		const to = await askText({ title: `Comprimi ${e.name}`, label: "Nome dell'archivio (.zip o .tar.gz)", value: join(`${e.name}.zip`), mono: true, confirmLabel: 'Comprimi' });
 		if (to) op({ op: 'compress', paths: [join(e.name)], to });
 	}
 
-	function chmod(e: Entry) {
-		const mode = prompt('Permessi (ottale)', (e.mode & 0o777).toString(8));
+	async function chmod(e: Entry) {
+		const mode = await askText({ title: `Permessi di ${e.name}`, description: 'In ottale, per esempio 644 per i file e 755 per le cartelle.', label: 'Permessi', value: (e.mode & 0o777).toString(8), mono: true, confirmLabel: 'Applica' });
 		if (mode) op({ op: 'chmod', path: join(e.name), mode: parseInt(mode, 8) });
 	}
 
@@ -123,13 +129,29 @@
 
 <div class="flex flex-col gap-4 pt-4">
 	<div class="flex flex-wrap items-center gap-2">
-		<Button variant="ghost" size="sm" onclick={() => (path = '')}>{'/'}</Button>
-		{#each crumbs as crumb, i (i)}
-			<span class="text-muted-foreground">/</span>
-			<Button variant="ghost" size="sm" onclick={() => (path = crumbs.slice(0, i + 1).join('/'))}>{crumb}</Button>
-		{/each}
+		<Breadcrumb.Root>
+			<Breadcrumb.List class="gap-1 sm:gap-1">
+				<Breadcrumb.Item>
+					{#if crumbs.length}
+						<button type="button" class="hover:text-foreground flex items-center rounded p-1" aria-label="Radice del sito" onclick={() => (path = '')}><HouseIcon class="size-4" /></button>
+					{:else}
+						<span class="text-foreground flex items-center p-1" aria-current="page"><HouseIcon class="size-4" /><span class="sr-only">Radice del sito</span></span>
+					{/if}
+				</Breadcrumb.Item>
+				{#each crumbs as crumb, i (i)}
+					<Breadcrumb.Separator />
+					<Breadcrumb.Item>
+						{#if i === crumbs.length - 1}
+							<Breadcrumb.Page class="font-mono text-[13px]">{crumb}</Breadcrumb.Page>
+						{:else}
+							<button type="button" class="hover:text-foreground font-mono text-[13px]" onclick={() => (path = crumbs.slice(0, i + 1).join('/'))}>{crumb}</button>
+						{/if}
+					</Breadcrumb.Item>
+				{/each}
+			</Breadcrumb.List>
+		</Breadcrumb.Root>
 		<div class="ml-auto flex gap-2">
-			<Button variant="outline" size="sm" onclick={mkdir}>
+			<Button size="sm" onclick={mkdir}>
 				<FolderPlusIcon data-icon="inline-start" />
 				Cartella
 			</Button>
@@ -186,7 +208,7 @@
 									<DropdownMenu.Item onclick={() => compress(e)}>Comprimi</DropdownMenu.Item>
 									<DropdownMenu.Item onclick={() => rename(e)}>Rinomina o sposta</DropdownMenu.Item>
 									<DropdownMenu.Item onclick={() => chmod(e)}>Permessi</DropdownMenu.Item>
-									<DropdownMenu.Item variant="destructive" onclick={() => confirm(`Spostare ${e.name} nel cestino?`) && op({ op: 'delete', path: join(e.name) })}>
+									<DropdownMenu.Item variant="destructive" onclick={async () => (await askConfirm({ title: `Spostare ${e.name} nel cestino?`, description: 'Resta recuperabile per 7 giorni.', confirmLabel: 'Sposta nel cestino', destructive: true })) && op({ op: 'delete', path: join(e.name) })}>
 										Elimina
 									</DropdownMenu.Item>
 								</DropdownMenu.Group>
@@ -199,19 +221,25 @@
 	</Table.Root>
 </div>
 
-<Dialog.Root open={editing !== null} onOpenChange={(o) => !o && (editing = null)}>
-	<Dialog.Content class="sm:max-w-5xl">
-		<Dialog.Header>
-			<Dialog.Title>{editing?.path}</Dialog.Title>
+<Dialog.Root open={editing !== null} onOpenChange={(o) => !o && ((editing = null), (fullscreen = false))}>
+	<Dialog.Content class={fullscreen ? 'flex h-svh max-h-svh w-screen max-w-none flex-col rounded-none sm:max-w-none' : 'sm:max-w-5xl'}>
+		<Dialog.Header class="flex-row items-center gap-2 pr-8">
+			<Dialog.Title class="min-w-0 flex-1 truncate font-mono text-sm">{editing?.path}</Dialog.Title>
+			<Button variant="ghost" size="icon-sm" aria-label={fullscreen ? 'Riduci' : 'Tutto schermo'} title={fullscreen ? 'Riduci' : 'Tutto schermo'} onclick={() => (fullscreen = !fullscreen)}>
+				{#if fullscreen}<Minimize2Icon />{:else}<Maximize2Icon />{/if}
+			</Button>
 		</Dialog.Header>
 		{#if editing}
-			<CodeEditor bind:value={editing.content} filename={editing.path} />
+			<CodeEditor bind:value={editing.content} filename={editing.path} class={fullscreen ? 'min-h-0 flex-1' : 'h-[60vh]'} />
 		{/if}
 		<Dialog.Footer>
-			<Button onclick={save} disabled={saving}>
-				{#if saving}<Spinner data-icon="inline-start" />{/if}
-				Salva
-			</Button>
+			<Button variant="ghost" onclick={() => ((editing = null), (fullscreen = false))}>{editing && editing.content !== editing.original ? 'Annulla' : 'Chiudi'}</Button>
+			{#if editing && editing.content !== editing.original}
+				<Button variant="primary" onclick={save} disabled={saving}>
+					{#if saving}<Spinner data-icon="inline-start" />{/if}
+					Salva
+				</Button>
+			{/if}
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

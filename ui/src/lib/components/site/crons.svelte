@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { askConfirm } from '$lib/ask.svelte';
 	// Cron personalizzati: WP-CLI, artisan, script PHP del sito o una pagina del sito.
 	import * as Card from '$lib/components/ui/card';
 	import * as Table from '$lib/components/ui/table';
@@ -96,7 +97,7 @@
 												<DropdownMenu.Item onclick={() => act(() => api.patch(`/api/sites/${id}/cron/${cron.id}`, { active: !cron.active }))}>
 													{cron.active ? 'Metti in pausa' : 'Riattiva'}
 												</DropdownMenu.Item>
-												<DropdownMenu.Item variant="destructive" onclick={() => confirm('Eliminare il cron?') && act(() => api.del(`/api/sites/${id}/cron/${cron.id}`))}>Elimina</DropdownMenu.Item>
+												<DropdownMenu.Item variant="destructive" onclick={async () => (await askConfirm({ title: 'Eliminare il cron?', confirmLabel: 'Elimina', destructive: true })) && act(() => api.del(`/api/sites/${id}/cron/${cron.id}`))}>Elimina</DropdownMenu.Item>
 											{/if}
 										</DropdownMenu.Group>
 									</DropdownMenu.Content>
@@ -146,7 +147,7 @@
 					<Field.FieldLabel for="cron-timeout">Timeout (secondi)</Field.FieldLabel>
 					<Input id="cron-timeout" type="number" min="1" max="3600" bind:value={form.timeout_s} />
 				</Field.Field>
-				<Dialog.Footer><Button type="submit">Crea</Button></Dialog.Footer>
+				<Dialog.Footer><Button variant="primary" type="submit">Crea</Button></Dialog.Footer>
 			</Field.FieldGroup>
 		</form>
 	</Dialog.Content>

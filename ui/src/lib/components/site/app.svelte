@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { askConfirm } from '$lib/ask.svelte';
 	// App (Laravel e simili): deploy da git e worker long-running.
 	import * as Card from '$lib/components/ui/card';
 	import * as Table from '$lib/components/ui/table';
@@ -118,7 +119,7 @@
 							<Table.Cell class="text-right whitespace-nowrap">
 								<Button variant="ghost" size="sm" onclick={() => act(() => api.post(`/api/sites/${id}/workers/${w.id}/restart`), 'Riavviato')}>Riavvia</Button>
 								<Button variant="ghost" size="sm" onclick={() => act(() => api.patch(`/api/sites/${id}/workers/${w.id}`, { active: !w.active }))}>{w.active ? 'Ferma' : 'Avvia'}</Button>
-								<Button variant="ghost" size="sm" onclick={() => confirm(`Eliminare ${w.name}?`) && act(() => api.del(`/api/sites/${id}/workers/${w.id}`))}>Elimina</Button>
+								<Button variant="ghost" size="sm" onclick={async () => (await askConfirm({ title: `Eliminare il worker ${w.name}?`, description: 'Il processo viene fermato.', confirmLabel: 'Elimina', destructive: true })) && act(() => api.del(`/api/sites/${id}/workers/${w.id}`))}>Elimina</Button>
 							</Table.Cell>
 						</Table.Row>
 					{:else}
@@ -155,7 +156,7 @@
 						<Input id="w-mem" type="number" min="32" max="4096" bind:value={form.memory_mb} />
 					</Field.Field>
 				</div>
-				<Dialog.Footer><Button type="submit">Avvia</Button></Dialog.Footer>
+				<Dialog.Footer><Button variant="primary" type="submit">Avvia</Button></Dialog.Footer>
 			</Field.FieldGroup>
 		</form>
 	</Dialog.Content>

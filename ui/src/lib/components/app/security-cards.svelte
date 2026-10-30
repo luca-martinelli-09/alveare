@@ -1,7 +1,8 @@
 <script lang="ts">
+	import { askConfirm, askText } from '$lib/ask.svelte';
 	// Profilo: passkey, sessioni aperte e token API, con revoca.
-	import * as Card from '$lib/components/ui/card';
-	import * as Table from '$lib/components/ui/table';
+	import SettingsSection from './settings-section.svelte';
+	import SettingRow from './setting-row.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { api, errorMessage } from '$lib/api';
@@ -37,87 +38,59 @@
 
 	const addPasskey = () =>
 		act(async () => {
-			const name = prompt('Nome della passkey', 'Portatile');
+			const name = await askText({ title: 'Nuova passkey', description: 'Poi il browser chiede impronta, volto o PIN.', label: 'Nome del dispositivo', value: 'Portatile', confirmLabel: 'Continua' });
 			if (!name) return;
 			const start = await api.post<{ id: string; options: unknown }>('/api/me/passkeys/register/start');
 			const credential = await createPasskey(start.options);
 			await api.post('/api/me/passkeys/register/finish', { id: start.id, name, credential });
 		}, 'Passkey aggiunta');
 
+	// "Firefox su Linux" invece dell'user agent intero.
+	function device(ua: string) {
+		if (!ua) return 'Dispositivo sconosciuto';
+		const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : ua.split(/[\/ ]/)[0];
+		const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Mac OS X/.test(ua) ? 'macOS' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : '';
+		return os ? `${browser} su ${os}` : browser;
+	}
+
 	const when = (t: number | null) => (t ? new Date(t * 1000).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' }) : '–');
 </script>
 
-<Card.Root>
-	<Card.Header>
-		<Card.Title>Passkey</Card.Title>
-		<Card.Description>Accesso senza password: impronta, volto o PIN del dispositivo valgono come secondo fattore.</Card.Description>
-	</Card.Header>
-	<Card.Content>
-		<Table.Root>
-			<Table.Body>
-				{#each passkeys.passkeys as p (p.id)}
-					<Table.Row>
-						<Table.Cell>{p.name}</Table.Cell>
-						<Table.Cell class="text-muted-foreground">usata: {when(p.last_used)}</Table.Cell>
-						<Table.Cell class="text-right">
-							<Button variant="outline" size="sm" onclick={() => confirm(`Togliere ${p.name}?`) && act(() => api.del(`/api/me/passkeys/${p.id}`))}>Togli</Button>
-						</Table.Cell>
-					</Table.Row>
-				{:else}
-					<Table.Row><Table.Cell class="text-muted-foreground">Nessuna passkey.</Table.Cell></Table.Row>
-				{/each}
-			</Table.Body>
-		</Table.Root>
-	</Card.Content>
-	<Card.Footer>
-		<Button disabled={!passkeys.enabled || !passkeysSupported()} onclick={addPasskey}>Aggiungi una passkey</Button>
-	</Card.Footer>
-</Card.Root>
+<SettingsSection title="Passkey" description="Accesso senza password: impronta, volto o PIN del dispositivo valgono come secondo fattore.">
+	{#each passkeys.passkeys as p (p.id)}
+		<SettingRow label={p.name} help={`Usata ${when(p.last_used)}`}>
+			<Button size="sm" onclick={async () => (await askConfirm({ title: `Togliere la passkey ${p.name}?`, description: 'Da quel dispositivo servirà di nuovo password e codice.', confirmLabel: 'Togli', destructive: true })) && act(() => api.del(`/api/me/passkeys/${p.id}`))}>Togli</Button>
+		</SettingRow>
+	{/each}
+	<SettingRow
+		label={passkeys.passkeys.length ? 'Aggiungi un altro dispositivo' : 'Nessuna passkey'}
+		help={!passkeys.enabled ? 'Le passkey richiedono ALVEARE_PANEL_URL.' : !passkeysSupported() ? 'Questo browser non supporta le passkey.' : 'Un dispositivo alla volta: telefono, portatile, chiave di sicurezza.'}
+	>
+		<Button size="sm" disabled={!passkeys.enabled || !passkeysSupported()} onclick={addPasskey}>Aggiungi una passkey</Button>
+	</SettingRow>
+</SettingsSection>
 
-<Card.Root>
-	<Card.Header>
-		<Card.Title>Sessioni aperte</Card.Title>
-		<Card.Description>Scadono dopo 12 ore senza attività.</Card.Description>
-	</Card.Header>
-	<Card.Content>
-		<Table.Root>
-			<Table.Body>
-				{#each sessions as s (s.id)}
-					<Table.Row>
-						<Table.Cell class="max-w-48 truncate" title={s.user_agent}>{s.user_agent || 'sconosciuto'}</Table.Cell>
-						<Table.Cell><code>{s.ip}</code></Table.Cell>
-						<Table.Cell class="text-muted-foreground">{when(s.last_used)}</Table.Cell>
-						<Table.Cell class="text-right">
-							{#if s.current}<Badge variant="secondary">questa</Badge>
-							{:else}<Button variant="outline" size="sm" onclick={() => act(() => api.del(`/api/me/sessions/${s.id}`), 'Sessione chiusa')}>Chiudi</Button>{/if}
-						</Table.Cell>
-					</Table.Row>
-				{/each}
-			</Table.Body>
-		</Table.Root>
-	</Card.Content>
-	<Card.Footer>
-		<Button variant="outline" disabled={sessions.length < 2} onclick={() => act(() => api.post('/api/me/sessions/others'), 'Altre sessioni chiuse')}>Esci dagli altri dispositivi</Button>
-	</Card.Footer>
-</Card.Root>
+<SettingsSection title="Sessioni aperte" description="Scadono dopo 12 ore senza attività.">
+	{#each sessions as s (s.id)}
+		<SettingRow help={`${s.ip} · ultima attività ${when(s.last_used)}`}>
+			{#snippet label()}<p class="truncate font-medium" title={s.user_agent}>{device(s.user_agent)}</p>{/snippet}
+			{#if s.current}<Badge variant="secondary">questa sessione</Badge>
+			{:else}<Button size="sm" onclick={() => act(() => api.del(`/api/me/sessions/${s.id}`), 'Sessione chiusa')}>Chiudi</Button>{/if}
+		</SettingRow>
+	{/each}
+	{#if sessions.length > 1}
+		<div class="flex justify-end px-4 py-2.5">
+			<Button variant="ghost" size="sm" onclick={() => act(() => api.post('/api/me/sessions/others'), 'Altre sessioni chiuse')}>Esci dagli altri dispositivi</Button>
+		</div>
+	{/if}
+</SettingsSection>
 
 {#if tokens.length}
-	<Card.Root>
-		<Card.Header><Card.Title>I tuoi token API</Card.Title></Card.Header>
-		<Card.Content>
-			<Table.Root>
-				<Table.Body>
-					{#each tokens as t (t.id)}
-						<Table.Row>
-							<Table.Cell>{t.name}</Table.Cell>
-							<Table.Cell class="text-muted-foreground">scade {when(t.expires_at)} · usato {when(t.last_used)}</Table.Cell>
-							<Table.Cell class="text-right">
-								<Button variant="outline" size="sm" onclick={() => confirm(`Revocare ${t.name}?`) && act(() => api.del(`/api/me/tokens/${t.id}`), 'Token revocato')}>Revoca</Button>
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
-		</Card.Content>
-	</Card.Root>
+	<SettingsSection title="I tuoi token API">
+		{#each tokens as t (t.id)}
+			<SettingRow label={t.name} help={`Scade ${when(t.expires_at)} · usato ${when(t.last_used)}`}>
+				<Button size="sm" onclick={async () => (await askConfirm({ title: `Revocare il token ${t.name}?`, description: 'Gli script che lo usano smettono subito di funzionare.', confirmLabel: 'Revoca', destructive: true })) && act(() => api.del(`/api/me/tokens/${t.id}`), 'Token revocato')}>Revoca</Button>
+			</SettingRow>
+		{/each}
+	</SettingsSection>
 {/if}

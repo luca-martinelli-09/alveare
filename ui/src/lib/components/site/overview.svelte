@@ -75,7 +75,7 @@
 						</AlertDialog.Header>
 						<AlertDialog.Footer>
 							<AlertDialog.Cancel>Annulla</AlertDialog.Cancel>
-							<AlertDialog.Action onclick={remove}>Elimina</AlertDialog.Action>
+							<AlertDialog.Action variant="destructive" onclick={remove}>Elimina</AlertDialog.Action>
 						</AlertDialog.Footer>
 					</AlertDialog.Content>
 				</AlertDialog.Root>

@@ -80,7 +80,7 @@
 				{#if detail.site.kind === 'wordpress'}
 					<Button variant="outline" size="sm" href={`${primary.url}/wp-admin/`} target="_blank" rel="noreferrer">Bacheca WordPress</Button>
 				{/if}
-				<Button size="sm" href={primary.url} target="_blank" rel="noreferrer">Apri il sito <ArrowUpRightIcon data-icon="inline-end" /></Button>
+				<Button variant="primary" size="sm" href={primary.url} target="_blank" rel="noreferrer">Apri il sito <ArrowUpRightIcon data-icon="inline-end" /></Button>
 			</div>
 		{/if}
 	</header>

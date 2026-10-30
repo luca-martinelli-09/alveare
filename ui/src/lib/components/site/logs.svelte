@@ -31,28 +31,56 @@
 	let applied = $state({ q: '', status: '' });
 	const searching = $derived(applied.q !== '' || applied.status !== '');
 	const MAX = 500;
+	// Si parte dalle ultime 200 righe; «Mostra altro» (o arrivare in fondo) ne legge altre 200, fino a 5000.
+	const PAGE = 200;
+	const LIMIT = 5000;
+	let limit = $state(PAGE);
+	let got = $state(0);
+	let loading = $state(false);
+	const hasMore = $derived(got >= limit && limit < LIMIT);
+	let sentinel = $state<HTMLElement | null>(null);
+
+	// Cambiando log o ricerca si riparte dalla prima pagina.
+	$effect(() => {
+		kind;
+		applied;
+		limit = PAGE;
+		entries = [];
+		lines = [];
+	});
+
+	// Arrivati in fondo si carica la pagina dopo da soli.
+	$effect(() => {
+		if (!sentinel) return;
+		const io = new IntersectionObserver((seen) => seen[0].isIntersecting && hasMore && !loading && (limit += PAGE), { rootMargin: '200px' });
+		io.observe(sentinel);
+		return () => io.disconnect();
+	});
 	const statuses = { '': 'Tutti gli stati', '2xx': '2xx', '3xx': '3xx', '4xx': '4xx', '5xx': '5xx' };
 
 	$effect(() => {
 		const k = kind;
 		const { q, status: st } = applied;
-		entries = [];
-		lines = [];
-		const params = new URLSearchParams({ lines: q || st ? '1000' : '200' });
+		const n = limit;
+		const params = new URLSearchParams({ lines: String(n) });
 		if (q) params.set('q', q);
 		if (st && k === 'access') params.set('status', st);
-		api.get<{ entries?: Access[]; lines?: string[] }>(`/api/sites/${id}/logs/${k}?${params}`).then((r) => {
-			entries = (r.entries ?? []).reverse();
-			lines = (r.lines ?? []).reverse();
-		});
+		loading = true;
+		api.get<{ entries?: Access[]; lines?: string[] }>(`/api/sites/${id}/logs/${k}?${params}`)
+			.then((r) => {
+				entries = (r.entries ?? []).reverse();
+				lines = (r.lines ?? []).reverse();
+				got = Math.max(r.entries?.length ?? 0, r.lines?.length ?? 0);
+			})
+			.finally(() => (loading = false));
 		if (!live || k === 'wp-debug' || q || st) return;
 		// Tail in tempo reale via Server-Sent Events.
 		const source = new EventSource(`/api/sites/${id}/logs/${k}/stream`);
 		source.onmessage = (ev) => {
 			const data = JSON.parse(ev.data);
 			if (data === null) return;
-			if (k === 'access') entries = [data, ...entries].slice(0, MAX);
-			else lines = [data, ...lines].slice(0, MAX);
+			if (k === 'access') entries = [data, ...entries].slice(0, Math.max(MAX, n));
+			else lines = [data, ...lines].slice(0, Math.max(MAX, n));
 		};
 		return () => source.close();
 	});
@@ -151,6 +179,7 @@
 			</Table.Body>
 		</Table.Root>
 	{:else if kind === 'access'}
+		<div class="bg-card rounded-lg border">
 		<Table.Root>
 			<Table.Header>
 				<Table.Row>
@@ -177,11 +206,26 @@
 						<Table.Cell>{e.duration_ms} ms</Table.Cell>
 						<Table.Cell class="text-muted-foreground max-w-xs truncate">{e.user_agent}</Table.Cell>
 					</Table.Row>
+				{:else}
+					<Table.Row><Table.Cell colspan={6} class="text-muted-foreground py-6 text-center">{loading ? 'Caricamento…' : 'Nessuna richiesta.'}</Table.Cell></Table.Row>
 				{/each}
 			</Table.Body>
 		</Table.Root>
+		</div>
 	{:else}
-		<pre class="bg-muted max-h-[60vh] overflow-auto rounded p-3 text-xs whitespace-pre-wrap">{lines.join('\n') || 'Nessuna riga.'}</pre>
+		<pre class="bg-muted/60 overflow-x-auto rounded-lg border p-3 text-xs whitespace-pre-wrap">{lines.join('\n') || (loading ? 'Caricamento…' : 'Nessuna riga.')}</pre>
+	{/if}
+
+	{#if !(kind === 'php-error' && grouped) && got > 0}
+		<div bind:this={sentinel} class="text-muted-foreground flex flex-col items-center gap-2 pb-4 text-sm">
+			{#if hasMore}
+				<Button size="sm" disabled={loading} onclick={() => (limit += PAGE)}>{loading ? 'Caricamento…' : `Mostra altre ${PAGE} righe`}</Button>
+			{:else if got >= LIMIT}
+				<p>Queste sono le ultime {LIMIT} righe: per andare più indietro cerca (anche nei file ruotati) o scarica il log.</p>
+			{:else}
+				<p>Fine del log: {got} {got === 1 ? 'riga' : 'righe'}.</p>
+			{/if}
+		</div>
 	{/if}
 </div>
 

@@ -1,7 +1,10 @@
 <script lang="ts">
 	import SettingsSection from '$lib/components/app/settings-section.svelte';
 	import SettingRow from '$lib/components/app/setting-row.svelte';
-	import * as Select from '$lib/components/ui/select';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import * as Field from '$lib/components/ui/field';
+	import * as ToggleGroup from '$lib/components/ui/toggle-group';
+	import PlusIcon from '@lucide/svelte/icons/plus';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -14,6 +17,7 @@
 	const kinds = { primary: 'principale', alias: 'alias', redirect: 'redirect' };
 	let hostname = $state('');
 	let kind = $state<'alias' | 'redirect'>('redirect');
+	let adding = $state(false);
 	const base = $derived(`/api/sites/${detail.site.id}/domains`);
 
 	async function add(e: SubmitEvent) {
@@ -22,6 +26,7 @@
 			await api.post(base, { hostname: hostname.trim(), kind });
 			toast.success(`${hostname} aggiunto`);
 			hostname = '';
+			adding = false;
 			onchange();
 		} catch (err) {
 			toast.error(errorMessage(err));
@@ -39,6 +44,11 @@
 </script>
 
 <SettingsSection title="Domini" description="Con un account Cloudflare configurato, hostname e regole vanno sul tunnel da soli; senza, aggiungili a mano verso http://caddy:80.">
+	{#snippet actions()}
+		{#if session.user?.is_admin}
+			<Button size="icon-sm" aria-label="Aggiungi un hostname" title="Aggiungi un hostname" onclick={() => (adding = true)}><PlusIcon /></Button>
+		{/if}
+	{/snippet}
 	{#each detail.domains as d (d.hostname)}
 		<SettingRow help={{ primary: 'Dominio principale.', alias: 'Alias: stesso sito, stesso indirizzo nella barra.', redirect: 'Rimanda al dominio principale (301).' }[d.kind]}>
 			{#snippet label()}<a class="font-medium underline-offset-4 hover:underline" href={d.url} target="_blank" rel="noreferrer">{d.hostname}</a>{/snippet}
@@ -48,21 +58,36 @@
 			{/if}
 		</SettingRow>
 	{/each}
-	{#if session.user?.is_admin}
-		<SettingRow label="Aggiungi un hostname" labelFor="new-host" help="Alias o redirect: va sul tunnel da solo.">
-			<form class="flex flex-wrap gap-2" onsubmit={add}>
-				<Input id="new-host" class="w-52" bind:value={hostname} placeholder="www.esempio.it" required />
-				<Select.Root type="single" bind:value={kind}>
-					<Select.Trigger class="w-32" aria-label="Tipo">{kinds[kind]}</Select.Trigger>
-					<Select.Content>
-						<Select.Group>
-							<Select.Item value="redirect">redirect</Select.Item>
-							<Select.Item value="alias">alias</Select.Item>
-						</Select.Group>
-					</Select.Content>
-				</Select.Root>
-				<Button type="submit" variant="outline">Aggiungi</Button>
-			</form>
-		</SettingRow>
-	{/if}
 </SettingsSection>
+
+<Dialog.Root bind:open={adding}>
+	<Dialog.Content class="sm:max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>Aggiungi un hostname</Dialog.Title>
+			<Dialog.Description>Va sul tunnel Cloudflare da solo, con le regole della sua zona.</Dialog.Description>
+		</Dialog.Header>
+		<form onsubmit={add}>
+			<Field.FieldGroup>
+				<Field.Field>
+					<Field.FieldLabel for="new-host">Hostname</Field.FieldLabel>
+					<!-- svelte-ignore a11y_autofocus -->
+					<Input id="new-host" bind:value={hostname} placeholder="www.esempio.it" autofocus required />
+				</Field.Field>
+				<Field.Field>
+					<Field.FieldLabel>Tipo</Field.FieldLabel>
+					<ToggleGroup.Root type="single" variant="outline" bind:value={() => kind, (v) => v && (kind = v as 'alias' | 'redirect')}>
+						<ToggleGroup.Item value="redirect">Redirect</ToggleGroup.Item>
+						<ToggleGroup.Item value="alias">Alias</ToggleGroup.Item>
+					</ToggleGroup.Root>
+					<p class="text-muted-foreground text-sm">
+						{kind === 'redirect' ? 'Rimanda al dominio principale con un 301: di solito per www o domini vecchi.' : 'Stesso sito a questo indirizzo, senza rimandare.'}
+					</p>
+				</Field.Field>
+				<Dialog.Footer>
+					<Button variant="ghost" type="button" onclick={() => (adding = false)}>Annulla</Button>
+					<Button variant="primary" type="submit">Aggiungi</Button>
+				</Dialog.Footer>
+			</Field.FieldGroup>
+		</form>
+	</Dialog.Content>
+</Dialog.Root>

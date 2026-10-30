@@ -10,6 +10,7 @@
 	import { Spinner } from '$lib/components/ui/spinner';
 	import AppSidebar from '$lib/components/app/app-sidebar.svelte';
 	import CommandPalette from '$lib/components/app/command-palette.svelte';
+	import AskDialog from '$lib/components/app/ask-dialog.svelte';
 	import { palette } from '$lib/palette.svelte';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import Logo from '$lib/components/app/logo.svelte';
@@ -62,6 +63,7 @@
 <svelte:window onkeydown={shortcut} />
 <ModeWatcher />
 <Toaster />
+<AskDialog />
 
 {#if isLogin}
 	{@render children()}

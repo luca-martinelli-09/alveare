@@ -58,7 +58,7 @@
 							<Input id="code" inputmode="numeric" autocomplete="one-time-code" bind:value={code} />
 						</Field.Field>
 					{/if}
-					<Button type="submit" disabled={busy}>Salva e accedi</Button>
+					<Button variant="primary" type="submit" disabled={busy}>Salva e accedi</Button>
 				</Field.FieldGroup>
 			</form>
 		</Card.Content>

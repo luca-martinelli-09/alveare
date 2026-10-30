@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { askConfirm } from '$lib/ask.svelte';
 	import * as Table from '$lib/components/ui/table';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -46,14 +47,14 @@
 
 	const backupNow = () => start('Backup', () => api.post(`/api/sites/${id}/backups`));
 
-	function restore(snapshot: string, mode: 'full' | 'files' | 'database') {
+	async function restore(snapshot: string, mode: 'full' | 'files' | 'database') {
 		const what = { full: 'file e database', files: 'solo i file', database: 'solo il database' }[mode];
-		if (!confirm(`Ripristinare ${what} dallo snapshot ${snapshot.slice(0, 8)}? Prima viene fatto un backup dello stato attuale.`)) return;
+		if (!(await askConfirm({ title: `Ripristinare ${what}?`, description: `Dallo snapshot ${snapshot.slice(0, 8)}. Prima viene fatto un backup dello stato attuale.`, confirmLabel: 'Ripristina' }))) return;
 		start('Ripristino', () => api.post(`/api/sites/${id}/backups/${snapshot}/restore`, { mode }));
 	}
 
-	function restorePath(snapshot: string, path: string) {
-		if (!confirm(`Ripristinare ${path} dallo snapshot ${snapshot.slice(0, 8)}? La versione attuale va nel cestino.`)) return;
+	async function restorePath(snapshot: string, path: string) {
+		if (!(await askConfirm({ title: `Ripristinare ${path}?`, description: `Dallo snapshot ${snapshot.slice(0, 8)}. La versione attuale va nel cestino.`, confirmLabel: 'Ripristina' }))) return;
 		browsing = null;
 		start('Ripristino di ' + path, () => api.post(`/api/sites/${id}/backups/${snapshot}/restore`, { mode: 'path', path }));
 	}
@@ -66,14 +67,17 @@
 	}
 </script>
 
-<div class="flex flex-col gap-4 pt-4">
+<div class="flex flex-col gap-4 pt-6">
 	{#if !enabled}
 		<Alert.Root>
 			<Alert.Title>Backup non configurati</Alert.Title>
 			<Alert.Description>Imposta RESTIC_REPOSITORY e RESTIC_PASSWORD nel .env del pannello.</Alert.Description>
 		</Alert.Root>
 	{:else if canManage}
-		<div><Button onclick={backupNow}>Backup adesso</Button></div>
+		<div class="flex items-center justify-between gap-3">
+			<p class="text-muted-foreground text-sm">Ogni notte, con restore di prova una volta al mese.</p>
+			<Button size="sm" onclick={backupNow}>Backup adesso</Button>
+		</div>
 	{/if}
 	{#if restoreTest}
 		<Alert.Root variant={restoreTest.ok ? 'default' : 'destructive'}>
@@ -81,6 +85,7 @@
 			<Alert.Description>{restoreTest.detail}</Alert.Description>
 		</Alert.Root>
 	{/if}
+	<div class="bg-card rounded-lg border">
 	<Table.Root>
 		<Table.Header>
 			<Table.Row>
@@ -131,6 +136,7 @@
 			{/each}
 		</Table.Body>
 	</Table.Root>
+	</div>
 </div>
 
 <Dialog.Root open={job !== null} onOpenChange={(o) => !o && ((job = null), load())}>
@@ -164,7 +170,7 @@
 					<Field.FieldLabel for="restore-domain">Dominio</Field.FieldLabel>
 					<Input id="restore-domain" placeholder="verifica.esempio.it" bind:value={newDomain} required />
 				</Field.Field>
-				<Dialog.Footer><Button type="submit">Ripristina</Button></Dialog.Footer>
+				<Dialog.Footer><Button variant="primary" type="submit">Ripristina</Button></Dialog.Footer>
 			</Field.FieldGroup>
 		</form>
 	</Dialog.Content>

@@ -119,7 +119,7 @@
 							<Input placeholder="nuovo.it" bind:value={replaceTo} />
 							<Field.FieldDescription>wp search-replace, rispetta i dati serializzati.</Field.FieldDescription>
 						</Field.Field>
-						<Button type="submit">Importa</Button>
+						<Button type="submit" class="self-end">Importa</Button>
 					</Field.FieldGroup>
 				</form>
 			</Card.Content>

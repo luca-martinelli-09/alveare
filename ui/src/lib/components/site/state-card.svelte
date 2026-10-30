@@ -71,10 +71,21 @@
 		/>
 	</SettingRow>
 	<SettingRow label="Conservazione dei log" labelFor="log-days" help="Gli access log contengono IP: dati personali. Dopo questi giorni vengono eliminati.">
-		<form class="flex items-center gap-2" onsubmit={(e) => (e.preventDefault(), update({ log_retention_days: logDays }, 'Conservazione aggiornata'))}>
-			<Input id="log-days" type="number" min="1" max="365" class="w-20" bind:value={logDays} />
-			<span class="text-muted-foreground text-sm">giorni</span>
-			<Button type="submit" variant="outline" size="sm" disabled={busy || logDays === detail.site.log_retention_days}>Salva</Button>
-		</form>
+		<Input
+			id="log-days"
+			type="number"
+			min="1"
+			max="365"
+			class={['w-20 text-right tabular-nums', logDays !== detail.site.log_retention_days && 'border-primary bg-accent']}
+			bind:value={logDays}
+		/>
+		<span class="text-muted-foreground w-10 text-sm">giorni</span>
 	</SettingRow>
+	{#if logDays !== detail.site.log_retention_days}
+		<div class="bg-muted/50 flex flex-wrap items-center justify-end gap-2 rounded-b-lg px-4 py-2.5">
+			<span class="text-muted-foreground mr-auto text-sm">1 modifica: conservazione dei log {detail.site.log_retention_days} → {logDays} giorni</span>
+			<Button variant="ghost" size="sm" onclick={() => (logDays = detail.site.log_retention_days)}>Annulla</Button>
+			<Button variant="primary" size="sm" disabled={busy} onclick={() => update({ log_retention_days: logDays }, 'Conservazione aggiornata')}>Salva modifiche</Button>
+		</div>
+	{/if}
 </SettingsSection>

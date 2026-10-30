@@ -112,7 +112,7 @@
 			<Dialog.Root bind:open={() => open, closeDialog}>
 				<Dialog.Trigger>
 					{#snippet child({ props })}
-						<Button {...props}>
+						<Button variant="primary" {...props}>
 							<PlusIcon data-icon="inline-start" />
 							Nuovo sito
 						</Button>
@@ -153,7 +153,7 @@
 									</Select.Root>
 								</Field.Field>
 								<Dialog.Footer>
-									<Button type="submit">Crea sito</Button>
+									<Button variant="primary" type="submit">Crea sito</Button>
 								</Dialog.Footer>
 							</Field.FieldGroup>
 						</form>

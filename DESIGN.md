@@ -277,14 +277,16 @@ Il sistema è piatto: la profondità si legge da filetti di 1px e da scarti tona
 
 ## Shapes
 
-Raggio piccolo e coerente, derivato da una sola variabile (0.5rem). I contenitori di pagina usano 8px; bottoni, campi, voci di menu, avatar del sito e tessere icona 6.4px; card e dialoghi 11.2px; badge e pillole di stato sono pillole piene; pallino di stato e barra dello spazio sono arrotondati al massimo. Il marchio è un quadrato arrotondato (raggio 7 su 32) in inchiostro pietra con sei celle esagonali (punta in alto, angoli arrotondati) a piramide 1-2-3 come una "A", la cella in cima in ambra. Gli esagoni restano nel marchio.
+Raggio piccolo e coerente, derivato da una sola variabile (0.5rem). I contenitori di pagina usano 8px; bottoni, campi, voci di menu, avatar del sito e tessere icona 6.4px; card e dialoghi 11.2px; badge e pillole di stato sono pillole piene; pallino di stato e barra dello spazio sono arrotondati al massimo. Il marchio è un nido d'ape di sette celle esagonali (punta in alto, angoli arrotondati) senza sfondo: sei in inchiostro pietra (bianche in scuro) attorno a quella centrale in ambra. La sagoma complessiva è esagonale. Gli esagoni restano nel marchio.
 
 ## Components
 
 ### Buttons
 Compatti, altezza 36px, testo 14px medio, con icona lucide a sinistra quando l'azione crea qualcosa.
 - **Shape:** angoli lievemente arrotondati (6.4px).
-- **Primary:** gradiente `bg-honey` con testo inchiostro pietra e ombra Goccia; hover a luminosità 105%. Per l'azione principale della vista (Nuovo sito, Crea sito).
+- **Primary** (`variant="primary"`, da scrivere sempre esplicitamente): gradiente azione `bg-action` (action-1 oklch(0.6 0.15 64) → action-2 oklch(0.54 0.18 42)) con testo bianco (≥4.5:1) e ombra Goccia. Uno per vista: l'azione principale della pagina (Nuovo sito, Nuovo template, Nuovo utente, Apri il sito), la conferma di un dialogo, «Salva modifiche» nella barra che compare solo con modifiche. Mai spento come promemoria: se non serve non c'è.
+- **Default** (senza variante): è il secondario, bordo e fondo pagina. Azioni nelle righe e nelle sezioni (Modifica, Esporta, Clona, Backup adesso), sempre `size="sm"` nelle righe.
+- **Ghost:** Annulla, menu ⋯, icone sulla riga. Le conferme (AlertDialog) hanno Annulla ghost e azione primary, o destructive per eliminare.
 - **Outline:** fondo pagina, bordo, ombra minima; hover su nebbia.
 - **Secondary:** fondo crema, hover scurito del 5% verso il testo.
 - **Ghost:** trasparente, hover su nebbia; per azioni di riga e icone.
@@ -354,3 +356,16 @@ Card con padding 16px: linea di 2px in miele bruciato su un'area che sfuma il mi
 - **Don't** usare metriche finte o banner promozionali da dashboard SaaS generica.
 - **Don't** aggiungere ombre a liste, tabelle o strisce dell'app.
 - **Don't** aggiungere un clic o uno scroll a un'azione frequente per far posto a un elemento visivo.
+
+## Interazione
+
+**The Anteprima Rule.** Codice e configurazioni (direttive PHP, Caddy, regole Cloudflare) si mostrano come anteprima di poche righe in un riquadro monospazio, o come una riga «Niente di personalizzato» con «Aggiungi». L'editor si apre lì con «Modifica», alto quanto il contenuto (massimo 24rem), con Annulla e «Valida e applica» (solo se qualcosa è cambiato). Le regole Cloudflare si leggono come tabella; il JSON è dietro «Modifica le regole (JSON)».
+
+**The Barra di Salvataggio Rule.** Le impostazioni numeriche sono righe con un campo stretto allineato a destra e l'unità accanto. Cambiando un valore il campo si tinge e in fondo alla sezione compare la barra: cosa cambia («memory_limit 256 → 384 MB»), Annulla, Salva modifiche.
+
+**The Dialogo shadcn Rule.** Mai confirm(), prompt() o alert() del browser: conferme con `askConfirm` e richieste di testo con `askText` ($lib/ask.svelte.ts), che aprono i dialoghi di shadcn montati una volta nel layout. Aggiungere un elemento a una sezione (un dominio) è un «+» nell'intestazione della sezione che apre un dialogo.
+
+**The Elenchi Lunghi Rule.** Log e liste lunghe partono dalle ultime 200 righe e caricano le successive con «Mostra altre 200 righe» o arrivando in fondo, fino a 5000; oltre si cerca o si scarica.
+
+I menu prendono la larghezza del contenuto (fino a 20rem) e le voci non vanno a capo. I percorsi del file manager usano la breadcrumb di shadcn con la casetta per la radice e i nomi in monospazio.
+

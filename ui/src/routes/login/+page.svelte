@@ -123,7 +123,7 @@
 							<Field.FieldLabel for="password">Password</Field.FieldLabel>
 							<Input id="password" type="password" autocomplete="current-password" bind:value={password} />
 						</Field.Field>
-						<Button type="submit" disabled={busy}>
+						<Button variant="primary" type="submit" disabled={busy}>
 							{#if busy}<Spinner data-icon="inline-start" />{/if}
 							Accedi
 						</Button>
@@ -150,7 +150,7 @@
 							<Input id="new" type="password" autocomplete="new-password" minlength={12} bind:value={newPassword} required />
 							<Field.FieldDescription>Almeno 12 caratteri.</Field.FieldDescription>
 						</Field.Field>
-						<Button type="submit" disabled={busy}>Continua</Button>
+						<Button variant="primary" type="submit" disabled={busy}>Continua</Button>
 					</Field.FieldGroup>
 				</form>
 			{:else}
@@ -167,7 +167,7 @@
 							<Field.FieldLabel for="code">Codice a 6 cifre</Field.FieldLabel>
 							<Input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength={6} bind:value={code} required />
 						</Field.Field>
-						<Button type="submit" disabled={busy}>
+						<Button variant="primary" type="submit" disabled={busy}>
 							{#if busy}<Spinner data-icon="inline-start" />{/if}
 							Conferma
 						</Button>

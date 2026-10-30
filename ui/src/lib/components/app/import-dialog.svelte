@@ -138,7 +138,7 @@
 						<Input id="import-title" bind:value={title} required />
 					</Field.Field>
 					<Dialog.Footer>
-						<Button type="submit" disabled={!archive || !dump || progress !== null}>Importa</Button>
+						<Button variant="primary" type="submit" disabled={!archive || !dump || progress !== null}>Importa</Button>
 					</Dialog.Footer>
 				</Field.FieldGroup>
 			</form>

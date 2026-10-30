@@ -53,7 +53,7 @@
 		<Dialog.Root bind:open>
 			<Dialog.Trigger>
 				{#snippet child({ props })}
-					<Button {...props}><PlusIcon data-icon="inline-start" /> Nuovo template</Button>
+					<Button variant="primary" {...props}><PlusIcon data-icon="inline-start" /> Nuovo template</Button>
 				{/snippet}
 			</Dialog.Trigger>
 			<Dialog.Content>
@@ -102,7 +102,7 @@
 								</Select.Root>
 							</Field.Field>
 						{/if}
-						<Dialog.Footer><Button type="submit">Crea template</Button></Dialog.Footer>
+						<Dialog.Footer><Button variant="primary" type="submit">Crea template</Button></Dialog.Footer>
 					</Field.FieldGroup>
 				</form>
 			</Dialog.Content>
