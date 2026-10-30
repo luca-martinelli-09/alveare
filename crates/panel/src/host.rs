@@ -317,6 +317,14 @@ async fn caddy_admin(socket: &Path, method: &str, path: &str, caddyfile: &str) -
 }
 
 /// Il corpo può arrivare in chunked encoding: si ricompone.
+/// WP-CLI può dire "Success" anche se la scrittura dei file è fallita a metà (core download a disco pieno):
+/// ENOSPC nell'output vale come errore, con un messaggio breve al posto delle centinaia di avvisi.
+fn wp_disk_full(args: &[String], output: &str) -> Option<String> {
+    output
+        .contains("No space left on device")
+        .then(|| format!("disco del server pieno durante wp {}: libera spazio o ingrandisci il disco, poi riprova", shown_args(args)))
+}
+
 /// Argomenti di un comando da mostrare in un errore (e quindi nel log del job): le password diventano ***,
 /// sia `--admin_password=x` sia `--dbpass x`.
 pub(crate) fn shown_args(args: &[String]) -> String {
@@ -624,6 +632,9 @@ impl Host for SystemHost {
 
     async fn wp_output(&self, slug: &Slug, args: &[String]) -> Result<(bool, String)> {
         let resp = self.agent_for(slug, Command::Wp { slug: slug.clone(), args: args.to_vec() }, AGENT_TIMEOUT).await?;
+        if let Some(e) = wp_disk_full(args, &resp.output) {
+            bail!(e);
+        }
         Ok((resp.ok, resp.output))
     }
 
@@ -1043,6 +1054,15 @@ impl Host for SystemHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wp_success_with_a_full_disk_is_a_failure() {
+        let args = ["core", "download", "--locale=it_IT"].map(String::from);
+        let out = "PHP Notice:  ZipArchive::extractTo(): Write of 8192 bytes failed with errno=28 No space left on device\nPHP Warning:  mkdir(): No space left on device\nSuccess: WordPress downloaded.";
+        let err = wp_disk_full(&args, out).unwrap();
+        assert_eq!(err, "disco del server pieno durante wp core download --locale=it_IT: libera spazio o ingrandisci il disco, poi riprova");
+        assert!(wp_disk_full(&args, "Success: WordPress downloaded.").is_none());
+    }
 
     #[test]
     fn wp_errors_never_show_passwords() {
