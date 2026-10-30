@@ -1,6 +1,7 @@
 //! Utenti, sessioni, TOTP, token API e permessi per sito.
 //! Il tempo arriva come parametro (`now`, secondi Unix) così le scadenze sono testabili.
 pub mod invites;
+pub mod passkeys;
 pub mod sessions;
 
 use argon2::password_hash::phc::PasswordHash;

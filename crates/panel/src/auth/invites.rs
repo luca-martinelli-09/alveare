@@ -67,7 +67,7 @@ impl Auth {
         Ok(user)
     }
 
-    async fn open_session(&self, user_id: i64, stage: Stage, ip: &str, ua: &str, now: i64) -> Result<String> {
+    pub(super) async fn open_session(&self, user_id: i64, stage: Stage, ip: &str, ua: &str, now: i64) -> Result<String> {
         let token = link_token();
         sqlx::query("INSERT INTO sessions (id, user_id, stage, created_at, last_used, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?)")
             .bind(sha256_hex(&token))

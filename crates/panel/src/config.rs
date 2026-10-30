@@ -32,6 +32,8 @@ pub struct Config {
     pub cloudflare: Vec<crate::cloudflare::Account>,
     /// SMTP del pannello per inviti e reset (PANEL_SMTP_*); di default le credenziali SES dei siti.
     pub smtp: Option<crate::mailer::Smtp>,
+    /// URL pubblico del pannello (link via email, origine delle passkey): ALVEARE_PANEL_URL o https://<host>.
+    pub panel_url: Option<String>,
 }
 
 fn url_encode(s: &str) -> String {
@@ -59,6 +61,7 @@ impl Config {
         };
         let panel_host = host("ALVEARE_PANEL_HOST")?;
         let adminer_host = host("ALVEARE_ADMINER_HOST")?;
+        let panel_url = get("ALVEARE_PANEL_URL").map(|u| u.trim_end_matches('/').to_string()).or_else(|| panel_host.as_ref().map(|h| format!("https://{}", h.as_str())));
         let restic_repository = get("RESTIC_REPOSITORY");
         if restic_repository.is_some() && get("RESTIC_PASSWORD").is_none() {
             bail!("RESTIC_PASSWORD mancante: serve insieme a RESTIC_REPOSITORY");
@@ -111,6 +114,7 @@ impl Config {
             disk_alert_mb,
             cloudflare: crate::cloudflare::accounts_from(&vars)?,
             smtp,
+            panel_url,
             site_env: vars.iter().filter_map(|(k, v)| Some((k.strip_prefix("SITE_ENV_")?.to_string(), v.clone()))).collect(),
         })
     }

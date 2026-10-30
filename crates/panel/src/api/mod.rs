@@ -45,6 +45,7 @@ pub struct App<H> {
     /// Email del pannello (inviti, reset) e URL pubblico per i link.
     pub mailer: crate::mailer::Mailer,
     pub panel_url: Option<String>,
+    pub passkeys: Option<crate::auth::passkeys::Passkeys>,
 }
 
 impl<H> Clone for App<H> {
@@ -65,6 +66,7 @@ impl<H> Clone for App<H> {
             disk_alert_mb: self.disk_alert_mb,
             mailer: self.mailer.clone(),
             panel_url: self.panel_url.clone(),
+            passkeys: self.passkeys.clone(),
         }
     }
 }
@@ -72,7 +74,7 @@ impl<H> Clone for App<H> {
 impl<H: Host> App<H> {
     pub fn new(ctx: Ctx<H>, auth: Auth, templates: PathBuf, secure_cookie: bool) -> Self {
         let jobs = Jobs::new(ctx.store.pool().clone());
-        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None, recovery: vec![], reserved_hosts: vec![], ram_mb: crate::budget::ram_mb(), disk_alert_mb: 10 * 1024, mailer: crate::mailer::Mailer::None, panel_url: None }
+        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None, recovery: vec![], reserved_hosts: vec![], ram_mb: crate::budget::ram_mb(), disk_alert_mb: 10 * 1024, mailer: crate::mailer::Mailer::None, panel_url: None, passkeys: None }
     }
 
     pub fn with_recovery(self, recovery: Vec<(String, String)>) -> Self {
@@ -82,6 +84,10 @@ impl<H: Host> App<H> {
     pub fn recovery_kit(&self) -> String {
         let pairs: Vec<(&str, &str)> = self.recovery.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         crate::backup::recovery_kit(&pairs)
+    }
+
+    pub fn with_passkeys(self, passkeys: Option<crate::auth::passkeys::Passkeys>) -> Self {
+        Self { passkeys, ..self }
     }
 
     pub fn with_mailer(self, mailer: crate::mailer::Mailer, panel_url: Option<String>) -> Self {
@@ -299,6 +305,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .merge(crons::routes::<H>())
         .merge(cloudflare::routes::<H>())
         .merge(account::routes::<H>())
+        .merge(passkeys::routes::<H>())
         .with_state(app)
 }
 
@@ -497,7 +504,7 @@ async fn confirm_reset<H: Host>(State(app): State<App<H>>, h: HeaderMap, Json(r)
 }
 
 async fn auth_options<H: Host>(State(app): State<App<H>>) -> ApiResult<Response> {
-    Ok(Json(json!({ "email": app.email_links().is_some() })).into_response())
+    Ok(Json(json!({ "email": app.email_links().is_some(), "passkeys": app.passkeys.is_some() })).into_response())
 }
 
 #[derive(Deserialize)]
@@ -1030,6 +1037,7 @@ mod config;
 mod crons;
 mod imports;
 mod logs;
+mod passkeys;
 mod sites;
 mod wordpress;
 pub(crate) use wordpress::remember as remember_updates;
