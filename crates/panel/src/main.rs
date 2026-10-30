@@ -7,6 +7,7 @@ mod database;
 mod files;
 mod flows;
 mod host;
+mod importer;
 mod jobs;
 mod logs;
 mod scheduler;

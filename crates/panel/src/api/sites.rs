@@ -39,7 +39,7 @@ async fn update_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m:
 }
 
 /// Dominio nuovo per un sito: valido, non riservato, non già usato.
-async fn free_domain<H: Host>(app: &App<H>, raw: &str) -> ApiResult<Domain> {
+pub(super) async fn free_domain<H: Host>(app: &App<H>, raw: &str) -> ApiResult<Domain> {
     let domain = Domain::parse(raw).map_err(|_| ApiError::bad_request("dominio non valido"))?;
     app.check_not_reserved(&domain)?;
     if app.ctx.store.hostname_taken(&domain).await? {

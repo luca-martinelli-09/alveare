@@ -260,6 +260,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/alerts", get(list_alerts::<H>))
         .route("/api/jobs/{id}", get(get_job::<H>))
         .merge(sites::routes::<H>())
+        .merge(imports::routes::<H>())
         .with_state(app)
 }
 
@@ -904,6 +905,7 @@ async fn get_job<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Met
     Ok(Json(job).into_response())
 }
 
+mod imports;
 mod sites;
 
 #[cfg(test)]

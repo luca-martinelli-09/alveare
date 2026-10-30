@@ -11,7 +11,7 @@ use tokio::io::AsyncRead;
 
 use crate::backup::{Retention, Snapshot};
 use crate::database::TableInfo;
-use crate::flows::{DbCreds, Dump, Host, Installed};
+use crate::flows::{DbCreds, Dump, Host, Imported, Installed};
 use crate::template::Vars;
 
 #[derive(Default)]
@@ -21,6 +21,9 @@ pub struct FakeHost {
     pub reject_pool: bool,
     pub env: Mutex<Vars>,
     pub snapshot_sql: Option<std::path::PathBuf>,
+    pub imported: Option<Imported>,
+    /// Risposte di `wp` per argomenti precisi ("option get home" → "https://...").
+    pub wp_replies: Vec<(&'static str, &'static str)>,
 }
 
 impl FakeHost {
@@ -76,7 +79,9 @@ impl Host for FakeHost {
         self.record("sync_caddy", slugs(sites.iter().map(|s| &s.slug)))
     }
     async fn wp(&self, slug: &Slug, args: &[String]) -> anyhow::Result<String> {
-        self.record("wp", format!("{} {}", slug.as_str(), args.join(" "))).map(|_| String::new())
+        self.record("wp", format!("{} {}", slug.as_str(), args.join(" ")))?;
+        let joined = args.join(" ");
+        Ok(self.wp_replies.iter().find(|(a, _)| *a == joined).map(|(_, r)| r.to_string()).unwrap_or_default())
     }
     async fn wp_output(&self, slug: &Slug, args: &[String]) -> anyhow::Result<(bool, String)> {
         self.record("wp", format!("{} {}", slug.as_str(), args.join(" "))).map(|_| (true, String::new()))
@@ -124,6 +129,10 @@ impl Host for FakeHost {
     async fn set_db_password(&self, user: &str, password: &str) -> anyhow::Result<()> {
         self.env.lock().unwrap().insert("DB_PASSWORD".into(), password.into());
         self.record("set_db_password", user.to_string())
+    }
+    async fn import_files(&self, slug: &Slug, _uid: u32, archive: &std::path::Path) -> anyhow::Result<Imported> {
+        self.record("import_files", format!("{} {}", slug.as_str(), archive.display()))?;
+        Ok(self.imported.clone().unwrap_or_default())
     }
     async fn copy_site_files(&self, from: &Slug, to: &Slug, _uid: u32) -> anyhow::Result<()> {
         self.record("copy_site_files", format!("{} {}", from.as_str(), to.as_str()))

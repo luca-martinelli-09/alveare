@@ -111,8 +111,13 @@ fn is_protected(p: &Path) -> bool {
 impl SiteFiles {
     /// `uid = None` lascia i proprietari come sono (test senza root).
     pub fn open(paths: &Paths, slug: &Slug, uid: Option<u32>) -> Result<Self> {
-        let root = Dir::open_ambient_dir(paths.sites.join(slug.as_str()), ambient_authority())?;
-        let tmp = Dir::open_ambient_dir(paths.tmp.join(slug.as_str()), ambient_authority())?;
+        Self::open_dirs(&paths.sites.join(slug.as_str()), &paths.tmp.join(slug.as_str()), uid)
+    }
+
+    /// Stesse regole su un'altra coppia di cartelle (l'area import).
+    pub fn open_dirs(root: &Path, tmp: &Path, uid: Option<u32>) -> Result<Self> {
+        let root = Dir::open_ambient_dir(root, ambient_authority())?;
+        let tmp = Dir::open_ambient_dir(tmp, ambient_authority())?;
         Ok(Self { root, tmp, uid })
     }
 

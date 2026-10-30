@@ -62,11 +62,21 @@ pub trait Host: Send + Sync + 'static {
     /// Token monouso per aprire Adminer già autenticato su questo database.
     fn adminer_grant(&self, db: &DbCreds) -> impl Future<Output = Result<String>> + Send;
     /// Copia i file di un sito in un altro (tranne `.env` e link), assegnandoli al nuovo utente.
+    /// Estrae l'archivio di un sito esistente in `public/` e dice cosa contiene.
+    fn import_files(&self, slug: &Slug, uid: u32, archive: &std::path::Path) -> impl Future<Output = Result<Imported>> + Send;
     fn copy_site_files(&self, from: &Slug, to: &Slug, uid: u32) -> impl Future<Output = Result<()>> + Send;
     fn read_site_env(&self, slug: &Slug) -> impl Future<Output = Result<Vars>> + Send;
     fn write_site_env(&self, slug: &Slug, uid: u32, env: &Vars) -> impl Future<Output = Result<()>> + Send;
     /// Riscrive una chiave del .env del sito.
     fn set_site_env(&self, slug: &Slug, uid: u32, key: &str, value: &str) -> impl Future<Output = Result<()>> + Send;
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct Imported {
+    /// `$table_prefix` letto dal vecchio wp-config.php, se c'era.
+    pub table_prefix: Option<String>,
+    /// Se mancano wp-includes e wp-admin, il core va scaricato.
+    pub has_core: bool,
 }
 
 pub struct Installed {
@@ -91,6 +101,7 @@ pub struct Ctx<H> {
     pub backups: bool,
 }
 
+#[derive(Clone)]
 pub struct CreateSite {
     pub domain: Domain,
     pub kind: SiteKind,
@@ -308,6 +319,76 @@ pub async fn clone_site<H: Host>(c: &Ctx<H>, src_id: i64, domain: &Domain, log: 
             Err(e)
         }
     }
+}
+
+pub struct ImportSite {
+    pub site: CreateSite,
+    /// Archivio dei file (zip o tar.gz) e dump SQL (.sql o .sql.gz), nell'area import.
+    pub archive: std::path::PathBuf,
+    pub dump: std::path::PathBuf,
+}
+
+/// Host di un URL ("https://www.x.it/blog" → "www.x.it").
+pub fn url_host(url: &str) -> Option<String> {
+    let rest = url.trim().split_once("://")?.1;
+    let host = rest.split(['/', ':', '?', '#']).next()?;
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+/// Importa un sito esistente: i suoi file, il nostro wp-config.php (legge il .env), il suo dump.
+/// Il prefisso delle tabelle viene dal vecchio wp-config.php; se il dominio cambia, search-replace.
+pub async fn import_site<H: Host>(c: &Ctx<H>, req: &ImportSite, log: &mut JobLog) -> Result<Site> {
+    let r = &req.site;
+    let site = c.store.create_site(&NewSite { primary: r.domain.clone(), kind: r.kind, template: r.template.clone() }).await?;
+    log.push(format!("sito {} registrato per l'import", site.slug.as_str()));
+    let mut undo = vec![Undo::Row(site.id)];
+    match import_steps(c, req, &site, &mut undo, log).await {
+        Ok(()) => Ok(c.store.site(site.id).await?),
+        Err(e) => {
+            log.push(format!("errore: {e:#}"));
+            rollback(c, undo, log).await;
+            Err(e)
+        }
+    }
+}
+
+async fn import_steps<H: Host>(c: &Ctx<H>, req: &ImportSite, site: &Site, undo: &mut Vec<Undo>, log: &mut JobLog) -> Result<()> {
+    let slug = &site.slug;
+    let db = new_database(c, site, undo, log).await?;
+    let imported = c.host.import_files(slug, site.uid(), &req.archive).await?;
+    log.push("file estratti");
+    let create = CreateSite { table_prefix: imported.table_prefix.clone().unwrap_or_else(|| req.site.table_prefix.clone()), ..req.site.clone() };
+    let redis_password = random_password();
+    c.store.save_redis_password(site.id, &c.key.encrypt(&redis_password)).await?;
+    let (vars, env) = site_vars(c, &create, site, &db, &redis_password);
+    c.host.install_template(slug, site.uid(), &create.template, &vars, &env).await?;
+    log.push(format!("wp-config.php e .env del pannello installati (prefisso {})", create.table_prefix));
+    c.sync_redis().await?;
+    check_own_pool(c, site).await?;
+    let wordpress = site.kind == SiteKind::Wordpress;
+    if wordpress && !imported.has_core {
+        c.host.wp(slug, &["core", "download", "--skip-content", "--locale=it_IT"].map(String::from)).await?;
+        log.push("core di WordPress scaricato");
+    }
+    c.host.db_import(&db.name, open_sql(&req.dump).await?).await.context("import del dump")?;
+    log.push("dump importato");
+    if wordpress {
+        let home = c.host.wp(slug, &["option", "get", "home"].map(String::from)).await?;
+        let new = create.domain.as_str();
+        match url_host(&home) {
+            Some(old) if old != new => {
+                let (from, to) = (format!("//{old}"), format!("//{new}"));
+                c.host.wp(slug, &["search-replace", &from, &to, "--all-tables", "--skip-columns=guid"].map(String::from)).await?;
+                log.push(format!("search-replace {from} → {to}"));
+            }
+            _ => log.push("stesso dominio: nessun search-replace"),
+        }
+    }
+    c.store.set_status(site.id, SiteStatus::Active).await?;
+    c.sync_caddy().await?;
+    flush_object_cache(c, site, log).await;
+    log.push(format!("sito importato: aggiungi {} al tunnel Cloudflare verso http://caddy:80", create.domain.as_str()));
+    Ok(())
 }
 
 /// Database e cartelle di un sito appena registrato, con i passi per annullarli.
@@ -643,6 +724,73 @@ mod tests {
         let ops = c.host.ops();
         assert!(ops.ends_with(&["remove_site_dirs", "drop_database", "sync_php", "sync_redis", "sync_caddy"].map(String::from)), "{ops:?}");
         assert_eq!(c.store.sites().await.unwrap().len(), 1);
+    }
+
+    fn import_req(dump: &std::path::Path) -> ImportSite {
+        ImportSite { site: CreateSite { domain: Domain::parse("epops.it").unwrap(), ..req("epops.it") }, archive: "/srv/imports/files/epops.zip".into(), dump: dump.to_path_buf() }
+    }
+
+    #[tokio::test]
+    async fn import_keeps_the_old_files_and_prefix_and_moves_the_domain() {
+        let dump = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(dump.path(), "-- vecchio dump").unwrap();
+        let host = FakeHost {
+            imported: Some(Imported { table_prefix: Some("ep_".into()), has_core: false }),
+            wp_replies: vec![("option get home", "https://vecchio.epops.it\n")],
+            ..Default::default()
+        };
+        let c = ctx(host).await;
+        let site = import_site(&c, &import_req(dump.path()), &mut JobLog::default()).await.unwrap();
+        assert_eq!(
+            c.host.calls(),
+            [
+                "create_database epops_it",
+                "create_site_dirs epops_it",
+                "import_files epops_it /srv/imports/files/epops.zip",
+                "install_template epops_it wordpress",
+                "sync_redis epops_it",
+                "sync_php users=epops_it pools=epops_it",
+                "wp epops_it core download --skip-content --locale=it_IT",
+                "db_import epops_it -- vecchio dump",
+                "wp epops_it option get home",
+                "wp epops_it search-replace //vecchio.epops.it //epops.it --all-tables --skip-columns=guid",
+                "sync_caddy epops_it",
+                "wp epops_it cache flush",
+            ]
+        );
+        assert_eq!(c.host.env.lock().unwrap()["TABLE_PREFIX"], "ep_");
+        assert_eq!(c.store.site(site.id).await.unwrap().status, SiteStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn import_on_the_same_domain_skips_search_replace_and_core_download() {
+        let dump = tempfile::NamedTempFile::new().unwrap();
+        let host = FakeHost {
+            imported: Some(Imported { table_prefix: None, has_core: true }),
+            wp_replies: vec![("option get home", "https://epops.it")],
+            ..Default::default()
+        };
+        let c = ctx(host).await;
+        import_site(&c, &import_req(dump.path()), &mut JobLog::default()).await.unwrap();
+        let calls = c.host.calls();
+        assert!(!calls.iter().any(|x| x.contains("search-replace") || x.contains("core download")), "{calls:?}");
+        assert_eq!(c.host.env.lock().unwrap()["TABLE_PREFIX"], "wp_");
+    }
+
+    #[tokio::test]
+    async fn failed_import_rolls_back() {
+        let dump = tempfile::NamedTempFile::new().unwrap();
+        let c = ctx(FakeHost { fail_on: Some("db_import"), imported: Some(Imported::default()), ..Default::default() }).await;
+        assert!(import_site(&c, &import_req(dump.path()), &mut JobLog::default()).await.is_err());
+        assert!(c.store.sites().await.unwrap().is_empty());
+        assert!(c.host.ops().contains(&"drop_database".to_string()));
+    }
+
+    #[test]
+    fn host_of_url() {
+        assert_eq!(url_host("https://www.epops.it/blog\n").as_deref(), Some("www.epops.it"));
+        assert_eq!(url_host("http://localhost:8080").as_deref(), Some("localhost"));
+        assert_eq!(url_host("niente"), None);
     }
 
     #[tokio::test]

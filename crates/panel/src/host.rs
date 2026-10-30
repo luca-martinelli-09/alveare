@@ -39,6 +39,8 @@ pub struct Paths {
     pub adminer: PathBuf,
     pub backups: PathBuf,
     pub redis: PathBuf,
+    /// Area import: archivi e dump caricati dall'admin (`files/`), blocchi in arrivo (`tmp/`).
+    pub imports: PathBuf,
 }
 
 impl Paths {
@@ -58,6 +60,7 @@ impl Paths {
             adminer: root.join("adminer"),
             backups: root.join("backups"),
             redis: root.join("redis"),
+            imports: root.join("imports"),
         }
     }
 
@@ -572,6 +575,12 @@ impl Host for SystemHost {
         let (user, pw) = (sql_safe(user)?, sql_safe(password)?);
         sqlx::raw_sql(&format!("ALTER USER '{user}'@'%' IDENTIFIED BY '{pw}';")).execute(&self.mysql).await.context("cambio password")?;
         Ok(())
+    }
+
+    async fn import_files(&self, slug: &Slug, _uid: u32, archive: &Path) -> Result<crate::flows::Imported> {
+        // Proprietario sistemato dopo, da install_template, insieme al resto del sito.
+        let (public, archive) = (self.paths.sites.join(slug.as_str()).join("public"), archive.to_path_buf());
+        tokio::task::spawn_blocking(move || crate::importer::import_files(&public, &archive)).await?
     }
 
     async fn copy_site_files(&self, from: &Slug, to: &Slug, uid: u32) -> Result<()> {
