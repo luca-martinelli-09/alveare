@@ -4,6 +4,7 @@
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Switch } from '$lib/components/ui/switch';
+	import { Input } from '$lib/components/ui/input';
 	import { api, errorMessage } from '$lib/api';
 	import { toast } from 'svelte-sonner';
 	import type { SiteDetail } from './types';
@@ -11,8 +12,12 @@
 	let { detail, onchange }: { detail: SiteDetail; onchange: () => void } = $props();
 	let busy = $state(false);
 	const suspended = $derived(detail.site.status === 'suspended');
+	let logDays = $state(0);
+	$effect(() => {
+		logDays = detail.site.log_retention_days;
+	});
 
-	async function update(body: Record<string, boolean>, done: string) {
+	async function update(body: Record<string, boolean | number>, done: string) {
 		busy = true;
 		try {
 			await api.patch(`/api/sites/${detail.site.id}`, body);
@@ -44,6 +49,16 @@
 					disabled={busy || suspended}
 					onCheckedChange={(on) => update({ staging: on }, on ? 'Protezione attivata' : 'Protezione tolta')}
 				/>
+			</Field.Field>
+			<Field.Field orientation="horizontal">
+				<Field.FieldContent>
+					<Field.FieldLabel for="log-days">Conservazione dei log (giorni)</Field.FieldLabel>
+					<Field.FieldDescription>Gli access log contengono IP: dati personali. Poi vengono eliminati.</Field.FieldDescription>
+				</Field.FieldContent>
+				<form class="flex gap-2" onsubmit={(e) => (e.preventDefault(), update({ log_retention_days: logDays }, 'Conservazione aggiornata'))}>
+					<Input id="log-days" type="number" min="1" max="365" class="w-20" bind:value={logDays} />
+					<Button type="submit" variant="outline" size="sm" disabled={busy || logDays === detail.site.log_retention_days}>Salva</Button>
+				</form>
 			</Field.Field>
 			{#if detail.staging}
 				<p class="text-sm">

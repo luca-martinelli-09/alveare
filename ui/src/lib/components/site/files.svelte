@@ -87,6 +87,18 @@
 		if (name) op({ op: 'mkdir', path: join(name) });
 	}
 
+	const isArchive = (name: string) => /\.(zip|tar\.gz|tgz)$/i.test(name);
+
+	function extract(e: Entry) {
+		const to = prompt('Estrai nella cartella', path);
+		if (to !== null) op({ op: 'extract', path: join(e.name), to });
+	}
+
+	function compress(e: Entry) {
+		const to = prompt('Nome dell\'archivio (.zip o .tar.gz)', join(`${e.name}.zip`));
+		if (to) op({ op: 'compress', paths: [join(e.name)], to });
+	}
+
 	function chmod(e: Entry) {
 		const mode = prompt('Permessi (ottale)', (e.mode & 0o777).toString(8));
 		if (mode) op({ op: 'chmod', path: join(e.name), mode: parseInt(mode, 8) });
@@ -164,9 +176,13 @@
 							</DropdownMenu.Trigger>
 							<DropdownMenu.Content align="end">
 								<DropdownMenu.Group>
-									{#if !e.is_dir}
-										<DropdownMenu.Item onclick={() => (window.location.href = `/api/sites/${id}/files/download?path=${encodeURIComponent(join(e.name))}`)}>Scarica</DropdownMenu.Item>
+									<DropdownMenu.Item onclick={() => (window.location.href = `/api/sites/${id}/files/download?path=${encodeURIComponent(join(e.name))}`)}>
+										{e.is_dir ? 'Scarica come zip' : 'Scarica'}
+									</DropdownMenu.Item>
+									{#if !e.is_dir && isArchive(e.name)}
+										<DropdownMenu.Item onclick={() => extract(e)}>Estrai</DropdownMenu.Item>
 									{/if}
+									<DropdownMenu.Item onclick={() => compress(e)}>Comprimi</DropdownMenu.Item>
 									<DropdownMenu.Item onclick={() => rename(e)}>Rinomina o sposta</DropdownMenu.Item>
 									<DropdownMenu.Item onclick={() => chmod(e)}>Permessi</DropdownMenu.Item>
 									<DropdownMenu.Item variant="destructive" onclick={() => confirm(`Spostare ${e.name} nel cestino?`) && op({ op: 'delete', path: join(e.name) })}>
