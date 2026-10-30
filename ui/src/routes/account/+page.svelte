@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import PageHeader from '$lib/components/app/page-header.svelte';
+	import { askPassword } from '$lib/ask.svelte';
 	import SettingsSection from '$lib/components/app/settings-section.svelte';
 	import SettingRow from '$lib/components/app/setting-row.svelte';
 	import SecurityCards from '$lib/components/app/security-cards.svelte';
@@ -42,7 +43,12 @@
 
 	async function saveProfile() {
 		try {
-			await api.patch('/api/me', { name, email });
+			let password = '';
+			if (email.trim() !== session.user?.email) {
+				password = (await askPassword("Cambia l'email")) ?? '';
+				if (!password) return;
+			}
+			await api.patch('/api/me', { name, email, password });
 			await loadSession();
 			toast.success('Profilo aggiornato');
 		} catch (e) {
@@ -57,8 +63,10 @@
 
 	async function createToken(e: SubmitEvent) {
 		e.preventDefault();
+		const password = await askPassword('Crea il token');
+		if (!password) return;
 		try {
-			token = (await api.post<{ token: string }>('/api/me/tokens', { name: tokenName, days: Number(days) })).token;
+			token = (await api.post<{ token: string }>('/api/me/tokens', { name: tokenName, days: Number(days), password })).token;
 			tokenName = '';
 			refresh++;
 		} catch (err) {

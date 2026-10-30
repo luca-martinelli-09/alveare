@@ -3,7 +3,7 @@
 use sqlx::Row;
 use totp_rs::Secret;
 
-use super::{hash_password, sha256_hex, totp, user_from_row, verify_password, Auth, AuthError, Result, TotpSetup, User, MIN_PASSWORD};
+use super::{hash_password, totp, user_from_row, verify_password, Auth, AuthError, Result, TotpSetup, User, MIN_PASSWORD};
 use crate::secrets::random_password;
 
 #[derive(Debug, serde::Serialize)]
@@ -45,29 +45,33 @@ impl Auth {
         Ok(())
     }
 
-    async fn password_ok(&self, id: i64, password: &str) -> Result<bool> {
+    /// La password attuale per le operazioni delicate: gli errori contano per il blocco come al login.
+    pub async fn check_password(&self, id: i64, password: &str, ip: &str, now: i64) -> Result<()> {
+        let user = self.user(id).await?;
+        let keys = Self::failure_keys(&user.email, ip);
+        self.check_not_locked(&keys, now).await?;
         let hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?").bind(id).fetch_one(&self.pool).await?;
-        Ok(verify_password(password, &hash))
-    }
-
-    /// Nuova password con quella attuale; le altre sessioni si chiudono, questa resta.
-    pub async fn change_password(&self, id: i64, current: &str, new: &str, keep_token: &str) -> Result<()> {
-        if !self.password_ok(id, current).await? {
+        if !verify_password(password, &hash) {
+            self.record_failure(&keys, now).await?;
             return Err(AuthError::Invalid);
         }
+        Ok(())
+    }
+
+    /// Nuova password con quella attuale; le altre sessioni si chiudono e i token API si revocano, questa resta.
+    pub async fn change_password(&self, id: i64, current: &str, new: &str, keep_token: &str, ip: &str, now: i64) -> Result<()> {
+        self.check_password(id, current, ip, now).await?;
         if new.chars().count() < MIN_PASSWORD {
             return Err(AuthError::WeakPassword);
         }
         sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?").bind(hash_password(new)?).bind(id).execute(&self.pool).await?;
-        sqlx::query("DELETE FROM sessions WHERE user_id = ? AND id != ?").bind(id).bind(sha256_hex(keep_token)).execute(&self.pool).await?;
+        self.revoke_access(id, keep_token, false).await?;
         Ok(())
     }
 
     /// Nuovo segreto TOTP (per cambiare app), attivo solo dopo `confirm_totp_change`.
-    pub async fn start_totp_change(&self, id: i64, password: &str) -> Result<TotpSetup> {
-        if !self.password_ok(id, password).await? {
-            return Err(AuthError::Invalid);
-        }
+    pub async fn start_totp_change(&self, id: i64, password: &str, ip: &str, now: i64) -> Result<TotpSetup> {
+        self.check_password(id, password, ip, now).await?;
         let user = self.user(id).await?;
         let secret = Secret::generate().to_base32();
         sqlx::query("UPDATE users SET totp_pending_enc = ? WHERE id = ?").bind(self.key.encrypt(&secret)).bind(id).execute(&self.pool).await?;
@@ -84,18 +88,18 @@ impl Auth {
         Ok(())
     }
 
-    /// Admin: password temporanea da cambiare al primo accesso; sessioni chiuse.
+    /// Admin: password temporanea da cambiare al primo accesso; sessioni, token e passkey revocati.
     pub async fn temporary_password(&self, id: i64) -> Result<String> {
         let temp = random_password();
         sqlx::query("UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?").bind(hash_password(&temp)?).bind(id).execute(&self.pool).await?;
-        sqlx::query("DELETE FROM sessions WHERE user_id = ?").bind(id).execute(&self.pool).await?;
+        self.revoke_access(id, "", true).await?;
         Ok(temp)
     }
 
-    /// Admin: toglie il TOTP (telefono perso); al prossimo accesso lo riconfigura. Sessioni chiuse.
+    /// Admin: toglie il TOTP (telefono perso); al prossimo accesso lo riconfigura. Sessioni, token e passkey revocati.
     pub async fn reset_totp(&self, id: i64) -> Result<()> {
         sqlx::query("UPDATE users SET totp_secret_enc = NULL, totp_pending_enc = NULL WHERE id = ?").bind(id).execute(&self.pool).await?;
-        sqlx::query("DELETE FROM sessions WHERE user_id = ?").bind(id).execute(&self.pool).await?;
+        self.revoke_access(id, "", true).await?;
         Ok(())
     }
 
@@ -138,6 +142,21 @@ mod tests {
         (id, secret, tok)
     }
 
+    async fn fake_passkey(a: &Auth, user: i64) {
+        sqlx::query("INSERT INTO passkeys (user_id, name, cred_id, data, created_at) VALUES (?, 'x', ?, '{}', 0)").bind(user).bind(format!("c{user}")).execute(&a.pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_wrong_current_password_counts_toward_the_lock() {
+        let a = auth().await;
+        let (id, _, _) = active(&a, "a@x.it", false).await;
+        for _ in 0..5 {
+            assert!(matches!(a.start_totp_change(id, "sbagliata", "9.9.9.9", T0 + 10).await, Err(AuthError::Invalid)));
+        }
+        assert!(matches!(a.start_totp_change(id, "una-password-lunga", "9.9.9.9", T0 + 11).await, Err(AuthError::Locked)));
+        assert!(matches!(a.check_password(id, "una-password-lunga", "1.1.1.1", T0 + 11).await, Err(AuthError::Locked)), "bloccato l'utente, non solo l'IP");
+    }
+
     #[tokio::test]
     async fn profile_name_and_email_change_and_email_stays_unique() {
         let a = auth().await;
@@ -155,11 +174,13 @@ mod tests {
         let (id, secret, tok) = active(&a, "a@x.it", false).await;
         let (other, _) = a.login("a@x.it", "una-password-lunga", "2.2.2.2", "ua", T0 + 60).await.unwrap();
         a.verify_totp(&other, &code(&secret, T0 + 60), "2.2.2.2", T0 + 60).await.unwrap();
-        assert!(matches!(a.change_password(id, "sbagliata", "nuova-password-lunga", &tok).await, Err(AuthError::Invalid)));
-        assert!(matches!(a.change_password(id, "una-password-lunga", "corta", &tok).await, Err(AuthError::WeakPassword)));
-        a.change_password(id, "una-password-lunga", "nuova-password-lunga", &tok).await.unwrap();
+        let api = a.create_api_token(id, "cli", i64::MAX).await.unwrap();
+        assert!(matches!(a.change_password(id, "sbagliata", "nuova-password-lunga", &tok, "1.1.1.1", T0 + 60).await, Err(AuthError::Invalid)));
+        assert!(matches!(a.change_password(id, "una-password-lunga", "corta", &tok, "1.1.1.1", T0 + 60).await, Err(AuthError::WeakPassword)));
+        a.change_password(id, "una-password-lunga", "nuova-password-lunga", &tok, "1.1.1.1", T0 + 60).await.unwrap();
         assert!(a.session(&tok, T0 + 61).await.is_some(), "questa sessione resta");
         assert!(a.session(&other, T0 + 61).await.is_none(), "le altre si chiudono");
+        assert!(a.token_user(&api, T0 + 61).await.is_none(), "e i token API pure");
         assert!(a.login("a@x.it", "nuova-password-lunga", "1.1.1.1", "ua", T0 + 62).await.is_ok());
     }
 
@@ -167,8 +188,8 @@ mod tests {
     async fn totp_can_be_moved_to_a_new_app() {
         let a = auth().await;
         let (id, old, _) = active(&a, "a@x.it", false).await;
-        assert!(matches!(a.start_totp_change(id, "sbagliata").await, Err(AuthError::Invalid)));
-        let setup = a.start_totp_change(id, "una-password-lunga").await.unwrap();
+        assert!(matches!(a.start_totp_change(id, "sbagliata", "1.1.1.1", T0 + 80).await, Err(AuthError::Invalid)));
+        let setup = a.start_totp_change(id, "una-password-lunga", "1.1.1.1", T0 + 80).await.unwrap();
         assert!(a.confirm_totp_change(id, &code(&old, T0 + 90), "1.1.1.1", T0 + 90).await.is_err(), "serve il codice della nuova app");
         a.confirm_totp_change(id, &code(&setup.secret, T0 + 120), "1.1.1.1", T0 + 120).await.unwrap();
         let (tok, _) = a.login("a@x.it", "una-password-lunga", "1.1.1.1", "ua", T0 + 200).await.unwrap();
@@ -180,14 +201,22 @@ mod tests {
         let a = auth().await;
         let (admin, _, _) = active(&a, "admin@x.it", true).await;
         let (id, _, tok) = active(&a, "a@x.it", false).await;
+        let api = a.create_api_token(id, "cli", i64::MAX).await.unwrap();
+        fake_passkey(&a, id).await;
         let temp = a.temporary_password(id).await.unwrap();
         assert!(a.session(&tok, T0 + 1).await.is_none(), "sessioni chiuse");
+        assert!(a.token_user(&api, T0 + 1).await.is_none(), "token revocati");
+        assert_eq!(a.user_detail(id).await.unwrap().passkeys, 0, "passkey tolte");
         assert_eq!(a.login("a@x.it", &temp, "1.1.1.1", "ua", T0 + 2).await.unwrap().1, Stage::Setup, "al primo accesso la cambia");
         let (_, _, tok) = active(&a, "b@x.it", false).await;
         let b = a.user_detail(a.users().await.unwrap().iter().find(|u| u.email == "b@x.it").unwrap().id).await.unwrap();
         assert!(b.has_totp);
+        let api = a.create_api_token(b.user.id, "cli", i64::MAX).await.unwrap();
+        fake_passkey(&a, b.user.id).await;
         a.reset_totp(b.user.id).await.unwrap();
         assert!(a.session(&tok, T0 + 3).await.is_none());
+        assert!(a.token_user(&api, T0 + 3).await.is_none());
+        assert_eq!(a.user_detail(b.user.id).await.unwrap().passkeys, 0);
         assert!(!a.user_detail(b.user.id).await.unwrap().has_totp);
         assert!(matches!(a.set_admin(admin, false).await, Err(AuthError::LastAdmin)), "almeno un admin");
         a.set_admin(id, true).await.unwrap();

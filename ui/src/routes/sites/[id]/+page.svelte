@@ -99,14 +99,18 @@
 			{#if detail.site.kind === 'wordpress'}
 				<Tabs.Trigger value="updates">Aggiornamenti</Tabs.Trigger>
 			{/if}
-			<Tabs.Trigger value="cron">Cron</Tabs.Trigger>
+			{#if detail.can_manage}
+				<Tabs.Trigger value="cron">Cron</Tabs.Trigger>
+			{/if}
 			{#if detail.can_manage && detail.site.kind !== 'wordpress'}
 				<Tabs.Trigger value="app">App</Tabs.Trigger>
 			{/if}
 			{#if detail.can_manage}
 				<Tabs.Trigger value="settings">Impostazioni</Tabs.Trigger>
 			{/if}
-			<Tabs.Trigger value="activity">Attività</Tabs.Trigger>
+			{#if detail.can_manage}
+				<Tabs.Trigger value="activity">Attività</Tabs.Trigger>
+			{/if}
 			</Tabs.List>
 		</div>
 		<Tabs.Content value="overview"><Overview {detail} onchange={load} /></Tabs.Content>
@@ -114,12 +118,12 @@
 			<Tabs.Content value="files"><Files base={`/api/sites/${id}`} /></Tabs.Content>
 			<Tabs.Content value="database"><Database {id} /></Tabs.Content>
 			<Tabs.Content value="settings"><Settings {detail} onchange={load} /></Tabs.Content>
+			<Tabs.Content value="cron"><Crons {id} canManage={detail.can_manage} /></Tabs.Content>
+			<Tabs.Content value="activity"><Activity {id} /></Tabs.Content>
 		{/if}
 		<Tabs.Content value="logs"><Logs {id} canManage={detail.can_manage} /></Tabs.Content>
 		<Tabs.Content value="updates"><Updates {id} canManage={detail.can_manage} /></Tabs.Content>
 		<Tabs.Content value="app"><AppTab {id} canManage={detail.can_manage} /></Tabs.Content>
-		<Tabs.Content value="cron"><Crons {id} canManage={detail.can_manage} /></Tabs.Content>
 		<Tabs.Content value="backups"><Backups {id} canManage={detail.can_manage} /></Tabs.Content>
-		<Tabs.Content value="activity"><Activity {id} /></Tabs.Content>
 	</Tabs.Root>
 {/if}

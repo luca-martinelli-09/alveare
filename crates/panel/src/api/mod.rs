@@ -264,6 +264,25 @@ async fn caller<H>(app: &App<H>, method: &Method, h: &HeaderMap) -> ApiResult<Us
     Ok(s.user)
 }
 
+/// Password sbagliata in un'operazione da collegati: 403, perché il 401 nel pannello vuol dire "sessione finita".
+fn wrong_password(e: AuthError) -> ApiError {
+    match e {
+        AuthError::Invalid => ApiError::new(StatusCode::FORBIDDEN, "password errata"),
+        e => e.into(),
+    }
+}
+
+/// Credenziali nuove (token, passkey, email): solo da una sessione del browser e con la password,
+/// così un token o una sessione rubati non bastano per restare dentro.
+async fn reauth<H>(app: &App<H>, method: &Method, h: &HeaderMap, password: &str) -> ApiResult<User> {
+    if h.contains_key(header::AUTHORIZATION) {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "si fa dal pannello, non con un token API"));
+    }
+    let user = caller(app, method, h).await?;
+    app.auth.check_password(user.id, password, &client_ip(h), now()).await.map_err(wrong_password)?;
+    Ok(user)
+}
+
 async fn require_site<H>(app: &App<H>, user: &User, site_id: i64, need: Need) -> ApiResult<()> {
     if app.auth.can(user, site_id, need).await? { Ok(()) } else { Err(ApiError::forbidden()) }
 }
@@ -402,10 +421,12 @@ async fn me<H: Host>(State(app): State<App<H>>, h: HeaderMap) -> ApiResult<Respo
 struct TokenReq {
     name: String,
     days: i64,
+    #[serde(default)]
+    password: String,
 }
 
 async fn create_token<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap, Json(r): Json<TokenReq>) -> ApiResult<Response> {
-    let user = caller(&app, &m, &h).await?;
+    let user = reauth(&app, &m, &h, &r.password).await?;
     if !(1..=365).contains(&r.days) || r.name.trim().is_empty() {
         return Err(ApiError::bad_request("nome obbligatorio e durata tra 1 e 365 giorni"));
     }
@@ -686,7 +707,7 @@ async fn delete_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m:
 
 async fn site_audit<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
-    require_site(&app, &user, id, Need::Read).await?;
+    require_site(&app, &user, id, Need::Manage).await?;
     Ok(Json(app.auth.audit_for_site(id, 200).await?).into_response())
 }
 
@@ -1119,7 +1140,8 @@ async fn get_job<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Met
     let job = app.jobs.get(id).await?;
     let allowed = match job.site_id {
         _ if user.is_admin => true,
-        Some(site) => app.auth.can(&user, site, Need::Read).await?,
+        // L'output dei job (WP-CLI, cron) può contenere segreti: solo per chi gestisce.
+        Some(site) => app.auth.can(&user, site, Need::Manage).await?,
         None => false,
     };
     if !allowed {

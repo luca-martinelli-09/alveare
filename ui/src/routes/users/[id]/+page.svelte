@@ -71,7 +71,7 @@
 	}
 
 	async function resetPassword() {
-		if (!(await askConfirm({ title: 'Generare una password temporanea?', description: 'Quella attuale smette di valere e le sessioni si chiudono. Al primo accesso la cambierà.', confirmLabel: 'Genera' }))) return;
+		if (!(await askConfirm({ title: 'Generare una password temporanea?', description: 'Quella attuale smette di valere; sessioni, token API e passkey vengono revocati. Al primo accesso la cambierà.', confirmLabel: 'Genera' }))) return;
 		try {
 			temp = (await api.post<{ temporary_password: string }>(`/api/users/${id}/password`)).temporary_password;
 			await load();
@@ -81,7 +81,7 @@
 	}
 
 	async function resetTotp() {
-		if (!(await askConfirm({ title: 'Azzerare il TOTP?', description: 'Per un telefono perso: al prossimo accesso sceglierà una nuova password e configurerà di nuovo l\'app. Le sessioni si chiudono.', confirmLabel: 'Azzera', destructive: true }))) return;
+		if (!(await askConfirm({ title: 'Azzerare il TOTP?', description: 'Per un telefono perso: al prossimo accesso sceglierà una nuova password e configurerà di nuovo l\'app. Sessioni, token API e passkey vengono revocati.', confirmLabel: 'Azzera', destructive: true }))) return;
 		run(() => api.post(`/api/users/${id}/totp/reset`), 'TOTP azzerato');
 	}
 
@@ -227,9 +227,9 @@
 				{:else}
 					<SettingRow label="Nessuna sessione aperta" />
 				{/each}
-				{#if d.sessions.length > 1}
+				{#if d.sessions.length}
 					<div class="flex justify-end px-4 py-2.5">
-						<Button variant="ghost" size="sm" onclick={() => run(() => api.post(`/api/users/${id}/sessions/revoke`), 'Sessioni chiuse')}>Chiudi tutte</Button>
+						<Button variant="ghost" size="sm" onclick={async () => (await askConfirm({ title: 'Chiudere tutto?', description: 'Si chiudono tutte le sessioni e smettono di valere anche i token API.', confirmLabel: 'Chiudi tutto', destructive: true })) && run(() => api.post(`/api/users/${id}/sessions/revoke`), 'Sessioni chiuse e token revocati')}>Chiudi tutto</Button>
 					</div>
 				{/if}
 			</SettingsSection>

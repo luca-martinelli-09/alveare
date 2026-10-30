@@ -23,7 +23,8 @@ async fn site_cron<H>(app: &App<H>, id: i64, cid: i64) -> ApiResult<crate::store
 
 async fn list<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
-    require_site(&app, &user, id, Need::Read).await?;
+    // Comandi e output possono contenere segreti: solo per chi gestisce.
+    require_site(&app, &user, id, Need::Manage).await?;
     let mut out = Vec::new();
     for c in app.ctx.store.crons(Some(id)).await? {
         let last = app.ctx.store.cron_runs(c.id, 1).await?.into_iter().next();
@@ -111,7 +112,7 @@ async fn run_now<H: Host>(State(app): State<App<H>>, Path((id, cid)): Path<(i64,
 
 async fn runs<H: Host>(State(app): State<App<H>>, Path((id, cid)): Path<(i64, i64)>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
-    require_site(&app, &user, id, Need::Read).await?;
+    require_site(&app, &user, id, Need::Manage).await?;
     site_cron(&app, id, cid).await?;
     Ok(Json(app.ctx.store.cron_runs(cid, 50).await?).into_response())
 }
@@ -150,15 +151,19 @@ mod tests {
         let (s, body, _) = call(&t, req("POST", &format!("{url}/{cid}/run"), Some(&manager), None)).await;
         assert_eq!(s, StatusCode::ACCEPTED);
         assert_eq!(wait_job(&t, body["job"].as_i64().unwrap()).await.status, "done");
-        let (_, list, _) = call(&t, req("GET", &url, Some(&reader), None)).await;
+        let (_, list, _) = call(&t, req("GET", &url, Some(&manager), None)).await;
         assert_eq!(list[0]["last"]["ok"], true);
+        let (s, _, _) = call(&t, req("GET", &url, Some(&reader), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "comandi e output non sono per chi legge soltanto");
         let (s, _, _) = call(&t, req("PATCH", &format!("{url}/{cid}"), Some(&manager), Some(json!({"active": false})))).await;
         assert_eq!(s, StatusCode::OK);
         assert!(t.app.ctx.store.crons(None).await.unwrap().is_empty());
         // Un cron di un sito non si raggiunge passando da un altro sito.
         let (s, _, _) = call(&t, req("DELETE", &format!("/api/sites/{other}/cron/{cid}"), Some(&admin), None)).await;
         assert_eq!(s, StatusCode::NOT_FOUND);
-        let (_, runs, _) = call(&t, req("GET", &format!("{url}/{cid}/runs"), Some(&reader), None)).await;
+        let (s, _, _) = call(&t, req("GET", &format!("{url}/{cid}/runs"), Some(&reader), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (_, runs, _) = call(&t, req("GET", &format!("{url}/{cid}/runs"), Some(&manager), None)).await;
         assert_eq!(runs.as_array().unwrap().len(), 1);
     }
 }

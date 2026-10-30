@@ -135,7 +135,14 @@ mod tests {
         assert_eq!(s, StatusCode::FORBIDDEN);
         let (s, out, _) = call(&t, req("POST", &format!("/api/sites/{id}/wp"), Some(&manager), Some(body))).await;
         assert_eq!(s, StatusCode::ACCEPTED);
-        assert_eq!(wait_job(&t, out["job"].as_i64().unwrap()).await.status, "done");
+        let job = out["job"].as_i64().unwrap();
+        assert_eq!(wait_job(&t, job).await.status, "done");
+        let (s, _, _) = call(&t, req("GET", &format!("/api/jobs/{job}"), Some(&reader), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "l'output di WP-CLI può contenere segreti");
+        let (s, _, _) = call(&t, req("GET", &format!("/api/jobs/{job}"), Some(&manager), None)).await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _, _) = call(&t, req("GET", &format!("/api/sites/{id}/audit"), Some(&reader), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
         assert!(t.app.ctx.host.calls().contains(&"wp sona_it option get blogname".to_string()));
         let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/wp"), Some(&manager), Some(json!({"args": []})))).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);

@@ -2,7 +2,7 @@
 // Un solo dialogo montato nel layout; chi chiede aspetta la Promise.
 type Base = { title: string; description?: string; confirmLabel?: string };
 export type ConfirmRequest = Base & { kind: 'confirm'; destructive?: boolean; resolve: (ok: boolean) => void };
-export type TextRequest = Base & { kind: 'text'; label: string; value?: string; placeholder?: string; mono?: boolean; allowEmpty?: boolean; resolve: (v: string | null) => void };
+export type TextRequest = Base & { kind: 'text'; label: string; value?: string; placeholder?: string; mono?: boolean; secret?: boolean; allowEmpty?: boolean; resolve: (v: string | null) => void };
 
 export const ask = $state<{ current: ConfirmRequest | TextRequest | null }>({ current: null });
 
@@ -15,3 +15,7 @@ export function askText(o: Omit<TextRequest, 'kind' | 'resolve'>): Promise<strin
 	ask.current?.kind === 'confirm' ? ask.current.resolve(false) : ask.current?.resolve(null);
 	return new Promise((resolve) => (ask.current = { ...o, kind: 'text', resolve }));
 }
+
+// La password attuale, per le operazioni che creano credenziali nuove.
+export const askPassword = (title: string) =>
+	askText({ title, description: 'Per sicurezza serve la tua password.', label: 'Password', secret: true, confirmLabel: 'Conferma' });

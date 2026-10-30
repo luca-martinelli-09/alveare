@@ -70,6 +70,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn new_credentials_need_the_password_and_a_browser_session() {
+        let t = setup().await;
+        let (uid, me) = browser_session(&t, "a@example.org").await;
+        let api = t.app.auth.create_api_token(uid, "cli", i64::MAX).await.unwrap();
+        let ok = serde_json::json!({"name": "ci", "days": 30, "password": "una-password-lunga"});
+        let (s, _, _) = call(&t, req("POST", "/api/me/tokens", Some(&api), Some(ok.clone()))).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "un token non ne crea altri");
+        for bad in [serde_json::json!({"name": "ci", "days": 30}), serde_json::json!({"name": "ci", "days": 30, "password": "sbagliata"})] {
+            let (s, _, _) = call(&t, with_cookie("POST", "/api/me/tokens", &me, true, Some(bad))).await;
+            assert_eq!(s, StatusCode::FORBIDDEN);
+        }
+        let (s, body, _) = call(&t, with_cookie("POST", "/api/me/tokens", &me, true, Some(ok))).await;
+        assert_eq!(s, StatusCode::CREATED, "{body}");
+        let pw = serde_json::json!({"password": "una-password-lunga"});
+        let (s, _, _) = call(&t, req("POST", "/api/me/passkeys/register/start", Some(&api), Some(pw.clone()))).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "nemmeno una passkey");
+        let (s, _, _) = call(&t, with_cookie("POST", "/api/me/passkeys/register/start", &me, true, Some(serde_json::json!({"password": "sbagliata"})))).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, _, _) = call(&t, with_cookie("POST", "/api/me/passkeys/register/start", &me, true, Some(pw))).await;
+        assert_eq!(s, StatusCode::CONFLICT, "password giusta: si arriva alle passkey (qui non configurate)");
+    }
+
+    #[tokio::test]
     async fn invite_by_email_then_first_access_from_the_link() {
         let mut t = setup().await;
         let (_, admin) = token_for(&t, "admin@example.org", true).await;

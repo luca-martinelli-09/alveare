@@ -217,7 +217,16 @@ async fn uptime_history<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>,
 async fn activity<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
     let visible = app.auth.visible_sites(&user).await?;
-    Ok(Json(app.jobs.recent(visible.as_deref(), 20).await.map_err(internal)?).into_response())
+    let mut list = app.jobs.recent(visible.as_deref(), 20).await.map_err(internal)?;
+    // L'ultima riga del log è per chi gestisce il sito, come il job intero.
+    for a in &mut list {
+        if let Some(site) = a.site_id {
+            if !app.auth.can(&user, site, Need::Manage).await? {
+                a.detail.clear();
+            }
+        }
+    }
+    Ok(Json(list).into_response())
 }
 
 /// Pagina del server (admin): RAM e budget di memoria dei pool.
@@ -466,6 +475,10 @@ mod tests {
         let (_, plain) = token_for(&t, "u@example.org", false).await;
         let (_, none, _) = call(&t, req("GET", "/api/activity", Some(&plain), None)).await;
         assert!(none.as_array().unwrap().is_empty(), "solo i siti assegnati");
+        let reader = user_with_role(&t, "r@example.org", id, crate::auth::Role::Readonly).await;
+        let (_, seen, _) = call(&t, req("GET", "/api/activity", Some(&reader), None)).await;
+        assert_eq!(seen[0]["kind"], "site.create");
+        assert_eq!(seen[0]["detail"], "", "il dettaglio del log è per chi gestisce");
     }
 
     #[tokio::test]

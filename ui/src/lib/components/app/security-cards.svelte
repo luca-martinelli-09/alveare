@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { askConfirm, askText } from '$lib/ask.svelte';
+	import { askConfirm, askPassword, askText } from '$lib/ask.svelte';
 	// Profilo: passkey, sessioni aperte e token API, con revoca.
 	import SettingsSection from './settings-section.svelte';
 	import SettingRow from './setting-row.svelte';
@@ -40,7 +40,9 @@
 		act(async () => {
 			const name = await askText({ title: 'Nuova passkey', description: 'Poi il browser chiede impronta, volto o PIN.', label: 'Nome del dispositivo', value: 'Portatile', confirmLabel: 'Continua' });
 			if (!name) return;
-			const start = await api.post<{ id: string; options: unknown }>('/api/me/passkeys/register/start');
+			const password = await askPassword('Conferma la password');
+			if (!password) return;
+			const start = await api.post<{ id: string; options: unknown }>('/api/me/passkeys/register/start', { password });
 			const credential = await createPasskey(start.options);
 			await api.post('/api/me/passkeys/register/finish', { id: start.id, name, credential });
 		}, 'Passkey aggiunta');

@@ -431,6 +431,8 @@ Accesso
 
 - Token API personali per script, con scadenza e limitati ai siti dell'utente.
 
+- Credenziali nuove (token API, passkey) e cambio email solo da una sessione del browser e con la password attuale. Cambio o reset della password revocano sessioni e token; password temporanea e azzeramento del TOTP decisi dall'admin tolgono anche le passkey.
+
 - Nell'MVP l'admin crea l'utente con una password temporanea da cambiare al primo accesso; in fase 3 inviti via email con link a scadenza (serve l'SMTP del pannello).
 
 - Cloudflare Access resta come livello esterno facoltativo davanti al pannello.

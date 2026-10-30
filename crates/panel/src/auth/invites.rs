@@ -134,8 +134,8 @@ impl Auth {
         };
         self.take_link(token, "reset", now).await?;
         sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?").bind(hash_password(password)?).bind(user_id).execute(&self.pool).await?;
-        // Le altre sessioni si chiudono: chi aveva la vecchia password non resta dentro.
-        sqlx::query("DELETE FROM sessions WHERE user_id = ?").bind(user_id).execute(&self.pool).await?;
+        // Sessioni e token API si chiudono: chi aveva la vecchia password non resta dentro.
+        self.revoke_access(user_id, "", false).await?;
         Ok((self.open_session(user_id, stage, ip, ua, now).await?, stage))
     }
 }
@@ -187,12 +187,13 @@ mod tests {
         assert!(a.reset_link("a@x.it", 1100).await.unwrap().is_none(), "non a raffica");
         assert!(a.reset_link("nessuno@x.it", 1000).await.unwrap().is_none());
         assert!(a.reset_password(&link, "nuova-password-lunga", "000000", "1.1.1.1", "x", 1000).await.is_err());
+        let api = a.create_api_token(id, "cli", i64::MAX).await.unwrap();
         let (session, stage) = a.reset_password(&link, "nuova-password-lunga", &code(1000), "1.1.1.1", "x", 1000).await.unwrap();
+        assert!(a.token_user(&api, 1000).await.is_none(), "i token API si revocano");
         assert_eq!(stage, Stage::Full);
         assert!(a.session(&s, 1000).await.is_none(), "la vecchia sessione è chiusa");
         assert!(a.session(&session, 1000).await.is_some());
         assert!(a.reset_password(&link, "altra-password-lunga", &code(1030), "1.1.1.1", "x", 1030).await.is_err(), "link usato");
         assert_eq!(a.login("a@x.it", "nuova-password-lunga", "1.1.1.1", "x", 1100).await.unwrap().1, Stage::Totp);
-        let _ = id;
     }
 }

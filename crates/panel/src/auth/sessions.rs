@@ -69,6 +69,17 @@ impl Auth {
         Ok(done.rows_affected())
     }
 
+    /// Chiude le sessioni (tranne `keep`) e revoca i token API; con `passkeys` toglie anche quelle.
+    /// Restituisce quante sessioni sono state chiuse.
+    pub async fn revoke_access(&self, user_id: i64, keep: &str, passkeys: bool) -> Result<u64> {
+        let closed = self.revoke_other_sessions(user_id, keep).await?;
+        sqlx::query("DELETE FROM api_tokens WHERE user_id = ?").bind(user_id).execute(&self.pool).await?;
+        if passkeys {
+            sqlx::query("DELETE FROM passkeys WHERE user_id = ?").bind(user_id).execute(&self.pool).await?;
+        }
+        Ok(closed)
+    }
+
     pub async fn tokens_of(&self, user_id: i64) -> Result<Vec<TokenInfo>> {
         let rows = sqlx::query("SELECT id, name, expires_at, last_used FROM api_tokens WHERE user_id = ? ORDER BY id DESC").bind(user_id).fetch_all(&self.pool).await?;
         rows.iter()

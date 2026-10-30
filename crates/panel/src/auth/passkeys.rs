@@ -112,7 +112,9 @@ impl Passkeys {
                 auth.save_passkey(info.id, &pk, now).await?;
             }
         }
-        auth.open_session(user_id, Stage::Full, ip, ua, now).await
+        // Con una password temporanea si passa comunque dal primo accesso.
+        let must_change: bool = sqlx::query_scalar("SELECT must_change_password FROM users WHERE id = ?").bind(user_id).fetch_one(&auth.pool).await?;
+        auth.open_session(user_id, if must_change { Stage::Setup } else { Stage::Full }, ip, ua, now).await
     }
 }
 
@@ -195,6 +197,13 @@ mod tests {
         assert_eq!(a.session(&session, 210).await.unwrap().stage, Stage::Full);
         assert!(a.passkeys_of(user).await.unwrap()[0].0.last_used.is_some());
         assert!(pk.finish_login(&a, &lid, &assertion, "1.1.1.1", "x", 220).await.is_err(), "cerimonia monouso");
+
+        // Con una password temporanea da cambiare la passkey non salta il primo accesso.
+        sqlx::query("UPDATE users SET must_change_password = 1").execute(&a.pool).await.unwrap();
+        let (lid, rcr) = pk.start_login(&a, "a@example.org", "1.1.1.1", 300).await.unwrap();
+        let assertion = device.do_authentication(origin.clone(), rcr).unwrap();
+        let session = pk.finish_login(&a, &lid, &assertion, "1.1.1.1", "x", 310).await.unwrap();
+        assert_eq!(a.session(&session, 310).await.unwrap().stage, Stage::Setup);
     }
 
     #[tokio::test]

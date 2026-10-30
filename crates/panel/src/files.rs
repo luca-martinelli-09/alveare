@@ -87,8 +87,6 @@ pub struct SiteFiles {
     root: Dir,
     tmp: Dir,
     uid: Option<u32>,
-    /// Percorso reale della radice: serve agli archivi, che leggono con std dopo un controllo.
-    root_path: PathBuf,
 }
 
 /// Limite di estrazione nel file manager.
@@ -127,24 +125,9 @@ impl SiteFiles {
 
     /// Stesse regole su un'altra coppia di cartelle (l'area import).
     pub fn open_dirs(root: &Path, tmp: &Path, uid: Option<u32>) -> Result<Self> {
-        let root_path = root.canonicalize()?;
         let root = Dir::open_ambient_dir(root, ambient_authority())?;
         let tmp = Dir::open_ambient_dir(tmp, ambient_authority())?;
-        Ok(Self { root, tmp, uid, root_path })
-    }
-
-    /// Percorso reale di `path`, solo se resta dentro la radice anche seguendo i link.
-    /// La radice no: conterrebbe il `.env`.
-    fn real_path(&self, path: &str) -> Result<PathBuf> {
-        let r = rel(path)?;
-        if r == Path::new(".") {
-            return Err(FileError::BadPath);
-        }
-        let real = self.root_path.join(r).canonicalize()?;
-        if !real.starts_with(&self.root_path) {
-            return Err(FileError::BadPath);
-        }
-        Ok(real)
+        Ok(Self { root, tmp, uid })
     }
 
     /// Estrae uno zip o tar.gz del sito nella cartella `dest`; i percorsi dell'archivio non escono.

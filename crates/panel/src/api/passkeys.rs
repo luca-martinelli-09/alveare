@@ -25,8 +25,14 @@ async fn list<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> Ap
     Ok(Json(json!({ "enabled": app.passkeys.is_some(), "passkeys": list })).into_response())
 }
 
-async fn register_start<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> ApiResult<Response> {
-    let user = caller(&app, &m, &h).await?;
+#[derive(Deserialize)]
+struct RegisterStart {
+    #[serde(default)]
+    password: String,
+}
+
+async fn register_start<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap, Json(r): Json<RegisterStart>) -> ApiResult<Response> {
+    let user = reauth(&app, &m, &h, &r.password).await?;
     let (id, options) = passkeys(&app)?.start_registration(&app.auth, user.id, now()).await?;
     Ok(Json(json!({ "id": id, "options": options })).into_response())
 }
@@ -92,17 +98,18 @@ mod tests {
     #[tokio::test]
     async fn passkey_registration_and_login_over_http() {
         let mut t = setup().await;
-        let (_, alice) = token_for(&t, "a@example.org", false).await;
-        let (s, _, _) = call(&t, req("POST", "/api/me/passkeys/register/start", Some(&alice), None)).await;
+        let (_, alice) = browser_session(&t, "a@example.org").await;
+        let pw = json!({"password": "una-password-lunga"});
+        let (s, _, _) = call(&t, with_cookie("POST", "/api/me/passkeys/register/start", &alice, true, Some(pw.clone()))).await;
         assert_eq!(s, StatusCode::CONFLICT, "serve l'host del pannello");
         let origin = "https://pannello.example.org";
         t.app = t.app.clone().with_passkeys(Some(crate::auth::passkeys::Passkeys::new(origin).unwrap()));
         let mut device = WebauthnAuthenticator::new(SoftPasskey::new(true));
-        let (_, start, _) = call(&t, req("POST", "/api/me/passkeys/register/start", Some(&alice), None)).await;
+        let (_, start, _) = call(&t, with_cookie("POST", "/api/me/passkeys/register/start", &alice, true, Some(pw))).await;
         let cred = device.do_registration(Url::parse(origin).unwrap(), serde_json::from_value(start["options"].clone()).unwrap()).unwrap();
-        let (s, _, _) = call(&t, req("POST", "/api/me/passkeys/register/finish", Some(&alice), Some(json!({"id": start["id"], "name": "Telefono", "credential": cred})))).await;
+        let (s, _, _) = call(&t, with_cookie("POST", "/api/me/passkeys/register/finish", &alice, true, Some(json!({"id": start["id"], "name": "Telefono", "credential": cred})))).await;
         assert_eq!(s, StatusCode::CREATED);
-        let (_, list, _) = call(&t, req("GET", "/api/me/passkeys", Some(&alice), None)).await;
+        let (_, list, _) = call(&t, with_cookie("GET", "/api/me/passkeys", &alice, false, None)).await;
         assert_eq!(list["passkeys"][0]["name"], "Telefono");
 
         let (s, start, _) = call(&t, req("POST", "/api/auth/passkey/start", None, Some(json!({"email": "a@example.org"})))).await;

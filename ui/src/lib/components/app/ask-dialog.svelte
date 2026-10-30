@@ -49,7 +49,7 @@
 					<Field.Field>
 						<Field.FieldLabel for="ask-text">{ask.current.label}</Field.FieldLabel>
 						<!-- svelte-ignore a11y_autofocus -->
-						<Input id="ask-text" bind:value={text} placeholder={ask.current.placeholder} class={ask.current.mono ? 'font-mono' : ''} autofocus required={!ask.current.allowEmpty} />
+						<Input id="ask-text" type={ask.current.secret ? 'password' : 'text'} autocomplete={ask.current.secret ? 'current-password' : 'off'} bind:value={text} placeholder={ask.current.placeholder} class={ask.current.mono ? 'font-mono' : ''} autofocus required={!ask.current.allowEmpty} />
 					</Field.Field>
 					<Dialog.Footer>
 						<Button variant="ghost" type="button" onclick={() => finish(null)}>Annulla</Button>

@@ -106,6 +106,18 @@ pub(crate) fn with_cookie(method: &str, uri: &str, cookie: &str, csrf: bool, bod
 }
 
 
+/// Utente non admin con una sessione completa del browser e password "una-password-lunga";
+/// restituisce (id, cookie).
+pub(crate) async fn browser_session(t: &T, email: &str) -> (i64, String) {
+    let a = &t.app.auth;
+    let (id, temp) = a.create_user(email, "Prova", false).await.unwrap();
+    let (tok, _) = a.login(email, &temp, "1.2.3.4", "ua", now()).await.unwrap();
+    let setup = a.setup_password(&tok, "una-password-lunga", now()).await.unwrap().unwrap();
+    let code = crate::auth::totp(&setup.secret, email).unwrap().generate(now() as u64).to_string();
+    a.confirm_totp(&tok, &code, "1.2.3.4", now()).await.unwrap();
+    (id, format!("{COOKIE}={tok}"))
+}
+
 /// Un utente non admin con quel ruolo sul sito.
 pub(crate) async fn user_with_role(t: &T, email: &str, site: i64, role: crate::auth::Role) -> String {
     let (uid, token) = token_for(t, email, false).await;
