@@ -34,6 +34,8 @@ pub enum FileError {
     NotText,
     #[error("upload non valido: {0}")]
     BadUpload(&'static str),
+    #[error("archivio: {0}")]
+    Archive(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -85,6 +87,15 @@ pub struct SiteFiles {
     root: Dir,
     tmp: Dir,
     uid: Option<u32>,
+    /// Percorso reale della radice: serve agli archivi, che leggono con std dopo un controllo.
+    root_path: PathBuf,
+}
+
+/// Limite di estrazione nel file manager.
+const EXTRACT_LIMIT: u64 = 5 * 1024 * 1024 * 1024;
+
+fn archive_err(e: anyhow::Error) -> FileError {
+    FileError::Archive(format!("{e:#}"))
 }
 
 /// "/public/../x" → errore; "/public/x" → "public/x"; "" → "."
@@ -116,9 +127,88 @@ impl SiteFiles {
 
     /// Stesse regole su un'altra coppia di cartelle (l'area import).
     pub fn open_dirs(root: &Path, tmp: &Path, uid: Option<u32>) -> Result<Self> {
+        let root_path = root.canonicalize()?;
         let root = Dir::open_ambient_dir(root, ambient_authority())?;
         let tmp = Dir::open_ambient_dir(tmp, ambient_authority())?;
-        Ok(Self { root, tmp, uid })
+        Ok(Self { root, tmp, uid, root_path })
+    }
+
+    /// Percorso reale di `path`, solo se resta dentro la radice anche seguendo i link.
+    /// La radice no: conterrebbe il `.env`.
+    fn real_path(&self, path: &str) -> Result<PathBuf> {
+        let r = rel(path)?;
+        if r == Path::new(".") {
+            return Err(FileError::BadPath);
+        }
+        let real = self.root_path.join(r).canonicalize()?;
+        if !real.starts_with(&self.root_path) {
+            return Err(FileError::BadPath);
+        }
+        Ok(real)
+    }
+
+    /// Estrae uno zip o tar.gz del sito nella cartella `dest`; i percorsi dell'archivio non escono.
+    pub fn extract(&self, archive: &str, dest: &str) -> Result<crate::archive::Report> {
+        let kind = crate::archive::Kind::of(archive).ok_or(FileError::Archive("serve un .zip o un .tar.gz".into()))?;
+        let file = self.open_read(archive)?;
+        let dest_rel = rel(dest)?;
+        self.mkdirs(&dest_rel)?;
+        let dir = self.root.open_dir(&dest_rel)?;
+        crate::archive::extract(file, kind, &dir, self.uid, EXTRACT_LIMIT).map_err(archive_err)
+    }
+
+    /// Crea `to` (.zip o .tar.gz) con i file e le cartelle indicati, ciascuno col suo nome.
+    pub fn compress(&self, paths: &[String], to: &str) -> Result<()> {
+        let kind = crate::archive::Kind::of(to).ok_or(FileError::Archive("serve un .zip o un .tar.gz".into()))?;
+        let sources: Vec<(PathBuf, PathBuf)> = paths
+            .iter()
+            .map(|p| {
+                let real = self.real_path(p)?;
+                let name = real.file_name().map(PathBuf::from).ok_or(FileError::BadPath)?;
+                Ok((real, name))
+            })
+            .collect::<Result<_>>()?;
+        let to_rel = rel(to)?;
+        if let Some(parent) = to_rel.parent().filter(|x| !x.as_os_str().is_empty()) {
+            self.mkdirs(parent)?;
+        }
+        let out = self.root.create(&to_rel)?.into_std();
+        self.give_to_site(&out)?;
+        let written = (|| match kind {
+            crate::archive::Kind::Zip => {
+                let mut w = crate::archive::ZipWriter::new(out);
+                for (src, name) in &sources {
+                    w.add_tree(src, name)?;
+                }
+                w.finish()
+            }
+            crate::archive::Kind::TarGz => {
+                let mut w = crate::archive::TarGzWriter::new(out);
+                for (src, name) in &sources {
+                    if src.is_dir() { w.add_tree(src, name)? } else { w.add_file(src, name)? }
+                }
+                w.finish()
+            }
+        })();
+        if let Err(e) = written {
+            let _ = self.root.remove_file(&to_rel);
+            return Err(archive_err(e));
+        }
+        Ok(())
+    }
+
+    /// Cartella come zip per il download: file temporaneo già scollegato, sparisce alla chiusura.
+    pub fn zip_for_download(&self, path: &str) -> Result<std::fs::File> {
+        let real = self.real_path(path)?;
+        let name = real.file_name().map(PathBuf::from).ok_or(FileError::BadPath)?;
+        let tmp_name = format!("download-{}.zip", rand::distr::SampleString::sample_string(&rand::distr::Alphanumeric, &mut rand::rng(), 16));
+        let out = self.tmp.create(&tmp_name)?.into_std();
+        let reader = self.tmp.open(&tmp_name)?.into_std();
+        self.tmp.remove_file(&tmp_name)?;
+        let mut w = crate::archive::ZipWriter::new(out);
+        w.add_tree(&real, &name).map_err(archive_err)?;
+        w.finish().map_err(archive_err)?;
+        Ok(reader)
     }
 
     fn give_to_site(&self, file: &std::fs::File) -> Result<()> {
@@ -176,6 +266,10 @@ impl SiteFiles {
     }
 
     /// Per il download in streaming.
+    pub fn is_dir(&self, path: &str) -> Result<bool> {
+        Ok(self.root.symlink_metadata(rel(path)?)?.is_dir())
+    }
+
     pub fn open_read(&self, path: &str) -> Result<std::fs::File> {
         let f = self.root.open(rel(path)?)?;
         if f.metadata()?.is_dir() {
@@ -351,6 +445,49 @@ mod tests {
         assert_eq!(names, ["index.php"]);
         let root: Vec<(String, bool)> = f.list("").unwrap().into_iter().map(|e| (e.name, e.is_dir)).collect();
         assert!(root.contains(&("public".into(), true)));
+    }
+
+    #[test]
+    fn compress_then_extract_round_trip_in_both_formats() {
+        let (_t, _p, f) = site();
+        f.write("public/wp-content/themes/tema/style.css", b"body{}").unwrap();
+        f.write("public/wp-content/themes/tema/index.php", b"<?php").unwrap();
+        for (ts, archive) in [(1, "public/tema.zip"), (2, "public/tema.tar.gz")] {
+            f.compress(&["public/wp-content/themes/tema".into()], archive).unwrap();
+            f.mkdir("public/estratto").unwrap();
+            let r = f.extract(archive, "public/estratto").unwrap();
+            assert_eq!(r.files, 2, "{archive}");
+            assert_eq!(f.read_text("public/estratto/tema/style.css").unwrap(), "body{}");
+            f.delete("public/estratto", ts).unwrap();
+        }
+    }
+
+    #[test]
+    fn compress_refuses_paths_through_symlinks_out_of_the_site() {
+        let (t, p, f) = site();
+        let outside = t.path().join("fuori");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("segreto.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(&outside, p.sites.join("sona_it/public/link")).unwrap();
+        assert!(f.compress(&["public/link".into()], "public/a.zip").is_err());
+        assert!(f.compress(&[".env".into()], "public/a.zip").is_err());
+        assert!(f.compress(&["/".into()], "public/a.zip").is_err(), "la radice contiene il .env");
+        assert!(f.zip_for_download("").is_err());
+        assert!(f.compress(&["public".into()], "public/a.rar").is_err());
+    }
+
+    #[test]
+    fn folder_download_is_a_zip_without_leftovers() {
+        let (_t, p, f) = site();
+        f.write("public/a/b.txt", b"ciao").unwrap();
+        let mut zip = f.zip_for_download("public/a").unwrap();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut zip, &mut bytes).unwrap();
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut z.by_name("a/b.txt").unwrap(), &mut text).unwrap();
+        assert_eq!(text, "ciao");
+        assert_eq!(std::fs::read_dir(p.tmp.join("sona_it")).unwrap().count(), 0, "il file temporaneo non resta");
     }
 
     #[test]

@@ -562,8 +562,14 @@ async fn download_file<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, 
     let user = caller(&app, &m, &h).await?;
     let files = site_files(&app, &user, id).await?;
     let path = q.path.clone();
-    let file = blocking(move || files.open_read(&path)).await?;
-    let name = std::path::Path::new(&q.path).file_name().map(|n| n.to_string_lossy().replace('"', "")).unwrap_or_default();
+    // Una cartella si scarica come zip generato al momento.
+    let (file, zipped) = blocking(move || if files.is_dir(&path)? { files.zip_for_download(&path).map(|f| (f, true)) } else { files.open_read(&path).map(|f| (f, false)) })
+    .await?;
+    let base = std::path::Path::new(&q.path).file_name().map(|n| n.to_string_lossy().replace('"', "")).unwrap_or_else(|| "sito".into());
+    let name = if zipped { format!("{base}.zip") } else { base };
+    if zipped {
+        app.auth.audit(Some(user.id), "file.download_zip", Some(id), &q.path).await?;
+    }
     let stream = tokio_util::io::ReaderStream::new(tokio::fs::File::from_std(file));
     Ok((
         [(header::CONTENT_TYPE, "application/octet-stream".to_string()), (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\""))],
@@ -579,6 +585,10 @@ enum FileOp {
     Rename { path: String, to: String },
     Delete { path: String },
     Chmod { path: String, mode: u32 },
+    /// Estrae un archivio del sito nella cartella `to`.
+    Extract { path: String, to: String },
+    /// Crea l'archivio `to` (.zip o .tar.gz) con `paths`.
+    Compress { paths: Vec<String>, to: String },
 }
 
 async fn file_op<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(op): Json<FileOp>) -> ApiResult<Response> {
@@ -589,12 +599,16 @@ async fn file_op<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Met
         FileOp::Rename { path, to } => ("file.rename", format!("{path} → {to}")),
         FileOp::Delete { path } => ("file.delete", path.clone()),
         FileOp::Chmod { path, mode } => ("file.chmod", format!("{path} {mode:o}")),
+        FileOp::Extract { path, to } => ("file.extract", format!("{path} → {to}")),
+        FileOp::Compress { paths, to } => ("file.compress", format!("{} → {to}", paths.join(", "))),
     };
     blocking(move || match op {
         FileOp::Mkdir { path } => files.mkdir(&path),
         FileOp::Rename { path, to } => files.rename(&path, &to),
         FileOp::Delete { path } => files.delete(&path, now()),
         FileOp::Chmod { path, mode } => files.chmod(&path, mode),
+        FileOp::Extract { path, to } => files.extract(&path, &to).map(drop),
+        FileOp::Compress { paths, to } => files.compress(&paths, &to),
     })
     .await?;
     app.auth.audit(Some(user.id), action, Some(id), &detail).await?;
@@ -1003,6 +1017,25 @@ mod tests {
         assert_eq!(s, StatusCode::FORBIDDEN);
         let (_, admin) = token_for(&t, "admin2@example.org", true).await;
         let (s, _, _) = call(&t, req("GET", &format!("/api/sites/{id}/files/content?path=../../etc/passwd"), Some(&admin), None)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn file_manager_compresses_extracts_and_zips_folders() {
+        let t = setup().await;
+        let (admin, id) = site_with_files(&t).await;
+        let ops = format!("/api/sites/{id}/files/ops");
+        call(&t, raw("PUT", &format!("/api/sites/{id}/files/content?path=public/tema/style.css"), &admin, b"a{}".to_vec())).await;
+        let (s, _, _) = call(&t, req("POST", &ops, Some(&admin), Some(serde_json::json!({"op": "compress", "paths": ["public/tema"], "to": "public/tema.zip"})))).await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _, _) = call(&t, req("POST", &ops, Some(&admin), Some(serde_json::json!({"op": "extract", "path": "public/tema.zip", "to": "public/copia"})))).await;
+        assert_eq!(s, StatusCode::OK);
+        let (_, body, _) = call(&t, req("GET", &format!("/api/sites/{id}/files/content?path=public/copia/tema/style.css"), Some(&admin), None)).await;
+        assert_eq!(body["content"], "a{}");
+        let (s, _, h) = call(&t, req("GET", &format!("/api/sites/{id}/files/download?path=public/tema"), Some(&admin), None)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert!(h["content-disposition"].to_str().unwrap().contains("tema.zip"));
+        let (s, _, _) = call(&t, req("POST", &ops, Some(&admin), Some(serde_json::json!({"op": "extract", "path": "public/tema/style.css", "to": "public"})))).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
     }
 
