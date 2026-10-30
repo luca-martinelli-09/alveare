@@ -81,10 +81,11 @@ pub fn valid_snapshot(id: &str) -> bool {
     (8..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// Ora e minuto del backup notturno: tra le 2 e le 5, sfalsati per sito.
+/// Ora e minuto del backup notturno: tra le 3 e le 6, sfalsati per sito. Mai tra le 2 e le 3:
+/// col cambio d'ora quell'ora salta (niente backup) o si ripete (due backup).
 pub fn backup_slot(site_id: i64) -> (u32, u32) {
     let offset = (site_id * 37).rem_euclid(180) as u32;
-    (2 + offset / 60, offset % 60)
+    (3 + offset / 60, offset % 60)
 }
 
 /// Tutto ciò che serve per ricostruire il server da zero, da tenere fuori dal server.
@@ -184,11 +185,12 @@ mod tests {
     }
 
     #[test]
-    fn nightly_slot_is_between_2_and_5() {
+    fn nightly_slot_is_between_3_and_6_away_from_the_dst_hour() {
         let mut seen = std::collections::BTreeSet::new();
         for id in 1..=200 {
             let (h, m) = backup_slot(id);
-            assert!((2..5).contains(&h) && m < 60, "{id}: {h}:{m}");
+            // Tra le 2 e le 3 l'ora legale salta o si ripete: niente backup lì.
+            assert!((3..6).contains(&h) && m < 60, "{id}: {h}:{m}");
             seen.insert((h, m));
         }
         assert!(seen.len() > 100, "siti non sfalsati");

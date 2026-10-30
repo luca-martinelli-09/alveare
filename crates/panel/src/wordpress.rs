@@ -27,6 +27,9 @@ fn empty_as_none<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String
 pub struct Status {
     pub core: String,
     pub core_update: Option<String>,
+    /// Tutte le versioni proposte: la prima può essere una major, con una minore dopo.
+    #[serde(default)]
+    pub core_updates: Vec<String>,
     pub plugins: Vec<Item>,
     pub themes: Vec<Item>,
 }
@@ -43,11 +46,11 @@ pub fn parse_items(out: &str) -> Vec<Item> {
     serde_json::from_str(&out[start..]).unwrap_or_default()
 }
 
-/// `wp core check-update --format=json`: la versione più alta proposta (la prima).
-pub fn parse_core_update(out: &str) -> Option<String> {
-    let start = out.find('[')?;
-    let v: Vec<serde_json::Value> = serde_json::from_str(&out[start..]).ok()?;
-    v.first()?["version"].as_str().map(String::from)
+/// `wp core check-update --format=json`: le versioni proposte, dalla più alta.
+pub fn parse_core_updates(out: &str) -> Vec<String> {
+    let start = out.find('[').unwrap_or(out.len());
+    let v: Vec<serde_json::Value> = serde_json::from_str(&out[start..]).unwrap_or_default();
+    v.iter().filter_map(|u| u["version"].as_str().map(String::from)).collect()
 }
 
 /// "plugin akismet: 5.3 → 5.4" per ogni versione cambiata; anche core e temi.
@@ -104,7 +107,8 @@ pub async fn status<H: Host>(c: &Ctx<H>, slug: &Slug) -> Result<Status> {
     let (_, check) = c.host.wp_output(slug, &args(&["core", "check-update", "--format=json"])).await?;
     let plugins = parse_items(&c.host.wp(slug, &args(&["plugin", "list", "--format=json", fields])).await?);
     let themes = parse_items(&c.host.wp(slug, &args(&["theme", "list", "--format=json", fields])).await?);
-    Ok(Status { core, core_update: parse_core_update(&check), plugins, themes })
+    let core_updates = parse_core_updates(&check);
+    Ok(Status { core, core_update: core_updates.first().cloned(), core_updates, plugins, themes })
 }
 
 fn selection_args(kind: &str, sel: &Selection) -> Result<Option<Vec<String>>> {
@@ -172,13 +176,18 @@ pub async fn nightly<H: Host>(c: &Ctx<H>, id: i64, log: &mut JobLog) -> Result<V
         UpdateRule::Manual => return Ok(vec![]),
     };
     let st = status(c, &site.slug).await?;
-    let core_due = st.core_update.as_deref().is_some_and(|v| !req.minor_only || same_branch(&st.core, v));
+    let core_due = core_due(&st, req.minor_only);
     let others_due = req.plugins == Selection::All && st.pending() > usize::from(st.core_update.is_some());
     if !core_due && !others_due {
         log.push("niente da aggiornare");
         return Ok(vec![]);
     }
     update(c, id, &req, log).await
+}
+
+/// Con "solo minori" basta una versione proposta sullo stesso ramo, anche dopo una major.
+pub fn core_due(st: &Status, minor_only: bool) -> bool {
+    st.core_updates.iter().any(|v| !minor_only || same_branch(&st.core, v))
 }
 
 /// "6.8.1" e "6.8.2" sono sullo stesso ramo (aggiornamento minore); "6.9" no.
@@ -201,17 +210,26 @@ mod tests {
     }
 
     #[test]
-    fn core_update_is_the_first_offered_version() {
-        assert_eq!(parse_core_update("[{\"version\":\"6.8.2\",\"update_type\":\"minor\",\"package_url\":\"x\"}]").as_deref(), Some("6.8.2"));
-        assert_eq!(parse_core_update("[]"), None);
-        assert_eq!(parse_core_update("Success: WordPress is at the latest version."), None);
+    fn core_updates_are_all_offered_versions() {
+        assert_eq!(parse_core_updates("[{\"version\":\"6.8.2\",\"update_type\":\"minor\",\"package_url\":\"x\"}]"), ["6.8.2"]);
+        assert!(parse_core_updates("[]").is_empty());
+        assert!(parse_core_updates("Success: WordPress is at the latest version.").is_empty());
+    }
+
+    #[test]
+    fn a_minor_core_update_is_due_even_when_a_major_is_offered_first() {
+        let st = |updates: &[&str]| Status { core: "6.8.2".into(), core_update: updates.first().map(|v| v.to_string()), core_updates: updates.iter().map(|v| v.to_string()).collect(), plugins: vec![], themes: vec![] };
+        assert!(core_due(&st(&["6.9", "6.8.3"]), true), "la 6.8.3 è sicurezza");
+        assert!(!core_due(&st(&["6.9"]), true));
+        assert!(core_due(&st(&["6.9"]), false));
+        assert!(!core_due(&st(&[]), false));
     }
 
     #[test]
     fn changes_list_versions_before_and_after() {
         let item = |n: &str, v: &str| Item { name: n.into(), status: "active".into(), version: v.into(), update_version: None };
-        let before = Status { core: "6.8.1".into(), core_update: Some("6.8.2".into()), plugins: vec![item("akismet", "5.3"), item("hello", "1.7")], themes: vec![item("tt5", "1.0")] };
-        let after = Status { core: "6.8.2".into(), core_update: None, plugins: vec![item("akismet", "5.4"), item("hello", "1.7")], themes: vec![item("tt5", "1.1")] };
+        let before = Status { core: "6.8.1".into(), core_update: Some("6.8.2".into()), core_updates: vec!["6.8.2".into()], plugins: vec![item("akismet", "5.3"), item("hello", "1.7")], themes: vec![item("tt5", "1.0")] };
+        let after = Status { core: "6.8.2".into(), core_update: None, core_updates: vec![], plugins: vec![item("akismet", "5.4"), item("hello", "1.7")], themes: vec![item("tt5", "1.1")] };
         assert_eq!(changes(&before, &after), ["core: 6.8.1 → 6.8.2", "plugin akismet: 5.3 → 5.4", "tema tt5: 1.0 → 1.1"]);
         assert_eq!(before.pending(), 1);
     }

@@ -365,7 +365,7 @@ Come funziona un backup
 
 - Registra snapshot, dimensione ed esito in backup_runs; in caso di errore lo segnala nel pannello (e in seguito via email o Telegram).
 
-Default proposti: backup ogni notte tra le 2 e le 5 (siti sfalsati), retention 7 giornalieri, 4 settimanali, 6 mensili. Un repository restic unico per tutti i siti: la deduplica tra siti WordPress (core e plugin uguali) riduce molto lo spazio.
+Default proposti: backup ogni notte tra le 3 e le 6 (siti sfalsati, fuori dall'ora del cambio d'ora), retention 7 giornalieri, 4 settimanali, 6 mensili. Un repository restic unico per tutti i siti: la deduplica tra siti WordPress (core e plugin uguali) riduce molto lo spazio.
 Storage: Cloudflare R2 come default. Endpoint, bucket, regione e chiavi stanno nel .env del pannello, quindi si passa a qualunque altro storage S3-compatibile cambiando solo la configurazione.
 Restore, sempre come job:
 - Completo: file + database, con backup automatico dello stato attuale prima di sovrascrivere.
@@ -405,7 +405,7 @@ Monitoraggio:
 
 - Errori 5xx e richieste lente per sito, letti dai log.
 
-- Controllo di integrità ogni notte: wp core verify-checksums e wp plugin verify-checksums --all su ogni sito WordPress, più la ricerca di file .php in wp-content/uploads/. File modificati o estranei rispetto alle versioni ufficiali generano un avviso: è il modo più economico per accorgersi di un sito compromesso.
+- Controllo di integrità ogni mattina tra le 7 e le 8, dopo backup e aggiornamenti: wp core verify-checksums e wp plugin verify-checksums --all su ogni sito WordPress, più la ricerca di file .php in wp-content/uploads/. File modificati o estranei rispetto alle versioni ufficiali generano un avviso: è il modo più economico per accorgersi di un sito compromesso.
 
 - Metriche Prometheus di Caddy, esportabili verso Grafana se serve una vista esterna.
 

@@ -304,28 +304,34 @@ async fn caddy_admin(socket: &Path, method: &str, path: &str, caddyfile: &str) -
     let head = format!("{method} {path} HTTP/1.1\r\nHost: caddy\r\n{ctype}Content-Length: {}\r\nConnection: close\r\n\r\n", caddyfile.len());
     stream.write_all(head.as_bytes()).await?;
     stream.write_all(caddyfile.as_bytes()).await?;
-    let mut resp = String::new();
-    tokio::time::timeout(Duration::from_secs(30), stream.read_to_string(&mut resp)).await.context("Caddy non ha risposto")??;
-    let status = resp.split(' ').nth(1).unwrap_or_default();
-    let body = resp.split_once("\r\n\r\n").map_or("", |(_, b)| b);
+    let mut resp = Vec::new();
+    tokio::time::timeout(Duration::from_secs(30), stream.read_to_end(&mut resp)).await.context("Caddy non ha risposto")??;
+    let split = resp.windows(4).position(|w| w == b"\r\n\r\n").map_or(resp.len(), |i| i + 4);
+    let head = String::from_utf8_lossy(&resp[..split]);
+    let status = head.split(' ').nth(1).unwrap_or_default();
+    let body = dechunk(&resp[split..]);
     if status != "200" {
         bail!("Caddy ha rifiutato la configurazione ({status}): {body}");
     }
-    Ok(dechunk(body))
+    Ok(body)
 }
 
 /// Il corpo può arrivare in chunked encoding: si ricompone.
-fn dechunk(body: &str) -> String {
-    let mut out = String::new();
+fn dechunk(body: &[u8]) -> String {
+    // Le dimensioni sono in byte e un chunk può finire a metà di un carattere: si ricompone in byte.
+    let mut out = Vec::new();
     let mut rest = body;
     loop {
-        let Some((size, after)) = rest.split_once("\r\n") else { return body.to_string() };
-        let Ok(n) = usize::from_str_radix(size.trim(), 16) else { return body.to_string() };
+        let Some(eol) = rest.windows(2).position(|w| w == b"\r\n") else { return String::from_utf8_lossy(body).into_owned() };
+        let Some(n) = std::str::from_utf8(&rest[..eol]).ok().and_then(|s| usize::from_str_radix(s.trim(), 16).ok()) else {
+            return String::from_utf8_lossy(body).into_owned();
+        };
+        let after = &rest[eol + 2..];
         if n == 0 || after.len() < n {
-            return if out.is_empty() && n != 0 { body.to_string() } else { out };
+            return if out.is_empty() && n != 0 { String::from_utf8_lossy(body).into_owned() } else { String::from_utf8_lossy(&out).into_owned() };
         }
-        out.push_str(&after[..n]);
-        rest = after[n..].trim_start_matches("\r\n");
+        out.extend_from_slice(&after[..n]);
+        rest = after[n..].strip_prefix(b"\r\n").unwrap_or(&after[n..]);
     }
 }
 
@@ -1074,8 +1080,10 @@ mod tests {
 
     #[test]
     fn chunked_bodies_are_reassembled() {
-        assert_eq!(dechunk("5\r\nciao \r\n5\r\nmondo\r\n0\r\n\r\n"), "ciao mondo");
-        assert_eq!(dechunk("{\"a\":1}"), "{\"a\":1}");
+        assert_eq!(dechunk(b"5\r\nciao \r\n5\r\nmondo\r\n0\r\n\r\n"), "ciao mondo");
+        assert_eq!(dechunk(b"{\"a\":1}"), "{\"a\":1}");
+        // Le dimensioni dei chunk sono in byte: il confine può cadere a metà di "à".
+        assert_eq!(dechunk(b"3\r\nci\xc3\r\n2\r\n\xa0o\r\n0\r\n\r\n"), "ci\u{e0}o");
     }
 
     #[test]

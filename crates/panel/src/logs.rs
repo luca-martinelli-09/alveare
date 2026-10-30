@@ -10,6 +10,11 @@ use tokio::sync::mpsc;
 const BLOCK: u64 = 64 * 1024;
 const MAX_LINE: usize = 16 * 1024;
 
+/// Al più MAX_LINE byte, senza spezzare un carattere.
+fn clip(line: &str) -> &str {
+    &line[..line.floor_char_boundary(MAX_LINE)]
+}
+
 /// Ultime `n` righe, leggendo a blocchi dalla fine.
 pub fn tail(path: &Path, n: usize) -> std::io::Result<Vec<String>> {
     match fs::File::open(path) {
@@ -72,8 +77,7 @@ pub fn follow(path: PathBuf, every: Duration) -> mpsc::Receiver<String> {
             partial.push_str(&String::from_utf8_lossy(&buf));
             while let Some(i) = partial.find('\n') {
                 let line: String = partial.drain(..=i).collect();
-                let mut line = line.trim_end_matches(['\n', '\r']).to_string();
-                line.truncate(MAX_LINE);
+                let line = clip(line.trim_end_matches(['\n', '\r'])).to_string();
                 if tx.send(line).await.is_err() {
                     return;
                 }
@@ -244,6 +248,13 @@ mod tests {
 
     fn lines(n: usize) -> String {
         (1..=n).map(|i| format!("riga {i}\n")).collect()
+    }
+
+    #[test]
+    fn long_lines_are_clipped_without_splitting_a_character() {
+        let line = format!("a{}", "è".repeat(MAX_LINE));
+        assert_eq!(clip(&line).len(), MAX_LINE - 1);
+        assert_eq!(clip("corta"), "corta");
     }
 
     #[test]

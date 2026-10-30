@@ -1,6 +1,7 @@
 //! Cron personalizzati: espressione cron (ora di Roma) e un comando WP-CLI, artisan, uno script
 //! PHP del sito o una chiamata HTTP a una pagina del sito stesso.
 use alveare_core::site::Domain;
+use chrono::Timelike;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -125,7 +126,9 @@ pub fn parse_expression(expr: &str) -> Result<croner::Cron, String> {
 }
 
 pub fn is_due(expr: &str, now: &chrono::DateTime<chrono_tz::Tz>) -> bool {
-    parse_expression(expr).ok().and_then(|c| c.is_time_matching(now).ok()).unwrap_or(false)
+    // Le espressioni sono al minuto: il tick può svegliarsi qualche istante dopo lo :00.
+    let minute = now.with_second(0).and_then(|t| t.with_nanosecond(0));
+    minute.is_some_and(|t| parse_expression(expr).ok().and_then(|c| c.is_time_matching(&t).ok()).unwrap_or(false))
 }
 
 #[cfg(test)]
@@ -164,6 +167,8 @@ mod tests {
         assert!(!is_due("*/15 * * * *", &at(10, 31)));
         assert!(is_due("0 3 * * 1", &at(3, 0)), "il 2 novembre 2026 è lunedì");
         assert!(!is_due("non valida", &at(3, 0)));
+        let late = at(10, 30) + chrono::Duration::milliseconds(1500);
+        assert!(is_due("*/15 * * * *", &late), "il tick può svegliarsi un secondo dopo");
         assert!(parse_expression("61 * * * *").is_err());
     }
 }

@@ -121,7 +121,8 @@ pub fn due(now: DateTime<Tz>, sites: &[SiteRef]) -> Vec<Task> {
         if m % 5 == s.id % 5 {
             out.push(Task::WpCron(s.id));
         }
-        if h == 5 && m == (s.id * 7) % 60 {
+        // Dopo backup (3-6) e aggiornamenti (fino alle 6:45).
+        if h == 7 && m == (s.id * 7) % 60 {
             out.push(Task::Integrity(s.id));
         }
         // 45 minuti dopo il backup del sito.
@@ -480,13 +481,13 @@ mod tests {
     }
 
     #[test]
-    fn integrity_checks_are_spread_between_5_and_6() {
+    fn integrity_checks_are_spread_between_7_and_8_after_backups_and_updates() {
         let sites: Vec<SiteRef> = (1..=40).map(wp).collect();
         let mut minutes = std::collections::BTreeSet::new();
         for i in 0..24 * 60 {
             for t in due(at(i / 60, i % 60), &sites) {
                 if let Task::Integrity(_) = t {
-                    assert_eq!(i / 60, 5);
+                    assert_eq!(i / 60, 7);
                     minutes.insert(i % 60);
                 }
             }
