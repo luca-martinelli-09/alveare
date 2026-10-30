@@ -61,6 +61,14 @@ services:
     image: ${ALVEARE_REGISTRY:-alveare}/php:${ALVEARE_CANARY_VERSION:-dev}
     environment: { TZ: Europe/Rome, ALVEARE_PHP_RUNTIME: canary }
 
+  # Processi long-running delle app Laravel (code, Horizon, Reverb): stessa immagine, l'agente
+  # fa da supervisore. Separato da FPM: un reload dei pool non tocca i worker e viceversa.
+  php-workers:
+    <<: *php
+    profiles: [workers]
+    image: ${ALVEARE_REGISTRY:-alveare}/php:${ALVEARE_VERSION:-dev}
+    environment: { TZ: Europe/Rome, ALVEARE_ROLE: workers }
+
   caddy:
     <<: *common
     image: caddy:2

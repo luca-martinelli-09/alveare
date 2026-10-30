@@ -2,6 +2,7 @@
 //! (`alveare_core::agent::Command`), con l'utente del sito. Gira come root.
 mod plan;
 mod pool;
+mod workers;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -16,7 +17,7 @@ use std::{fs, thread};
 use alveare_core::agent::{agent_socket, Command, Response};
 use alveare_core::php::{runtime_pool_dirs, DEFAULT_RUNTIME};
 
-use crate::plan::{plan_cron, plan_php, plan_wp, site_uid, Exec};
+use crate::plan::{plan_cron, plan_deploy, plan_php, plan_wp, site_uid, Exec};
 
 const FPM_CONF: &str = "/usr/local/etc/php-fpm.d/alveare.conf";
 const MAX_OUTPUT: usize = 64 * 1024;
@@ -45,6 +46,10 @@ fn pool_dirs() -> (String, String) {
 }
 
 fn main() {
+    if std::env::var("ALVEARE_ROLE").as_deref() == Ok("workers") {
+        workers::run();
+        return;
+    }
     let rt = runtime();
     if rt != DEFAULT_RUNTIME {
         let base = fs::read_to_string(FPM_CONF).expect("config di FPM");
@@ -87,8 +92,11 @@ fn supervise_fpm() {
 }
 
 fn serve() {
-    let socket = agent_socket(&runtime());
-    let path = Path::new(&socket);
+    serve_on(&agent_socket(&runtime()));
+}
+
+fn serve_on(socket: &str) {
+    let path = Path::new(socket);
     fs::create_dir_all(path.parent().expect("socket in una cartella")).expect("cartella del socket");
     let _ = fs::remove_file(path);
     let listener = UnixListener::bind(path).expect("bind del socket dell'agente");
@@ -119,10 +127,66 @@ fn run(cmd: Command) -> Response {
         Command::Wp { slug, args } => with_site_uid(&slug, |uid| exec(plan_wp(&slug, uid, &args))),
         Command::CronRun { slug } => with_site_uid(&slug, |uid| exec(plan_cron(&slug, uid))),
         Command::Php { slug, args, timeout_s } => with_site_uid(&slug, |uid| exec(plan_php(&slug, uid, &args, timeout_s))),
+        Command::Deploy { slug, repo, branch } => with_site_uid(&slug, |uid| deploy(&slug, uid, &repo, &branch)),
+        Command::DeployKey { slug } => with_site_uid(&slug, |uid| deploy_key(&slug, uid)),
+        Command::WorkersApply | Command::WorkerRestart { .. } | Command::WorkersStatus => {
+            if std::env::var("ALVEARE_ROLE").as_deref() == Ok("workers") {
+                workers::command(cmd)
+            } else {
+                fail("comando dei worker: va mandato al container php-workers")
+            }
+        }
     }
 }
 
-fn fail(output: impl Into<String>) -> Response {
+/// Passi del deploy in ordine; si ferma al primo passo obbligatorio che fallisce.
+fn deploy(slug: &alveare_core::site::Slug, uid: u32, repo: &str, branch: &str) -> Response {
+    let dir = Path::new(alveare_core::php::SITES_DIR).join(slug.as_str());
+    let layout = plan::AppLayout { git: dir.join(".git").is_dir(), composer: dir.join("composer.json").is_file(), artisan: dir.join("artisan").is_file() };
+    let mut out = String::new();
+    let mut steps = plan_deploy(slug, uid, repo, branch, layout);
+    // Dopo il primo fetch composer.json e artisan possono essere appena arrivati: si ricontrolla.
+    let mut i = 0;
+    while i < steps.len() {
+        let (step, required) = &steps[i];
+        out.push_str(&format!("$ {} {}\n", step.program, step.args.iter().filter(|a| !a.contains('=') || a.starts_with("--")).cloned().collect::<Vec<_>>().join(" ")));
+        let r = exec(step.clone());
+        out.push_str(&r.output);
+        if !r.ok && *required {
+            return Response { ok: false, exit_code: r.exit_code, output: out };
+        }
+        if step.program == "git" && step.args.first().map(String::as_str) == Some("reset") {
+            let now = plan::AppLayout { git: true, composer: dir.join("composer.json").is_file(), artisan: dir.join("artisan").is_file() };
+            let rest = plan_deploy(slug, uid, repo, branch, now);
+            let done = steps.len().min(i + 1);
+            let skip = rest.iter().position(|(e, _)| e.program == "git" && e.args.first().map(String::as_str) == Some("reset")).map_or(0, |p| p + 1);
+            steps.truncate(done);
+            steps.extend(rest.into_iter().skip(skip));
+        }
+        i += 1;
+    }
+    Response { ok: true, exit_code: Some(0), output: out }
+}
+
+fn deploy_key(slug: &alveare_core::site::Slug, uid: u32) -> Response {
+    let ssh = Path::new(alveare_core::php::TMP_DIR).join(slug.as_str()).join(".ssh");
+    let key = ssh.join("id_ed25519");
+    if !key.exists() {
+        if let Err(e) = fs::create_dir_all(&ssh).and_then(|_| fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700))).and_then(|_| std::os::unix::fs::chown(&ssh, Some(uid), Some(uid))) {
+            return fail(format!("cartella .ssh: {e}"));
+        }
+        let r = exec(plan::plan_deploy_key(slug, uid));
+        if !r.ok {
+            return r;
+        }
+    }
+    match fs::read_to_string(key.with_extension("pub")) {
+        Ok(pubkey) => Response { ok: true, exit_code: Some(0), output: pubkey.trim().to_string() },
+        Err(e) => fail(format!("chiave pubblica: {e}")),
+    }
+}
+
+pub(crate) fn fail(output: impl Into<String>) -> Response {
     Response { ok: false, exit_code: None, output: output.into() }
 }
 
@@ -170,7 +234,7 @@ fn validate_pool(pool: &Path) -> Result<(), String> {
     }
 }
 
-fn exec(e: Exec) -> Response {
+pub(crate) fn exec(e: Exec) -> Response {
     let child = Proc::new(&e.program)
         .args(&e.args)
         .current_dir(&e.cwd)

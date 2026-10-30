@@ -13,8 +13,10 @@ ARG ADMINER_VERSION=6.2.0
 ARG ADMINER_SHA256=7492bf2b158fee5b7ddc9e13255322c4601b1f51b797896e303882626bf1e5af
 
 COPY --from=mlocati/php-extension-installer:2 /usr/bin/install-php-extensions /usr/local/bin/
-RUN install-php-extensions gd intl zip mysqli exif redis pcntl \
- && apt-get update && apt-get install -y --no-install-recommends mariadb-client less \
+# Composer per il deploy delle app Laravel (composer install con l'utente del sito).
+COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
+RUN install-php-extensions gd intl zip mysqli pdo_mysql bcmath exif redis pcntl \
+ && apt-get update && apt-get install -y --no-install-recommends mariadb-client less git openssh-client unzip \
  && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL -o /usr/local/bin/wp \

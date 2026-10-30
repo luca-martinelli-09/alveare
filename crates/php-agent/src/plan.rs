@@ -7,7 +7,7 @@ use alveare_core::site::Slug;
 const WP_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Un processo da lanciare senza shell, con l'utente del sito.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Exec {
     pub program: String,
     pub args: Vec<String>,
@@ -67,6 +67,82 @@ pub fn plan_php(slug: &Slug, uid: u32, args: &[String], timeout_s: u32) -> Exec 
     }
 }
 
+/// Un processo di un worker: come uno script PHP, senza timeout e con il suo memory_limit.
+pub fn plan_worker(spec: &alveare_core::agent::WorkerSpec) -> Exec {
+    let mut args = vec!["-d".to_string(), format!("memory_limit={}M", spec.memory_mb)];
+    args.extend(spec.args.iter().cloned());
+    Exec { timeout: Duration::ZERO, ..plan_php(&spec.slug, spec.uid, &args, 0) }
+}
+
+/// Cosa c'è nella cartella del sito: decide i passi del deploy.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AppLayout {
+    pub git: bool,
+    pub composer: bool,
+    pub artisan: bool,
+}
+
+/// Passi del deploy, ognuno con l'utente del sito; il secondo valore dice se è obbligatorio.
+pub fn plan_deploy(slug: &Slug, uid: u32, repo: &str, branch: &str, app: AppLayout) -> Vec<(Exec, bool)> {
+    let s = slug.as_str();
+    let home = format!("{TMP_DIR}/{s}");
+    let ssh = format!("ssh -i {home}/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile={home}/.ssh/known_hosts");
+    let base_env = vec![
+        ("HOME".to_string(), home.clone()),
+        ("PATH".to_string(), "/usr/local/bin:/usr/bin:/bin".to_string()),
+        ("GIT_SSH_COMMAND".to_string(), ssh),
+        ("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()),
+        ("COMPOSER_HOME".to_string(), format!("{home}/.composer")),
+    ];
+    let cmd = |program: &str, args: &[&str]| Exec {
+        program: program.into(),
+        args: args.iter().map(|a| a.to_string()).collect(),
+        uid,
+        gid: uid,
+        cwd: PathBuf::from(format!("{SITES_DIR}/{s}")),
+        env: base_env.clone(),
+        timeout: WP_TIMEOUT,
+    };
+    let mut steps = Vec::new();
+    if app.git {
+        steps.push((cmd("git", &["remote", "set-url", "origin", repo]), true));
+    } else {
+        steps.push((cmd("git", &["init", "-q"]), true));
+        steps.push((cmd("git", &["remote", "add", "origin", repo]), true));
+    }
+    steps.push((cmd("git", &["fetch", "--depth", "1", "origin", branch]), true));
+    steps.push((cmd("git", &["reset", "--hard", "FETCH_HEAD"]), true));
+    if app.composer {
+        steps.push((cmd("composer", &["install", "--no-dev", "--no-interaction", "--prefer-dist", "--optimize-autoloader"]), true));
+    }
+    if app.artisan {
+        let artisan = |a: &[&str]| plan_php(slug, uid, &std::iter::once("artisan").chain(a.iter().copied()).map(String::from).collect::<Vec<_>>(), 600);
+        steps.push((artisan(&["migrate", "--force"]), true));
+        for cache in ["config:cache", "route:cache", "view:cache"] {
+            steps.push((artisan(&[cache]), true));
+        }
+        // Horizon e queue:work rileggono il codice nuovo: se non ci sono, non è un errore.
+        steps.push((artisan(&["horizon:terminate"]), false));
+        steps.push((artisan(&["queue:restart"]), false));
+    }
+    steps
+}
+
+/// Crea la chiave di deploy del sito se manca (nella HOME del sito, fuori dalla document root).
+pub fn plan_deploy_key(slug: &Slug, uid: u32) -> Exec {
+    let s = slug.as_str();
+    let key = format!("{TMP_DIR}/{s}/.ssh/id_ed25519");
+    Exec {
+        program: "ssh-keygen".into(),
+        args: ["-q", "-t", "ed25519", "-N", "", "-C", &format!("alveare-{s}"), "-f", &key].map(String::from).to_vec(),
+        uid,
+        gid: uid,
+        cwd: PathBuf::from(format!("{TMP_DIR}/{s}")),
+        env: vec![("HOME".into(), format!("{TMP_DIR}/{s}"))],
+        timeout: Duration::from_secs(30),
+    }
+}
+
 pub fn plan_cron(slug: &Slug, uid: u32) -> Exec {
     let args = ["cron", "event", "run", "--due-now"].map(String::from);
     plan_wp(slug, uid, &args)
@@ -118,6 +194,33 @@ mod tests {
             ]
         );
         assert_eq!((e.uid, e.cwd.clone(), e.timeout), (20001, PathBuf::from("/srv/sites/sona_it"), Duration::from_secs(120)));
+    }
+
+    #[test]
+    fn worker_runs_php_confined_with_its_memory_limit() {
+        let spec = alveare_core::agent::WorkerSpec { slug: slug("sona_it"), uid: 20001, name: "coda".into(), args: vec!["artisan".into(), "queue:work".into()], processes: 2, memory_mb: 192 };
+        let e = plan_worker(&spec);
+        assert_eq!(e.program, "php");
+        assert!(e.args.windows(2).any(|w| w == ["-d", "memory_limit=192M"]));
+        assert!(e.args.iter().any(|a| a.starts_with("open_basedir=/srv/sites/sona_it/")));
+        assert_eq!(e.args[e.args.len() - 2..], ["artisan", "queue:work"]);
+        assert_eq!(e.uid, 20001);
+    }
+
+    #[test]
+    fn deploy_steps_follow_what_the_app_has() {
+        let all = AppLayout { git: false, composer: true, artisan: true };
+        let steps = plan_deploy(&slug("sona_it"), 20001, "git@github.com:a/b.git", "main", all);
+        let names: Vec<String> = steps.iter().map(|(e, _)| format!("{} {}", e.program, e.args.iter().filter(|a| !a.starts_with("open_basedir") && !a.starts_with("disable_functions") && !a.starts_with("error_log") && *a != "-d").cloned().collect::<Vec<_>>().join(" "))).collect();
+        assert_eq!(names[..4], ["git init -q", "git remote add origin git@github.com:a/b.git", "git fetch --depth 1 origin main", "git reset --hard FETCH_HEAD"]);
+        assert!(names.contains(&"composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader".to_string()));
+        assert!(names.contains(&"php artisan migrate --force".to_string()));
+        assert!(!steps.iter().find(|(e, _)| e.args.contains(&"horizon:terminate".to_string())).unwrap().1, "facoltativo");
+        assert!(steps.iter().all(|(e, _)| e.uid == 20001));
+        let git_env = &steps[0].0.env;
+        assert!(git_env.iter().any(|(k, v)| k == "GIT_SSH_COMMAND" && v.contains("/srv/tmp/sona_it/.ssh/id_ed25519")));
+        let plain = plan_deploy(&slug("sona_it"), 20001, "https://x/y.git", "main", AppLayout { git: true, ..Default::default() });
+        assert_eq!(plain.len(), 3, "solo git: set-url, fetch, reset");
     }
 
     #[test]
