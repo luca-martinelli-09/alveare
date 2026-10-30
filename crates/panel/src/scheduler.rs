@@ -252,7 +252,10 @@ async fn execute<H: Host>(app: &App<H>, task: Task) -> anyhow::Result<()> {
                 })
                 .await?;
         }
-        Task::Uptime(id) => crate::monitor::uptime(&app.ctx, id).await?,
+        Task::Uptime(id) => {
+            crate::monitor::uptime(&app.ctx, id).await?;
+            flows::retry_cloudflare(&app.ctx, id).await?;
+        }
         Task::Usage(id) => crate::monitor::usage(&app.ctx, id, app.disk_alert_mb).await?,
         Task::Traffic(id) => {
             let site = app.ctx.store.site(id).await?;

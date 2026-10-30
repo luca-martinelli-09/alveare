@@ -21,19 +21,9 @@
 		e.preventDefault();
 		try {
 			await api.post(base, { hostname: hostname.trim(), kind });
-			toast.success(`${hostname} aggiunto: ricordati il tunnel Cloudflare`);
+			toast.success(`${hostname} aggiunto`);
 			hostname = '';
 			onchange();
-		} catch (err) {
-			toast.error(errorMessage(err));
-		}
-	}
-
-	async function cloudflare(what: 'sync' | 'rules') {
-		try {
-			const r = await api.post<{ log?: string[] } | { zone: string; rules?: number; error?: string }[]>(`/api/sites/${detail.site.id}/cloudflare/${what}`);
-			const lines = Array.isArray(r) ? r.map((z) => `${z.zone}: ${z.error ?? `${z.rules} regole`}`) : (r.log ?? []);
-			toast.info(lines.join('\n') || 'Fatto');
 		} catch (err) {
 			toast.error(errorMessage(err));
 		}
@@ -52,7 +42,7 @@
 <Card.Root>
 	<Card.Header>
 		<Card.Title>Domini</Card.Title>
-		<Card.Description>Ogni hostname va aggiunto al tunnel Cloudflare verso http://caddy:80.</Card.Description>
+		<Card.Description>Con un account Cloudflare configurato, hostname e regole vanno sul tunnel da soli; senza, aggiungili a mano verso http://caddy:80.</Card.Description>
 	</Card.Header>
 	<Card.Content class="flex flex-col gap-2">
 		{#each detail.domains as d (d.hostname)}
@@ -87,10 +77,6 @@
 				</Select.Root>
 				<Button type="submit">Aggiungi</Button>
 			</form>
-			<div class="flex w-full flex-wrap gap-2">
-				<Button variant="outline" size="sm" onclick={() => cloudflare('sync')}>Sincronizza il tunnel Cloudflare</Button>
-				<Button variant="outline" size="sm" onclick={() => cloudflare('rules')}>Applica le regole Cloudflare</Button>
-			</div>
 		</Card.Footer>
 	{/if}
 </Card.Root>

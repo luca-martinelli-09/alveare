@@ -611,9 +611,10 @@ async fn list_sites<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap)
     for site in app.ctx.store.sites().await? {
         if visible.as_ref().is_none_or(|v| v.contains(&site.id)) {
             let primary = app.ctx.store.domains(site.id).await?.into_iter().next().map(|(d, _)| d.as_str().to_string());
-            let uptime: Option<serde_json::Value> = app.ctx.store.setting(&format!("uptime:{}", site.id)).await?.and_then(|v| serde_json::from_str(&v).ok());
-            let online = uptime.as_ref().and_then(|u| u["ok"].as_bool());
-            out.push(json!({ "id": site.id, "slug": site.slug, "domain": primary, "kind": site.kind, "status": site.status, "online": online, "staging": site.staging }));
+            let monitor = sites::monitor_values(&app, site.id).await?;
+            let online = monitor["uptime"]["ok"].as_bool();
+            let last_backup = app.ctx.store.backup_runs(site.id, 1).await?.into_iter().next().map(|r| json!({ "started_at": r.started_at, "status": r.status }));
+            out.push(json!({ "id": site.id, "slug": site.slug, "domain": primary, "kind": site.kind, "status": site.status, "online": online, "staging": site.staging, "monitor": monitor, "last_backup": last_backup }));
         }
     }
     Ok(Json(out).into_response())

@@ -172,15 +172,20 @@ async fn wp_admin<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Me
     Ok(Json(json!({ "user": wp_user, "password": password })).into_response())
 }
 
-/// Ultimi valori del monitoraggio: raggiungibilità, spazio, traffico dell'ultima ora.
-async fn monitor<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
-    let user = caller(&app, &m, &h).await?;
-    require_site(&app, &user, id, Need::Read).await?;
+pub(super) async fn monitor_values<H>(app: &App<H>, id: i64) -> ApiResult<serde_json::Map<String, serde_json::Value>> {
     let mut out = serde_json::Map::new();
     for key in ["uptime", "usage", "traffic"] {
         let v: serde_json::Value = app.ctx.store.setting(&format!("{key}:{id}")).await?.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
         out.insert(key.into(), v);
     }
+    Ok(out)
+}
+
+/// Ultimi valori del monitoraggio: raggiungibilità, spazio, traffico dell'ultima ora.
+async fn monitor<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_site(&app, &user, id, Need::Read).await?;
+    let mut out = monitor_values(&app, id).await?;
     out.insert("disk_alert_mb".into(), json!(app.disk_alert_mb));
     Ok(Json(out).into_response())
 }
@@ -397,6 +402,21 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(body["uptime"]["status"], 200);
         assert!(body["usage"].is_null());
+    }
+
+    #[tokio::test]
+    async fn site_list_carries_monitor_and_last_backup_for_the_overview() {
+        let t = setup().await;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let id = create_site(&t, &admin, "sona.it").await;
+        crate::monitor::uptime(&t.app.ctx, id).await.unwrap();
+        let (_, list, _) = call(&t, req("GET", "/api/sites", Some(&admin), None)).await;
+        assert_eq!(list[0]["monitor"]["uptime"]["status"], 200);
+        assert!(list[0]["last_backup"].is_null());
+        let slug = t.app.ctx.store.site(id).await.unwrap().slug;
+        t.app.ctx.store.backup_started(id, &slug).await.unwrap();
+        let (_, list, _) = call(&t, req("GET", "/api/sites", Some(&admin), None)).await;
+        assert_eq!(list[0]["last_backup"]["status"], "running");
     }
 
     #[tokio::test]

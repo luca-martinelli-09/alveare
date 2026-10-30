@@ -259,8 +259,16 @@ pub async fn cloudflare_account<H: Host>(c: &Ctx<H>, site_id: i64) -> Result<Opt
     Ok(chosen.filter(|a| accounts.contains(a)).or_else(|| accounts.first().cloned()))
 }
 
-/// Pubblica (o toglie) gli hostname sul tunnel Cloudflare. Un errore non ferma il flusso:
-/// finisce nel log e in un avviso, e l'hostname si sistema a mano o con "Sincronizza".
+pub const CLOUDFLARE_RULES_KEY: &str = "cloudflare_rules";
+
+/// Modello delle regole Cloudflare (impostazioni del server) o quello di default.
+pub async fn cloudflare_rules_template<H>(c: &Ctx<H>) -> Result<serde_json::Value> {
+    Ok(c.store.setting(CLOUDFLARE_RULES_KEY).await?.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_else(crate::cloudflare::default_rules))
+}
+
+/// Pubblica (o toglie) gli hostname sul tunnel Cloudflare e, pubblicandoli, applica le regole
+/// una volta per zona. Un errore non ferma il flusso: finisce nel log e in un avviso, e il
+/// monitoraggio riprova (`retry_cloudflare`) finché non va.
 pub async fn tunnel_hostnames<H: Host>(c: &Ctx<H>, site_id: i64, hosts: &[Domain], add: bool, log: &mut JobLog) -> Result<()> {
     let Some(account) = cloudflare_account(c, site_id).await? else {
         if add {
@@ -270,6 +278,7 @@ pub async fn tunnel_hostnames<H: Host>(c: &Ctx<H>, site_id: i64, hosts: &[Domain
         return Ok(());
     };
     let mut failed = Vec::new();
+    let mut zones = Vec::new();
     for host in hosts {
         let done = if add { c.host.tunnel_add(&account, host).await } else { c.host.tunnel_remove(&account, host).await };
         match done {
@@ -277,6 +286,19 @@ pub async fn tunnel_hostnames<H: Host>(c: &Ctx<H>, site_id: i64, hosts: &[Domain
             Err(e) => {
                 log.push(format!("Cloudflare ({account}): {} non sistemato: {e:#}", host.as_str()));
                 failed.push(format!("{}: {e:#}", host.as_str()));
+                continue;
+            }
+        }
+        let zone = crate::cloudflare::zone_candidates(host).pop().unwrap_or_default();
+        if !add || zones.contains(&zone) {
+            continue;
+        }
+        zones.push(zone.clone());
+        match c.host.cloudflare_rules(&account, host, &cloudflare_rules_template(c).await?).await {
+            Ok(n) => log.push(format!("Cloudflare ({account}): {n} regole applicate a {zone}")),
+            Err(e) => {
+                log.push(format!("Cloudflare ({account}): regole di {zone} non applicate: {e:#}"));
+                failed.push(format!("regole di {zone}: {e:#}"));
             }
         }
     }
@@ -286,6 +308,15 @@ pub async fn tunnel_hostnames<H: Host>(c: &Ctx<H>, site_id: i64, hosts: &[Domain
         c.store.raise_alert(Some(site_id), "cloudflare", &format!("hostname da sistemare sul tunnel:\n{}", failed.join("\n"))).await?;
     }
     Ok(())
+}
+
+/// Riprova a pubblicare gli hostname di un sito con un avviso Cloudflare aperto.
+pub async fn retry_cloudflare<H: Host>(c: &Ctx<H>, site_id: i64) -> Result<()> {
+    if !c.store.open_alerts(Some(&[site_id])).await?.iter().any(|a| a.kind == "cloudflare") {
+        return Ok(());
+    }
+    let hosts = site_hostnames(c, site_id).await?;
+    tunnel_hostnames(c, site_id, &hosts, true, &mut JobLog::default()).await
 }
 
 pub async fn site_hostnames<H>(c: &Ctx<H>, site_id: i64) -> Result<Vec<Domain>> {
@@ -1790,7 +1821,8 @@ mod tests {
     async fn hostnames_follow_the_site_on_the_cloudflare_tunnel() {
         let c = ctx(FakeHost { cf_accounts: vec!["banda".into(), "proloco".into()], ..Default::default() }).await;
         let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
-        assert_eq!(c.host.calls().last().unwrap(), "tunnel_add banda sona.it", "il primo account per default");
+        let calls = c.host.calls();
+        assert_eq!(calls[calls.len() - 2..], ["tunnel_add banda sona.it", "cloudflare_rules banda sona.it"], "il primo account per default, regole della zona subito dopo");
         c.store.add_domain(site.id, &Domain::parse("www.sona.it").unwrap(), crate::store::DomainKind::Redirect).await.unwrap();
         c.store.set_cloudflare_account(site.id, Some("proloco")).await.unwrap();
         c.host.calls.lock().unwrap().clear();
@@ -1807,6 +1839,30 @@ mod tests {
         assert_eq!(c.store.site(site.id).await.unwrap().status, SiteStatus::Active);
         assert_eq!(c.store.open_alerts(None).await.unwrap()[0].kind, "cloudflare");
         assert!(log.lines.iter().any(|l| l.contains("non sistemato")));
+    }
+
+    #[tokio::test]
+    async fn cloudflare_rules_are_applied_once_per_zone() {
+        let c = ctx(FakeHost { cf_accounts: vec!["banda".into()], ..Default::default() }).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        let hosts = ["www.sona.it", "sona.it", "altro.it"].map(|h| Domain::parse(h).unwrap());
+        tunnel_hostnames(&c, site.id, &hosts, true, &mut JobLog::default()).await.unwrap();
+        let rules: Vec<String> = c.host.calls().into_iter().filter(|c| c.starts_with("cloudflare_rules")).collect();
+        assert_eq!(rules, ["cloudflare_rules banda www.sona.it", "cloudflare_rules banda altro.it"]);
+    }
+
+    #[tokio::test]
+    async fn failed_tunnel_hostnames_are_retried_until_fixed() {
+        let c = ctx(FakeHost { cf_accounts: vec!["banda".into()], fail_on: Some("tunnel_add"), ..Default::default() }).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        let other = create_site(&c, &req("altro.it"), &mut JobLog::default()).await.unwrap();
+        c.store.resolve_alerts(other.id, "cloudflare").await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        retry_cloudflare(&c, other.id).await.unwrap();
+        assert!(c.host.calls().is_empty(), "niente da riprovare senza avviso");
+        retry_cloudflare(&c, site.id).await.unwrap();
+        assert_eq!(c.host.calls(), ["tunnel_add banda sona.it"]);
     }
 
     #[tokio::test]
