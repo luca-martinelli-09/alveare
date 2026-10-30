@@ -107,6 +107,8 @@ pub trait Host: Send + Sync + 'static {
     /// Crea `templates/<name>/` con i file del sito (senza `.env`), il dump in `db.sql` e il manifest.
     /// `sql_file` è nella cartella tmp del sito, dove l'ha scritto WP-CLI.
     fn store_template(&self, slug: &Slug, name: &Slug, manifest: &crate::template::Manifest, sql_file: &str) -> impl Future<Output = Result<()>> + Send;
+    /// Metriche Prometheus di Caddy, dall'Admin API.
+    fn caddy_metrics(&self) -> impl Future<Output = Result<String>> + Send;
     /// Etichette degli account Cloudflare configurati (vuoto: hostname da aggiungere a mano).
     fn cloudflare_accounts(&self) -> Vec<String>;
     /// Hostname sul tunnel dell'account (ingress verso Caddy + CNAME proxato).

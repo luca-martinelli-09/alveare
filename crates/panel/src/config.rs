@@ -34,6 +34,7 @@ pub struct Config {
     pub smtp: Option<crate::mailer::Smtp>,
     /// URL pubblico del pannello (link via email, origine delle passkey): ALVEARE_PANEL_URL o https://<host>.
     pub panel_url: Option<String>,
+    pub metrics_token: Option<String>,
 }
 
 fn url_encode(s: &str) -> String {
@@ -115,6 +116,7 @@ impl Config {
             cloudflare: crate::cloudflare::accounts_from(&vars)?,
             smtp,
             panel_url,
+            metrics_token: get("ALVEARE_METRICS_TOKEN"),
             site_env: vars.iter().filter_map(|(k, v)| Some((k.strip_prefix("SITE_ENV_")?.to_string(), v.clone()))).collect(),
         })
     }

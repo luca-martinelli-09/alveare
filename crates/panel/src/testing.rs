@@ -170,6 +170,9 @@ impl Host for FakeHost {
         self.record("probe", format!("{} {}", host.as_str(), auth.map_or("-".to_string(), |(u, _)| format!("{u}:"))))?;
         Ok(self.probe_status.unwrap_or(200))
     }
+    async fn caddy_metrics(&self) -> anyhow::Result<String> {
+        Ok("# TYPE caddy_http_requests_total counter\ncaddy_http_requests_total{host=\"sona.it\"} 7\n".into())
+    }
     fn cloudflare_accounts(&self) -> Vec<String> {
         self.cf_accounts.clone()
     }

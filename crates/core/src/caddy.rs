@@ -40,6 +40,9 @@ pub fn render_caddyfile(cfg: &CaddyConfig) -> String {
         "{{
 	admin unix/{ADMIN_SOCKET}
 	auto_https off
+	metrics {{
+		per_host
+	}}
 	servers {{
 		trusted_proxies static private_ranges
 		client_ip_headers CF-Connecting-IP
@@ -257,6 +260,7 @@ mod tests {
         assert!(c.contains("\tauto_https off\n"));
         assert!(c.contains("\t\ttrusted_proxies static private_ranges\n"));
         assert!(c.contains("\t\tclient_ip_headers CF-Connecting-IP\n"));
+        assert!(c.contains("\tmetrics {\n\t\tper_host\n\t}\n"), "metriche per Grafana, per host");
     }
 
     #[test]

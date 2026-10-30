@@ -46,6 +46,8 @@ pub struct App<H> {
     pub mailer: crate::mailer::Mailer,
     pub panel_url: Option<String>,
     pub passkeys: Option<crate::auth::passkeys::Passkeys>,
+    /// Token di Prometheus per /metrics (senza, /metrics non c'è).
+    pub metrics_token: Option<String>,
 }
 
 impl<H> Clone for App<H> {
@@ -67,6 +69,7 @@ impl<H> Clone for App<H> {
             mailer: self.mailer.clone(),
             panel_url: self.panel_url.clone(),
             passkeys: self.passkeys.clone(),
+            metrics_token: self.metrics_token.clone(),
         }
     }
 }
@@ -74,7 +77,7 @@ impl<H> Clone for App<H> {
 impl<H: Host> App<H> {
     pub fn new(ctx: Ctx<H>, auth: Auth, templates: PathBuf, secure_cookie: bool) -> Self {
         let jobs = Jobs::new(ctx.store.pool().clone());
-        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None, recovery: vec![], reserved_hosts: vec![], ram_mb: crate::budget::ram_mb(), disk_alert_mb: 10 * 1024, mailer: crate::mailer::Mailer::None, panel_url: None, passkeys: None }
+        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None, recovery: vec![], reserved_hosts: vec![], ram_mb: crate::budget::ram_mb(), disk_alert_mb: 10 * 1024, mailer: crate::mailer::Mailer::None, panel_url: None, passkeys: None, metrics_token: None }
     }
 
     pub fn with_recovery(self, recovery: Vec<(String, String)>) -> Self {
@@ -84,6 +87,10 @@ impl<H: Host> App<H> {
     pub fn recovery_kit(&self) -> String {
         let pairs: Vec<(&str, &str)> = self.recovery.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         crate::backup::recovery_kit(&pairs)
+    }
+
+    pub fn with_metrics_token(self, metrics_token: Option<String>) -> Self {
+        Self { metrics_token, ..self }
     }
 
     pub fn with_passkeys(self, passkeys: Option<crate::auth::passkeys::Passkeys>) -> Self {
@@ -296,6 +303,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/admin/recovery-kit", get(recovery_kit::<H>))
         .route("/api/alerts", get(list_alerts::<H>))
         .route("/api/jobs/{id}", get(get_job::<H>))
+        .route("/metrics", get(metrics::<H>))
         .merge(sites::routes::<H>())
         .merge(imports::routes::<H>())
         .merge(logs::routes::<H>())
@@ -1027,6 +1035,34 @@ async fn list_alerts<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap
     let user = caller(&app, &m, &h).await?;
     let visible = app.auth.visible_sites(&user).await?;
     Ok(Json(app.ctx.store.open_alerts(visible.as_deref()).await?).into_response())
+}
+
+/// Prometheus: metriche di Caddy e del pannello, con il token di ALVEARE_METRICS_TOKEN.
+async fn metrics<H: Host>(State(app): State<App<H>>, h: HeaderMap) -> ApiResult<Response> {
+    let expected = app.metrics_token.as_deref().ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "metriche non attive (ALVEARE_METRICS_TOKEN)"))?;
+    if !crate::metrics::token_ok(expected, h.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok())) {
+        return Err(ApiError::unauthorized());
+    }
+    let setting = |key: String| {
+        let store = app.ctx.store.clone();
+        async move { store.setting(&key).await.ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or(serde_json::Value::Null) }
+    };
+    let mut sites = Vec::new();
+    for s in app.ctx.store.sites().await? {
+        let Some((domain, _)) = app.ctx.store.domains(s.id).await?.into_iter().next() else { continue };
+        let last_backup = app.ctx.store.backup_runs(s.id, 20).await?.into_iter().find(|r| r.status == "done").and_then(|r| r.finished_at).and_then(|t| chrono::DateTime::parse_from_rfc3339(&t).ok()).map(|t| t.timestamp());
+        sites.push(crate::metrics::SiteMetrics {
+            domain: domain.as_str().to_string(),
+            uptime: setting(format!("uptime:{}", s.id)).await,
+            usage: setting(format!("usage:{}", s.id)).await,
+            traffic: setting(format!("traffic:{}", s.id)).await,
+            updates: setting(format!("updates:{}", s.id)).await,
+            last_backup,
+        });
+    }
+    let alerts = app.ctx.store.open_alerts(None).await?.len();
+    let caddy = app.ctx.host.caddy_metrics().await.unwrap_or_else(|e| format!("# Caddy non raggiungibile: {e}\n"));
+    Ok(([(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")], format!("{}{caddy}", crate::metrics::render(&sites, alerts))).into_response())
 }
 
 async fn get_job<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {

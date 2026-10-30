@@ -14,6 +14,7 @@ mod importer;
 mod jobs;
 mod logs;
 mod mailer;
+mod metrics;
 mod monitor;
 mod scheduler;
 mod secrets;
@@ -94,6 +95,7 @@ async fn main() -> Result<()> {
         .with_adminer(cfg.adminer_host.clone())
         .with_disk_alert(cfg.disk_alert_mb)
         .with_mailer(cfg.smtp.clone().map_or(mailer::Mailer::None, mailer::Mailer::Smtp), cfg.panel_url.clone())
+        .with_metrics_token(cfg.metrics_token.clone())
         .with_passkeys(cfg.panel_url.as_deref().map(auth::passkeys::Passkeys::new).transpose()?)
         .with_reserved_hosts(cfg.panel_host.iter().chain(&cfg.adminer_host).cloned().collect())
         .with_recovery(cfg.recovery.clone());

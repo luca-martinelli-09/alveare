@@ -394,6 +394,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metrics_need_their_token_and_include_caddy() {
+        let mut t = setup().await;
+        let (s, _, _) = call(&t, req("GET", "/metrics", None, None)).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "spente senza token");
+        t.app = t.app.clone().with_metrics_token(Some("prom".into()));
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let id = create_site(&t, &admin, "sona.it").await;
+        crate::monitor::uptime(&t.app.ctx, id).await.unwrap();
+        let (s, _, _) = call(&t, req("GET", "/metrics", Some(&admin), None)).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED, "il token di un utente non basta");
+        let resp = tower::ServiceExt::oneshot(crate::api::router(t.app.clone()), req("GET", "/metrics", Some("prom"), None)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = String::from_utf8(http_body_util::BodyExt::collect(resp.into_body()).await.unwrap().to_bytes().to_vec()).unwrap();
+        assert!(body.contains("alveare_site_up{site=\"sona.it\"} 1") && body.contains("caddy_http_requests_total"), "{body}");
+    }
+
+    #[tokio::test]
     async fn readonly_users_cannot_change_the_site() {
         let t = setup().await;
         let (_, admin) = token_for(&t, "admin@example.org", true).await;

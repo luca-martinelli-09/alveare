@@ -232,11 +232,14 @@ pub async fn agent_call(socket: &Path, cmd: &Command, timeout: Duration) -> Resu
 
 /// POST all'Admin API di Caddy sul socket Unix; restituisce il corpo se lo stato è 200.
 async fn caddy_request(socket: &Path, path: &str, caddyfile: &str) -> Result<String> {
+    caddy_admin(socket, "POST", path, caddyfile).await
+}
+
+/// Una richiesta all'Admin API (corpo vuoto = GET senza Content-Type).
+async fn caddy_admin(socket: &Path, method: &str, path: &str, caddyfile: &str) -> Result<String> {
     let mut stream = UnixStream::connect(socket).await.with_context(|| format!("connessione a Caddy ({})", socket.display()))?;
-    let head = format!(
-        "POST {path} HTTP/1.1\r\nHost: caddy\r\nContent-Type: text/caddyfile\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        caddyfile.len()
-    );
+    let ctype = if caddyfile.is_empty() { "" } else { "Content-Type: text/caddyfile\r\n" };
+    let head = format!("{method} {path} HTTP/1.1\r\nHost: caddy\r\n{ctype}Content-Length: {}\r\nConnection: close\r\n\r\n", caddyfile.len());
     stream.write_all(head.as_bytes()).await?;
     stream.write_all(caddyfile.as_bytes()).await?;
     let mut resp = String::new();
@@ -745,6 +748,10 @@ impl Host for SystemHost {
 
     async fn probe(&self, host: &Domain, auth: Option<(&str, &str)>) -> Result<u16> {
         http_probe(&self.caddy_http, host, auth, Duration::from_secs(30)).await
+    }
+
+    async fn caddy_metrics(&self) -> Result<String> {
+        caddy_admin(&self.paths.caddy_admin, "GET", "/metrics", "").await
     }
 
     fn cloudflare_accounts(&self) -> Vec<String> {
