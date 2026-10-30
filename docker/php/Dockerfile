@@ -1,8 +1,19 @@
 # Immagine PHP condivisa da tutti i siti: un pool FPM per sito, generato dal pannello.
 # PHP_VERSION=8.4 per un runtime aggiuntivo (servizio php84 del compose).
 ARG PHP_VERSION=8.5
-FROM rust:1-slim-trixie AS agent
+FROM rust:1-slim-trixie AS chef
+RUN cargo install cargo-chef --locked
 WORKDIR /src
+
+# Ricetta delle dipendenze: cambia solo con i Cargo.toml e il Cargo.lock, non con il codice.
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS agent
+COPY --from=planner /src/recipe.json recipe.json
+RUN cargo chef cook --release -p php-agent --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 RUN cargo build --release -p php-agent

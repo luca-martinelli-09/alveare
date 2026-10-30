@@ -5,10 +5,22 @@ RUN npm ci
 COPY ui ./
 RUN npm run build
 
-FROM rust:1-slim-trixie AS build
+FROM rust:1-slim-trixie AS chef
 # OpenSSL per webauthn-rs (passkey).
-RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev && rm -rf /var/lib/apt/lists/* \
+ && cargo install cargo-chef --locked
 WORKDIR /src
+
+# Ricetta delle dipendenze: cambia solo con i Cargo.toml e il Cargo.lock, non con il codice.
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS build
+COPY --from=planner /src/recipe.json recipe.json
+# Dipendenze compilate in uno strato a parte: in cache (anche nella CI) finché la ricetta non cambia.
+RUN cargo chef cook --release -p panel --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 COPY --from=ui /ui/build ui/build

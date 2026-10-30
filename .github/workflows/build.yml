@@ -43,49 +43,83 @@ jobs:
             { echo "tags=dev dev-$short"; echo "build=dev-$short"; echo "channel=dev"; } >> "$GITHUB_OUTPUT"
           fi
 
-  images:
+  # Ogni architettura sul suo runner nativo (niente emulazione QEMU, che rendeva la build di
+  # arm64 lenta oltre un'ora); le immagini si caricano per digest e `images` le unisce in un tag.
+  build:
     needs: [ci, meta]
-    runs-on: ubuntu-24.04
     strategy:
       matrix:
-        include:
-          - { image: panel, suffix: "", php: "" }
-          - { image: php, suffix: "", php: "8.5" }
+        image:
+          - { name: panel, suffix: "", php: "" }
+          - { name: php, suffix: "", php: "8.5" }
           # Runtime aggiuntivo (servizio php84 del compose).
-          - { image: php, suffix: "-8.4", php: "8.4" }
+          - { name: php, suffix: "-8.4", php: "8.4" }
+        platform:
+          - { arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.platform.runner }}
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: tags
-        env:
-          TAGS: ${{ needs.meta.outputs.tags }}
-          REPO: ${{ needs.meta.outputs.registry }}/${{ matrix.image }}
-          SUFFIX: ${{ matrix.suffix }}
-        run: |
-          {
-            echo "list<<EOF"
-            for t in $TAGS; do echo "$REPO:$t$SUFFIX"; done
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-      # Mai `latest`: il pannello si aggiorna scegliendo una versione (o il canale dev).
-      - uses: docker/build-push-action@v7
+      - id: build
+        uses: docker/build-push-action@v7
         with:
           context: .
-          file: docker/${{ matrix.image }}/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.tags.outputs.list }}
+          file: docker/${{ matrix.image.name }}/Dockerfile
+          platforms: linux/${{ matrix.platform.arch }}
+          outputs: type=image,name=${{ needs.meta.outputs.registry }}/${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
             ALVEARE_BUILD=${{ needs.meta.outputs.build }}
-            ${{ matrix.php && format('PHP_VERSION={0}', matrix.php) || '' }}
-          cache-from: type=gha,scope=${{ matrix.image }}${{ matrix.suffix }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}${{ matrix.suffix }}
+            ${{ matrix.image.php && format('PHP_VERSION={0}', matrix.image.php) || '' }}
+          cache-from: type=gha,scope=${{ matrix.image.name }}${{ matrix.image.suffix }}-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}${{ matrix.image.suffix }}-${{ matrix.platform.arch }}
+      - env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: mkdir -p digests && touch "digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.image.name }}${{ matrix.image.suffix }}-${{ matrix.platform.arch }}
+          path: digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Un tag multi-architettura per immagine, dalle due build. Mai `latest`: il pannello si
+  # aggiorna scegliendo una versione (o il canale dev).
+  images:
+    needs: [meta, build]
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        image:
+          - { name: panel, suffix: "" }
+          - { name: php, suffix: "" }
+          - { name: php, suffix: "-8.4" }
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: digest-${{ matrix.image.name }}${{ matrix.image.suffix }}-*
+          merge-multiple: true
+          path: digests
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - env:
+          TAGS: ${{ needs.meta.outputs.tags }}
+          REPO: ${{ needs.meta.outputs.registry }}/${{ matrix.image.name }}
+          SUFFIX: ${{ matrix.image.suffix }}
+        run: |
+          tags=(); for t in $TAGS; do tags+=(-t "$REPO:$t$SUFFIX"); done
+          sources=(); for d in digests/*; do sources+=("$REPO@sha256:$(basename "$d")"); done
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+          docker buildx imagetools inspect "$REPO:${TAGS%% *}$SUFFIX"
 
   # CLI `alveare` per Linux, macOS e Windows.
   cli:
