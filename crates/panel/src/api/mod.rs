@@ -268,6 +268,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .merge(imports::routes::<H>())
         .merge(logs::routes::<H>())
         .merge(config::routes::<H>())
+        .merge(blocks::routes::<H>())
         .with_state(app)
 }
 
@@ -901,6 +902,7 @@ async fn get_job<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Met
     Ok(Json(job).into_response())
 }
 
+mod blocks;
 mod config;
 mod imports;
 mod logs;

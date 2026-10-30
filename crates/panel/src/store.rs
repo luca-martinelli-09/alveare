@@ -67,6 +67,16 @@ pub struct Alert {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub struct IpBlock {
+    pub id: i64,
+    pub site_id: Option<i64>,
+    pub cidr: String,
+    pub expires_at: Option<i64>,
+    pub created_by: Option<i64>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Export {
     pub token: String,
     pub site_id: i64,
@@ -537,6 +547,51 @@ impl Store {
             .unwrap_or_default())
     }
 
+    pub async fn add_block(&self, site_id: Option<i64>, cidr: &str, expires_at: Option<i64>, by: Option<i64>, now: i64) -> Result<i64> {
+        Ok(sqlx::query_scalar("INSERT INTO ip_blocks (site_id, cidr, expires_at, created_by, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id")
+            .bind(site_id)
+            .bind(cidr)
+            .bind(expires_at)
+            .bind(by)
+            .bind(now)
+            .fetch_one(&self.pool)
+            .await?)
+    }
+
+    /// Blocchi di un sito più quelli globali; `None`: tutti.
+    pub async fn blocks(&self, site_id: Option<i64>) -> Result<Vec<IpBlock>> {
+        let rows = match site_id {
+            Some(id) => sqlx::query("SELECT * FROM ip_blocks WHERE site_id = ? OR site_id IS NULL ORDER BY id").bind(id).fetch_all(&self.pool).await?,
+            None => sqlx::query("SELECT * FROM ip_blocks ORDER BY id").fetch_all(&self.pool).await?,
+        };
+        rows.iter()
+            .map(|r| {
+                Ok(IpBlock {
+                    id: r.try_get("id")?,
+                    site_id: r.try_get("site_id")?,
+                    cidr: r.try_get("cidr")?,
+                    expires_at: r.try_get("expires_at")?,
+                    created_by: r.try_get("created_by")?,
+                    created_at: r.try_get("created_at")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn block(&self, id: i64) -> Result<IpBlock> {
+        self.blocks(None).await?.into_iter().find(|b| b.id == id).ok_or(StoreError::NotFound)
+    }
+
+    pub async fn remove_block(&self, id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM ip_blocks WHERE id = ?").bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Toglie i blocchi scaduti; restituisce quanti (se > 0 va rigenerato il Caddyfile).
+    pub async fn expire_blocks(&self, now: i64) -> Result<u64> {
+        Ok(sqlx::query("DELETE FROM ip_blocks WHERE expires_at IS NOT NULL AND expires_at <= ?").bind(now).execute(&self.pool).await?.rows_affected())
+    }
+
     pub async fn add_export(&self, e: &Export) -> Result<()> {
         sqlx::query("INSERT INTO exports (token, site_id, file, size, created_at) VALUES (?, ?, ?, ?, ?)")
             .bind(&e.token)
@@ -593,6 +648,7 @@ impl Store {
             let primary = of(DomainKind::Primary).into_iter().next().ok_or(StoreError::NotFound)?;
             let staging_hash: Option<String> = sqlx::query_scalar("SELECT staging_hash FROM sites WHERE id = ?").bind(site.id).fetch_one(&self.pool).await?;
             let extra = self.current_override(Some(site.id), OverrideKind::Caddy).await?.map(|o| o.content);
+            let blocked = self.blocks(Some(site.id)).await?.into_iter().map(|b| b.cidr).collect();
             out.push(CaddySite {
                 slug: site.slug,
                 primary,
@@ -602,6 +658,7 @@ impl Store {
                 staging_hash,
                 log_days: site.log_retention_days,
                 extra,
+                blocked,
             });
         }
         Ok(out)
@@ -739,6 +796,25 @@ mod tests {
         assert_eq!(php[0].extra, ["php_value[a] = 2"]);
         s.remove_override(v2.id).await.unwrap();
         assert_eq!(s.current_override(Some(a.id), OverrideKind::Php).await.unwrap().unwrap().version, 1);
+    }
+
+    #[tokio::test]
+    async fn ip_blocks_reach_caddy_until_they_expire() {
+        let s = store().await;
+        let a = s.create_site(&new_site("a.it")).await.unwrap();
+        let b = s.create_site(&new_site("b.it")).await.unwrap();
+        for id in [a.id, b.id] {
+            s.set_status(id, SiteStatus::Active).await.unwrap();
+        }
+        s.add_block(Some(a.id), "198.51.100.9", Some(1000), Some(1), 10).await.unwrap();
+        s.add_block(None, "203.0.113.0/24", None, Some(1), 10).await.unwrap();
+        let caddy = s.caddy_sites().await.unwrap();
+        assert_eq!(caddy[0].blocked, ["198.51.100.9", "203.0.113.0/24"]);
+        assert_eq!(caddy[1].blocked, ["203.0.113.0/24"], "il blocco globale vale per tutti");
+        assert_eq!(s.blocks(Some(a.id)).await.unwrap().len(), 2, "del sito e globali");
+        assert_eq!(s.expire_blocks(999).await.unwrap(), 0);
+        assert_eq!(s.expire_blocks(1000).await.unwrap(), 1);
+        assert_eq!(s.caddy_sites().await.unwrap()[0].blocked, ["203.0.113.0/24"]);
     }
 
     #[tokio::test]

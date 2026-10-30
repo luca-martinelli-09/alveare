@@ -27,6 +27,8 @@ pub enum Task {
     PanelBackup,
     RotateLogs,
     Integrity(i64),
+    /// Blocchi IP scaduti: si tolgono dal Caddyfile.
+    ExpireBlocks,
     /// Restore di prova mensile su un dominio interno: un backup mai ripristinato non conta.
     RestoreTest(i64),
     Cleanup,
@@ -77,6 +79,7 @@ pub fn due(now: DateTime<Tz>, sites: &[SiteRef]) -> Vec<Task> {
     if m % 5 == 0 {
         out.push(Task::RotateLogs);
     }
+    out.push(Task::ExpireBlocks);
     if (h, m) == (4, 30) {
         out.push(Task::Cleanup);
     }
@@ -134,6 +137,7 @@ pub async fn run<H: Host>(app: App<H>) {
                     Task::PanelBackup => (0, "panel-backup"),
                     Task::Integrity(id) => (id, "integrity"),
                     Task::RestoreTest(id) => (id, "restore-test"),
+                    Task::ExpireBlocks => (0, "blocks"),
                     Task::RotateLogs => (0, "rotate"),
                     Task::Cleanup => (0, "cleanup"),
                 };
@@ -189,6 +193,11 @@ async fn execute<H: Host>(app: &App<H>, task: Task) -> anyhow::Result<()> {
         }
         Task::RestoreTest(_) => {}
         Task::Cleanup => cleanup(app).await?,
+        Task::ExpireBlocks => {
+            if app.ctx.store.expire_blocks(chrono::Utc::now().timestamp()).await? > 0 {
+                flows::sync_caddy(&app.ctx).await?;
+            }
+        }
     }
     Ok(())
 }

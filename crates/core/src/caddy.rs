@@ -19,6 +19,8 @@ pub struct CaddySite {
     pub log_days: u32,
     /// Override dell'admin dentro il blocco del sito (header, redirect, cache, blocchi di path).
     pub extra: Option<String>,
+    /// IP o reti CIDR bloccati dal pannello (del sito e globali), già validati.
+    pub blocked: Vec<String>,
 }
 
 const MAINTENANCE_PAGE: &str = "<!doctype html><html lang=\"it\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sito in manutenzione</title><body style=\"font-family:system-ui;text-align:center;padding:4rem 1rem\"><h1>Sito in manutenzione</h1><p>Torniamo online a breve.</p></body></html>";
@@ -86,6 +88,11 @@ fn render_site(out: &mut String, site: &CaddySite) {
             .filter(|e| !e.trim().is_empty())
             .map(|e| format!("\t# override del sito\n{}", e.trim_end().lines().map(|l| format!("\t{l}\n")).collect::<String>()))
             .unwrap_or_default();
+        let blocked = if site.blocked.is_empty() {
+            String::new()
+        } else {
+            format!("\t@alveare_blocked client_ip {}\n\trespond @alveare_blocked 403\n", site.blocked.join(" "))
+        };
         let staging = site
             .staging_hash
             .as_ref()
@@ -104,7 +111,7 @@ fn render_site(out: &mut String, site: &CaddySite) {
 		}}
 		format json
 	}}
-{staging}	@uploads_php path_regexp (?i)^/wp-content/uploads/.*\\.ph(p[0-9]?|tml|ar)$
+{blocked}{staging}	@uploads_php path_regexp (?i)^/wp-content/uploads/.*\\.ph(p[0-9]?|tml|ar)$
 	respond @uploads_php 403
 {extra}	php_fastcgi unix/{socket} {{
 		env REMOTE_ADDR {{client_ip}}
@@ -186,7 +193,18 @@ mod tests {
             staging_hash: None,
             log_days: 30,
             extra: None,
+            blocked: vec![],
         }
+    }
+
+    #[test]
+    fn blocked_ips_get_403_before_reaching_php() {
+        let mut site = sona();
+        site.blocked = vec!["198.51.100.9".into(), "203.0.113.0/24".into()];
+        let c = render_caddyfile(&CaddyConfig { panel_host: None, adminer_host: None, global_extra: None, sites: vec![site] });
+        let rule = c.find("\t@alveare_blocked client_ip 198.51.100.9 203.0.113.0/24\n\trespond @alveare_blocked 403\n").expect("blocco IP");
+        assert!(rule < c.find("\tphp_fastcgi").unwrap());
+        assert!(!render_caddyfile(&cfg()).contains("alveare_blocked"));
     }
 
     fn cfg() -> CaddyConfig {
