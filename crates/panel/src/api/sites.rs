@@ -239,7 +239,9 @@ async fn server<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> 
         sites.push(json!({ "id": s.id, "slug": s.slug, "domain": domain, "status": s.status, "pool_mb": crate::budget::pool_mb(&s.settings), "settings": s.settings }));
     }
     sites.sort_by_key(|s| std::cmp::Reverse(s["pool_mb"].as_u64()));
-    Ok(Json(json!({ "budget": budget, "sites": sites, "version": crate::upgrade::VERSION, "build": crate::upgrade::BUILD.filter(|b| !b.is_empty()) })).into_response())
+    // Cosa manca alla configurazione: la panoramica lo mostra come primi passi.
+    let setup = json!({ "backups": app.ctx.backups, "cloudflare": !app.ctx.host.cloudflare_accounts().is_empty(), "email": app.mailer.enabled() });
+    Ok(Json(json!({ "budget": budget, "sites": sites, "setup": setup, "version": crate::upgrade::VERSION, "build": crate::upgrade::BUILD.filter(|b| !b.is_empty()) })).into_response())
 }
 
 const EXPORT_DAYS: i64 = 7;
@@ -421,6 +423,7 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(body["budget"]["ram_mb"], 4096);
         assert_eq!(body["sites"][0]["pool_mb"], 2048 * 4);
+        assert_eq!(body["setup"], json!({"backups": true, "cloudflare": false, "email": false}), "cosa resta da configurare");
         let (s, _, _) = call(&t, req("GET", "/api/server", Some(&manager), None)).await;
         assert_eq!(s, StatusCode::FORBIDDEN);
         // Un sito nuovo con i pool già al 200%: serve la conferma.

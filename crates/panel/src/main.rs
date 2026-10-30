@@ -95,6 +95,9 @@ async fn main() -> Result<()> {
         backups: cfg.restic_repository.is_some(),
         site_url: cfg.site_url.clone(),
     };
+    if template::seed_defaults(&paths.templates, std::path::Path::new(template::IMAGE_TEMPLATES))? {
+        tracing::info!("cartella dei template vuota: copiati quelli predefiniti");
+    }
     let app = App::new(ctx, auth, paths.templates.clone(), cfg.secure_cookie)
         .with_adminer(cfg.adminer_host.clone())
         .with_disk_alert(cfg.disk_alert_mb)

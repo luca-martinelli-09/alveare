@@ -44,8 +44,10 @@ async fn list<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> Ap
     let mut out = Vec::new();
     for entry in std::fs::read_dir(&app.templates).map_err(internal)?.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if let Ok(t) = load_template(&app.templates, &name) {
-            out.push(json!({ "id": name, "name": t.manifest.name, "kind": t.manifest.kind, "snapshot": t.manifest.sql.is_some(), "steps": t.manifest.post_create.len() }));
+        match load_template(&app.templates, &name) {
+            Ok(t) => out.push(json!({ "id": name, "name": t.manifest.name, "kind": t.manifest.kind, "snapshot": t.manifest.sql.is_some(), "steps": t.manifest.post_create.len() })),
+            Err(e) if entry.path().is_dir() => tracing::warn!("template {name} non leggibile: {}", e.1),
+            Err(_) => {}
         }
     }
     out.sort_by_key(|t| t["name"].as_str().unwrap_or_default().to_lowercase());

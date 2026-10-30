@@ -21,6 +21,9 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates tzdata mariadb-client restic libssl3t64 \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/panel /usr/local/bin/panel
+# Copiati in /srv/templates al primo avvio se la cartella è vuota (compose senza il repo).
+COPY templates/wordpress /usr/share/alveare/templates/wordpress
+COPY templates/laravel /usr/share/alveare/templates/laravel
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD ["panel", "healthcheck"]
 CMD ["panel"]

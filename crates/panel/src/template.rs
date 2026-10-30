@@ -125,6 +125,20 @@ pub(crate) fn copy_tree(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Template dell'immagine: cartella da cui il primo avvio copia quelli predefiniti.
+pub const IMAGE_TEMPLATES: &str = "/usr/share/alveare/templates";
+
+/// Primo avvio con la cartella dei template vuota (bind mount creato da Docker): copia quelli
+/// dell'immagine. Se c'è già un template non tocca niente, così quelli eliminati non tornano.
+pub fn seed_defaults(dir: &Path, defaults: &Path) -> Result<bool> {
+    let has_any = fs::read_dir(dir).is_ok_and(|d| d.flatten().any(|e| e.path().join("template.toml").is_file()));
+    if has_any || !defaults.is_dir() {
+        return Ok(false);
+    }
+    copy_tree(defaults, dir)?;
+    Ok(true)
+}
+
 /// `.env` del sito, fuori dalla document root.
 pub fn env_file(vars: &Vars) -> Result<String> {
     vars.iter()
@@ -156,6 +170,22 @@ pub fn parse_env(text: &str) -> Vars {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_templates_fill_only_an_empty_folder() {
+        let defaults = tempfile::tempdir().unwrap();
+        fs::create_dir_all(defaults.path().join("wordpress")).unwrap();
+        fs::write(defaults.path().join("wordpress/template.toml"), "name = \"WordPress\"\nkind = \"wordpress\"\n").unwrap();
+        let empty = tempfile::tempdir().unwrap();
+        assert!(seed_defaults(empty.path(), defaults.path()).unwrap());
+        assert!(empty.path().join("wordpress/template.toml").is_file());
+        // Con un template già presente non si tocca niente: quelli eliminati non tornano.
+        let used = tempfile::tempdir().unwrap();
+        fs::create_dir_all(used.path().join("mio")).unwrap();
+        fs::write(used.path().join("mio/template.toml"), "name = \"Mio\"\nkind = \"php\"\n").unwrap();
+        assert!(!seed_defaults(used.path(), defaults.path()).unwrap());
+        assert!(!used.path().join("wordpress").exists());
+    }
     use std::fs;
 
     fn vars() -> Vars {

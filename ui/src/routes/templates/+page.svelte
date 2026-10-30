@@ -11,7 +11,9 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import PageHeader from '$lib/components/app/page-header.svelte';
 	import { api, errorMessage } from '$lib/api';
+	import * as Empty from '$lib/components/ui/empty';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import LayoutTemplateIcon from '@lucide/svelte/icons/layout-template';
 
 	type Template = { id: string; name: string; kind: string; snapshot: boolean; steps: number };
 	const kinds: Record<string, string> = { wordpress: 'WordPress', php: 'PHP', laravel: 'Laravel' };
@@ -112,6 +114,17 @@
 
 {#if templates === null}
 	<Skeleton class="h-40 w-full" />
+{:else if templates.length === 0}
+	<Empty.Root class="bg-card flex-none border">
+		<Empty.Header>
+			<Empty.Media variant="icon"><LayoutTemplateIcon /></Empty.Media>
+			<Empty.Title>Nessun template</Empty.Title>
+			<Empty.Description>
+				Al primo avvio il pannello copia WordPress e Laravel nella cartella <code>templates/</code>. Se è vuota, creane uno da zero.
+			</Empty.Description>
+		</Empty.Header>
+		<Empty.Content><Button onclick={() => (open = true)}><PlusIcon data-icon="inline-start" /> Nuovo template</Button></Empty.Content>
+	</Empty.Root>
 {:else}
 	<div class="rounded-lg border">
 		<Table.Root>

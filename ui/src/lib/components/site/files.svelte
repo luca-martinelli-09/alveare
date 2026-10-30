@@ -31,6 +31,7 @@
 	let saving = $state(false);
 	let progress = $state<number | null>(null);
 	let picker: HTMLInputElement;
+	let folderPicker: HTMLInputElement;
 
 	const join = (name: string) => (path ? `${path}/${name}` : name);
 	const crumbs = $derived(path ? path.split('/') : []);
@@ -112,18 +113,24 @@
 		if (mode) op({ op: 'chmod', path: join(e.name), mode: parseInt(mode, 8) });
 	}
 
+	// Da una cartella ogni file porta il percorso relativo ("tema/css/a.css"): il server crea le sottocartelle.
+	// Le cartelle vuote il browser non le elenca, quindi non arrivano.
 	async function upload(files: FileList | null) {
-		for (const file of files ?? []) {
+		const list = [...(files ?? [])];
+		let failed = 0;
+		for (const [i, file] of list.entries()) {
+			const name = file.webkitRelativePath || file.name;
 			try {
 				progress = 0;
-				await uploadTo(`${base}/files/uploads`, join(file.name), file, (f) => (progress = f));
-				toast.success(`${file.name} caricato`);
+				await uploadTo(`${base}/files/uploads`, join(name), file, (f) => (progress = (i + f) / list.length));
 			} catch (e) {
-				toast.error(`${file.name}: ${errorMessage(e)}`);
+				failed++;
+				toast.error(`${name}: ${errorMessage(e)}`);
 			}
 		}
+		if (list.length && !failed) toast.success(list.length === 1 ? `${list[0].name} caricato` : `${list.length} file caricati`);
 		progress = null;
-		picker.value = '';
+		picker.value = folderPicker.value = '';
 		await load();
 	}
 </script>
@@ -154,18 +161,31 @@
 		<div class="ml-auto flex gap-2">
 			<Button size="sm" onclick={mkdir}>
 				<FolderPlusIcon data-icon="inline-start" />
-				Cartella
+				Nuova cartella
 			</Button>
-			<Button size="sm" onclick={() => picker.click()} disabled={progress !== null}>
-				{#if progress !== null}
-					<Spinner data-icon="inline-start" />
-					{Math.round(progress * 100)}%
-				{:else}
-					<UploadIcon data-icon="inline-start" />
-					Carica
-				{/if}
-			</Button>
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger disabled={progress !== null}>
+					{#snippet child({ props })}
+						<Button size="sm" {...props}>
+							{#if progress !== null}
+								<Spinner data-icon="inline-start" />
+								{Math.round(progress * 100)}%
+							{:else}
+								<UploadIcon data-icon="inline-start" />
+								Carica
+							{/if}
+						</Button>
+					{/snippet}
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Content align="end">
+					<DropdownMenu.Group>
+						<DropdownMenu.Item onclick={() => picker.click()}><FileIcon /> Carica file</DropdownMenu.Item>
+						<DropdownMenu.Item onclick={() => folderPicker.click()}><FolderIcon /> Carica cartella</DropdownMenu.Item>
+					</DropdownMenu.Group>
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
 			<input bind:this={picker} type="file" multiple class="hidden" onchange={(e) => upload(e.currentTarget.files)} />
+			<input bind:this={folderPicker} type="file" webkitdirectory class="hidden" onchange={(e) => upload(e.currentTarget.files)} />
 		</div>
 	</div>
 

@@ -21,6 +21,7 @@
 	import SiteActions from '$lib/components/app/site-actions.svelte';
 	import JobLog from '$lib/components/app/job-log.svelte';
 	import ImportDialog from '$lib/components/app/import-dialog.svelte';
+	import FirstSteps from '$lib/components/app/first-steps.svelte';
 	import { api, errorMessage, type Alert as AlertT, type SiteRow } from '$lib/api';
 	import { session } from '$lib/session.svelte';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -207,18 +208,17 @@
 
 {#if sites.list === null}
 	<Skeleton class="h-48 w-full" />
+{:else if sites.list.length === 0 && session.user?.is_admin}
+	<FirstSteps oncreate={() => (open = true)} />
 {:else if sites.list.length === 0}
-	<Empty.Root class="bg-card border">
+	<Empty.Root class="bg-card flex-none border">
 		<Empty.Header>
 			<Empty.Media variant="icon"><GlobeIcon /></Empty.Media>
 			<Empty.Title>Nessun sito</Empty.Title>
 			<Empty.Description>
-				{session.user?.is_admin ? 'Crea il primo sito da un template, o importalo da un altro hosting.' : 'Non hai ancora siti assegnati: chiedi a un amministratore.'}
+				Non hai ancora siti assegnati: chiedi a un amministratore.
 			</Empty.Description>
 		</Empty.Header>
-		{#if session.user?.is_admin}
-			<Empty.Content><Button onclick={() => (open = true)}><PlusIcon data-icon="inline-start" /> Nuovo sito</Button></Empty.Content>
-		{/if}
 	</Empty.Root>
 {:else}
 	<section class="flex flex-col gap-2" aria-labelledby="sites-title">
