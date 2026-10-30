@@ -195,24 +195,41 @@ pub fn remove_dirs(p: &Paths, slug: &Slug) -> Result<()> {
 }
 
 /// passwd/group sempre; in staging solo i pool cambiati; via i pool di siti che non ne hanno più.
-pub fn write_php_files(p: &Paths, users: &[SitePhp], pools: &[SitePhp]) -> Result<()> {
-    for dir in [&p.php_etc, &p.pools, &p.staging] {
-        fs::create_dir_all(dir)?;
+/// (attivi, in prova) dei pool di un runtime PHP.
+pub fn runtime_dirs(p: &Paths, runtime: &str) -> (PathBuf, PathBuf) {
+    if runtime == alveare_core::php::DEFAULT_RUNTIME {
+        return (p.pools.clone(), p.staging.clone());
     }
+    let (active, staging) = alveare_core::php::runtime_pool_dirs(runtime);
+    let root = p.pools.parent().unwrap_or(&p.pools);
+    (root.join(active), root.join(staging))
+}
+
+/// passwd/group sempre; in staging solo i pool cambiati, ognuno nel suo runtime; via i pool
+/// di siti che non ne hanno più (o che hanno cambiato runtime).
+pub fn write_php_files(p: &Paths, users: &[SitePhp], pools: &[SitePhp], extra_runtimes: &[String]) -> Result<()> {
+    fs::create_dir_all(&p.php_etc)?;
     let users: Vec<&SitePhp> = users.iter().collect();
     write_atomic(&p.php_etc.join("passwd"), &render_passwd(&users))?;
     write_atomic(&p.php_etc.join("group"), &render_group(&users))?;
-    let wanted: Vec<String> = pools.iter().map(|s| format!("{}.conf", s.slug.as_str())).collect();
-    for (site, name) in pools.iter().zip(&wanted) {
-        let conf = render_pool(site);
-        if fs::read_to_string(p.pools.join(name)).ok().as_deref() != Some(conf.as_str()) {
-            fs::write(p.staging.join(name), conf)?;
+    let runtimes = std::iter::once(alveare_core::php::DEFAULT_RUNTIME.to_string()).chain(extra_runtimes.iter().cloned());
+    for rt in runtimes {
+        let (active, staging) = runtime_dirs(p, &rt);
+        fs::create_dir_all(&active)?;
+        fs::create_dir_all(&staging)?;
+        let mine: Vec<&SitePhp> = pools.iter().filter(|s| s.runtime == rt).collect();
+        let wanted: Vec<String> = mine.iter().map(|s| format!("{}.conf", s.slug.as_str())).collect();
+        for (site, name) in mine.iter().zip(&wanted) {
+            let conf = render_pool(site);
+            if fs::read_to_string(active.join(name)).ok().as_deref() != Some(conf.as_str()) {
+                fs::write(staging.join(name), conf)?;
+            }
         }
-    }
-    for entry in fs::read_dir(&p.pools)? {
-        let name = entry?.file_name().to_string_lossy().into_owned();
-        if name.ends_with(".conf") && !wanted.contains(&name) {
-            fs::remove_file(p.pools.join(&name))?;
+        for entry in fs::read_dir(&active)? {
+            let name = entry?.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".conf") && !wanted.contains(&name) {
+                fs::remove_file(active.join(&name))?;
+            }
         }
     }
     Ok(())
@@ -356,6 +373,10 @@ pub struct SystemHost {
     pub cloudflare: Vec<crate::cloudflare::Account>,
     /// Base dell'API di Cloudflare (sostituibile nei test).
     pub cloudflare_api: String,
+    /// Runtime PHP aggiuntivi (container phpXX, canary), oltre a quello principale.
+    pub php_runtimes: Vec<String>,
+    /// Runtime di ogni sito, aggiornato a ogni sync_php: decide a quale agente parlare.
+    pub site_runtimes: std::sync::Mutex<std::collections::HashMap<String, String>>,
 }
 
 impl SystemHost {
@@ -369,8 +390,23 @@ impl SystemHost {
 }
 
 impl SystemHost {
-    async fn agent(&self, cmd: Command) -> Result<Response> {
-        agent_call(&self.paths.agent, &cmd, AGENT_TIMEOUT).await
+    /// Socket dell'agente di un runtime, accanto a quello principale.
+    fn agent_path(&self, runtime: &str) -> PathBuf {
+        if runtime == alveare_core::php::DEFAULT_RUNTIME {
+            self.paths.agent.clone()
+        } else {
+            self.paths.agent.with_file_name(format!("agent-{runtime}.sock"))
+        }
+    }
+
+    /// Il comando va all'agente del runtime del sito (WP-CLI e script girano con la sua versione di PHP).
+    async fn agent_for(&self, slug: &Slug, cmd: Command, timeout: Duration) -> Result<Response> {
+        let runtime = self.site_runtimes.lock().expect("lock runtime").get(slug.as_str()).cloned().unwrap_or_else(|| alveare_core::php::DEFAULT_RUNTIME.into());
+        agent_call(&self.agent_path(&runtime), &cmd, timeout).await
+    }
+
+    fn all_runtimes(&self) -> Vec<String> {
+        std::iter::once(alveare_core::php::DEFAULT_RUNTIME.to_string()).chain(self.php_runtimes.iter().cloned()).collect()
     }
 
     async fn restic(&self, args: &[String]) -> Result<String> {
@@ -453,17 +489,28 @@ impl Host for SystemHost {
     }
 
     async fn sync_php(&self, users: &[SitePhp], pools: &[SitePhp]) -> Result<Vec<String>> {
-        write_php_files(&self.paths, users, pools)?;
-        let resp = self.agent(Command::PoolApply).await?;
+        *self.site_runtimes.lock().expect("lock runtime") = users.iter().map(|u| (u.slug.as_str().to_string(), u.runtime.clone())).collect();
+        write_php_files(&self.paths, users, pools, &self.php_runtimes)?;
         #[derive(serde::Deserialize)]
         struct Report {
             rejected: Vec<(String, String)>,
         }
-        let report: Report = serde_json::from_str(&resp.output).with_context(|| format!("pool.apply: {}", resp.output))?;
-        if !resp.ok && report.rejected.is_empty() {
-            bail!("reload di PHP-FPM fallito");
+        let mut rejected = Vec::new();
+        for rt in self.all_runtimes() {
+            let used = pools.iter().any(|p| p.runtime == rt) || rt == alveare_core::php::DEFAULT_RUNTIME;
+            let resp = match agent_call(&self.agent_path(&rt), &Command::PoolApply, AGENT_TIMEOUT).await {
+                Ok(r) => r,
+                // Un runtime senza siti può essere spento (profilo del compose non attivo).
+                Err(_) if !used => continue,
+                Err(e) => return Err(e.context(format!("runtime PHP {rt}"))),
+            };
+            let report: Report = serde_json::from_str(&resp.output).with_context(|| format!("pool.apply ({rt}): {}", resp.output))?;
+            if !resp.ok && report.rejected.is_empty() {
+                bail!("reload di PHP-FPM fallito (runtime {rt})");
+            }
+            rejected.extend(report.rejected.into_iter().map(|(name, _)| name));
         }
-        Ok(report.rejected.into_iter().map(|(name, _)| name).collect())
+        Ok(rejected)
     }
 
     async fn sync_caddy(&self, sites: &[CaddySite], global: Option<&str>) -> Result<()> {
@@ -499,7 +546,7 @@ impl Host for SystemHost {
     }
 
     async fn wp_output(&self, slug: &Slug, args: &[String]) -> Result<(bool, String)> {
-        let resp = self.agent(Command::Wp { slug: slug.clone(), args: args.to_vec() }).await?;
+        let resp = self.agent_for(slug, Command::Wp { slug: slug.clone(), args: args.to_vec() }, AGENT_TIMEOUT).await?;
         Ok((resp.ok, resp.output))
     }
 
@@ -799,7 +846,7 @@ impl Host for SystemHost {
     async fn php(&self, slug: &Slug, args: &[String], timeout_s: u32) -> Result<(bool, String)> {
         // Il timeout lo applica l'agente; il pannello aspetta un minuto in più.
         let cmd = Command::Php { slug: slug.clone(), args: args.to_vec(), timeout_s };
-        let resp = agent_call(&self.paths.agent, &cmd, Duration::from_secs(u64::from(timeout_s) + 60)).await?;
+        let resp = self.agent_for(slug, cmd, Duration::from_secs(u64::from(timeout_s) + 60)).await?;
         Ok((resp.ok, resp.output))
     }
 
@@ -833,9 +880,13 @@ impl Host for SystemHost {
     }
 
     async fn reopen_fpm_logs(&self) -> Result<()> {
-        let resp = self.agent(Command::FpmReopenLogs).await?;
-        if !resp.ok {
-            bail!("riapertura dei log di FPM: {}", resp.output);
+        for rt in self.all_runtimes() {
+            match agent_call(&self.agent_path(&rt), &Command::FpmReopenLogs, AGENT_TIMEOUT).await {
+                Ok(resp) if !resp.ok => bail!("riapertura dei log di FPM ({rt}): {}", resp.output),
+                Ok(_) => {}
+                Err(e) if rt == alveare_core::php::DEFAULT_RUNTIME => return Err(e),
+                Err(_) => {}
+            }
         }
         Ok(())
     }
@@ -861,7 +912,7 @@ mod tests {
     }
 
     fn php(s: &str, uid: u32) -> SitePhp {
-        SitePhp { slug: slug(s), uid, settings: PhpSettings::default(), extra: vec![] }
+        SitePhp { slug: slug(s), uid, settings: PhpSettings::default(), extra: vec![], runtime: alveare_core::php::DEFAULT_RUNTIME.into() }
     }
 
     #[tokio::test]
@@ -966,13 +1017,30 @@ mod tests {
         fs::create_dir_all(&p.pools).unwrap();
         fs::write(p.pools.join("a_it.conf"), render_pool(&a)).unwrap();
         fs::write(p.pools.join("old_it.conf"), "vecchio").unwrap();
-        write_php_files(&p, &[a.clone(), b.clone()], &[a, b]).unwrap();
+        write_php_files(&p, &[a.clone(), b.clone()], &[a, b], &[]).unwrap();
         assert!(!p.staging.join("a_it.conf").exists(), "pool invariato non va rivalidato");
         assert!(p.staging.join("b_it.conf").exists());
         assert!(!p.pools.join("old_it.conf").exists());
         let passwd = fs::read_to_string(p.php_etc.join("passwd")).unwrap();
         assert!(passwd.contains("\nb_it:x:20002:20002:"));
         assert!(p.php_etc.join("group").exists());
+    }
+
+    #[test]
+    fn pools_move_between_runtimes() {
+        let t = tempfile::tempdir().unwrap();
+        let p = paths(&t);
+        let a = php("a_it", 20001);
+        let runtimes = ["8.4".to_string()];
+        write_php_files(&p, std::slice::from_ref(&a), std::slice::from_ref(&a), &runtimes).unwrap();
+        fs::rename(p.staging.join("a_it.conf"), p.pools.join("a_it.conf")).unwrap();
+        let moved = SitePhp { runtime: "8.4".into(), ..a };
+        write_php_files(&p, std::slice::from_ref(&moved), std::slice::from_ref(&moved), &runtimes).unwrap();
+        let (dir84, staging84) = runtime_dirs(&p, "8.4");
+        assert!(staging84.join("a_it.conf").exists(), "nuovo pool nel runtime 8.4");
+        assert!(fs::read_to_string(staging84.join("a_it.conf")).unwrap().contains("/run/php/a_it.8.4.sock"));
+        assert!(!p.pools.join("a_it.conf").exists(), "tolto dal runtime di prima");
+        assert!(dir84.is_dir());
     }
 
     #[tokio::test]

@@ -356,6 +356,31 @@ pub async fn set_php_settings<H: Host>(c: &Ctx<H>, site_id: i64, settings: &crat
     Ok(())
 }
 
+/// Sposta il sito su un altro runtime PHP (versione o canary): nuovo pool nel container
+/// giusto, poi Caddy sul nuovo socket. Qualche secondo di 502 durante lo spostamento.
+pub async fn set_php_runtime<H: Host>(c: &Ctx<H>, site_id: i64, runtime: &str, available: &[String]) -> Result<()> {
+    let site = c.store.site(site_id).await?;
+    if !available.iter().any(|r| r == runtime) {
+        return Err(Invalid(format!("runtime PHP non disponibile: {runtime} (disponibili: {})", available.join(", "))).into());
+    }
+    if site.php_version == runtime {
+        return Ok(());
+    }
+    c.store.set_php_version(site_id, runtime).await?;
+    let moved = async {
+        check_own_pool(c, &site).await?;
+        c.sync_caddy().await
+    }
+    .await;
+    if let Err(e) = moved {
+        c.store.set_php_version(site_id, &site.php_version).await?;
+        c.sync_php().await?;
+        c.sync_caddy().await?;
+        return Err(Invalid(format!("spostamento su PHP {runtime} non riuscito: {e:#}")).into());
+    }
+    Ok(())
+}
+
 /// Budget di memoria con le impostazioni di un sito sostituite da `proposed`.
 /// `site_id = 0` e `proposed` aggiungono un sito nuovo con quelle impostazioni.
 pub async fn budget_with<H>(c: &Ctx<H>, site_id: i64, proposed: Option<&crate::store::PhpSettingsRow>, ram_mb: u64) -> Result<crate::budget::Budget> {
@@ -1656,6 +1681,23 @@ mod tests {
         assert_eq!(c.store.site(site.id).await.unwrap().status, SiteStatus::Active);
         assert_eq!(c.store.open_alerts(None).await.unwrap()[0].kind, "cloudflare");
         assert!(log.lines.iter().any(|l| l.contains("non sistemato")));
+    }
+
+    #[tokio::test]
+    async fn sites_move_between_php_runtimes() {
+        let c = ctx(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        let available = ["8.5".to_string(), "8.4".to_string()];
+        assert!(set_php_runtime(&c, site.id, "7.4", &available).await.unwrap_err().downcast_ref::<Invalid>().is_some());
+        c.host.calls.lock().unwrap().clear();
+        set_php_runtime(&c, site.id, "8.4", &available).await.unwrap();
+        assert_eq!(c.host.calls(), ["sync_php users=sona_it pools=sona_it", "sync_caddy sona_it"]);
+        assert_eq!(c.store.pooled_sites().await.unwrap()[0].runtime, "8.4");
+        assert_eq!(c.store.caddy_sites().await.unwrap()[0].runtime, "8.4");
+
+        let c = Ctx { host: FakeHost { reject_pool: true, ..Default::default() }, ..c };
+        assert!(set_php_runtime(&c, site.id, "8.5", &available).await.is_err());
+        assert_eq!(c.store.site(site.id).await.unwrap().php_version, "8.4", "torna dov'era");
     }
 
     #[tokio::test]

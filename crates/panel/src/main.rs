@@ -82,6 +82,8 @@ async fn main() -> Result<()> {
         http: cloudflare::http_client(),
         cloudflare: cfg.cloudflare.clone(),
         cloudflare_api: cloudflare::API.into(),
+        php_runtimes: cfg.php_runtimes.clone(),
+        site_runtimes: std::sync::Mutex::new(store.php_sites().await?.into_iter().map(|s| (s.slug.as_str().to_string(), s.runtime)).collect()),
     };
     let ctx = Ctx {
         store: store.clone(),
@@ -96,6 +98,7 @@ async fn main() -> Result<()> {
         .with_disk_alert(cfg.disk_alert_mb)
         .with_mailer(cfg.smtp.clone().map_or(mailer::Mailer::None, mailer::Mailer::Smtp), cfg.panel_url.clone())
         .with_metrics_token(cfg.metrics_token.clone())
+        .with_php_runtimes(&cfg.php_runtimes)
         .with_passkeys(cfg.panel_url.as_deref().map(auth::passkeys::Passkeys::new).transpose()?)
         .with_reserved_hosts(cfg.panel_host.iter().chain(&cfg.adminer_host).cloned().collect())
         .with_recovery(cfg.recovery.clone());
@@ -156,7 +159,7 @@ async fn remind_recovery_kit(app: &App<SystemHost>) -> Result<()> {
 /// Tutto si rigenera dallo stato: passwd, group, pool in staging e Caddyfile.
 /// PHP e Caddy partono dopo il pannello e trovano i file pronti.
 async fn write_state_to_disk(store: &Store, paths: &Paths, cfg: &Config) -> Result<()> {
-    write_php_files(paths, &store.php_sites().await?, &store.pooled_sites().await?)?;
+    write_php_files(paths, &store.php_sites().await?, &store.pooled_sites().await?, &cfg.php_runtimes)?;
     let redis_users = flows::redis_users(store, &cfg.key).await?;
     host::write_redis_acl(paths, &alveare_core::redis::sha256_hex(&cfg.redis_admin_password), &redis_users)?;
     std::fs::create_dir_all(&paths.caddy)?;

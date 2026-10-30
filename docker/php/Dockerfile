@@ -1,11 +1,13 @@
 # Immagine PHP condivisa da tutti i siti: un pool FPM per sito, generato dal pannello.
+# PHP_VERSION=8.4 per un runtime aggiuntivo (servizio php84 del compose).
+ARG PHP_VERSION=8.5
 FROM rust:1-slim-trixie AS agent
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 RUN cargo build --release -p php-agent
 
-FROM php:8.5-fpm
+FROM php:${PHP_VERSION}-fpm
 ARG WP_CLI_VERSION=2.12.0
 ARG ADMINER_VERSION=6.2.0
 ARG ADMINER_SHA256=7492bf2b158fee5b7ddc9e13255322c4601b1f51b797896e303882626bf1e5af

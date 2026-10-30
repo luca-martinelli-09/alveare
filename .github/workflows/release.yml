@@ -13,7 +13,11 @@ jobs:
     runs-on: ubuntu-24.04
     strategy:
       matrix:
-        image: [panel, php]
+        include:
+          - { image: panel, suffix: "", php: "" }
+          - { image: php, suffix: "", php: "8.5" }
+          # Runtime aggiuntivo (servizio php84 del compose).
+          - { image: php, suffix: "-8.4", php: "8.4" }
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -31,7 +35,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           # Con ALVEARE_REGISTRY=ghcr.io/<owner>/alveare e ALVEARE_VERSION=<tag> nel .env il compose usa queste immagini.
-          tags: ghcr.io/${{ github.repository_owner }}/alveare/${{ matrix.image }}:${{ github.ref_name }}
+          tags: ghcr.io/${{ github.repository_owner }}/alveare/${{ matrix.image }}:${{ github.ref_name }}${{ matrix.suffix }}
+          build-args: ${{ matrix.php && format('PHP_VERSION={0}', matrix.php) || '' }}
 
   # CLI `alveare` per Linux, macOS e Windows, allegata alla release del tag.
   cli:

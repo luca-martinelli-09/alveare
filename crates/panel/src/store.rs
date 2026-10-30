@@ -137,6 +137,8 @@ pub struct Site {
     pub status: SiteStatus,
     pub staging: bool,
     pub update_rule: UpdateRule,
+    /// Runtime PHP (colonna php_version): "8.5", "8.4", "canary"…
+    pub php_version: String,
     pub log_retention_days: u32,
     pub settings: PhpSettingsRow,
 }
@@ -174,7 +176,7 @@ impl Site {
     }
 }
 
-const SITE_COLUMNS: &str = "id, slug, kind, template, status, staging, update_rule, log_retention_days, memory_limit_mb, upload_max_mb, max_execution_time_s, max_children";
+const SITE_COLUMNS: &str = "id, slug, kind, template, status, staging, update_rule, php_version, log_retention_days, memory_limit_mb, upload_max_mb, max_execution_time_s, max_children";
 
 fn site_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Site> {
     let decode = |e: alveare_core::site::InvalidSlug| StoreError::Db(sqlx::Error::Decode(e.to_string().into()));
@@ -186,6 +188,7 @@ fn site_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Site> {
         status: r.try_get::<&str, _>("status")?.parse()?,
         staging: r.try_get("staging")?,
         update_rule: r.try_get::<&str, _>("update_rule")?.parse()?,
+        php_version: r.try_get("php_version")?,
         log_retention_days: r.try_get("log_retention_days")?,
         settings: PhpSettingsRow {
             memory_limit_mb: r.try_get("memory_limit_mb")?,
@@ -214,7 +217,7 @@ fn unique_violation(e: sqlx::Error, hostname: &Domain) -> StoreError {
 }
 
 fn to_php(s: Site) -> SitePhp {
-    SitePhp { uid: s.uid(), settings: (&s.settings).into(), slug: s.slug, extra: vec![] }
+    SitePhp { uid: s.uid(), settings: (&s.settings).into(), slug: s.slug, extra: vec![], runtime: s.php_version }
 }
 
 #[derive(Clone)]
@@ -332,6 +335,11 @@ impl Store {
 
     pub async fn set_cloudflare_account(&self, id: i64, account: Option<&str>) -> Result<()> {
         sqlx::query("UPDATE sites SET cloudflare_account = ? WHERE id = ?").bind(account).bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn set_php_version(&self, id: i64, runtime: &str) -> Result<()> {
+        sqlx::query("UPDATE sites SET php_version = ? WHERE id = ?").bind(runtime).bind(id).execute(&self.pool).await?;
         Ok(())
     }
 
@@ -809,6 +817,7 @@ impl Store {
                 log_days: site.log_retention_days,
                 extra,
                 blocked,
+                runtime: site.php_version.clone(),
             });
         }
         Ok(out)

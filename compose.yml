@@ -7,6 +7,20 @@ x-common: &common
     TZ: Europe/Rome
   networks: [hosting]
 
+# Container PHP: stessi volumi per il principale, le altre versioni e il canary.
+x-php: &php
+  <<: *common
+  volumes:
+    - ./data/sites:/srv/sites
+    - ./data/logs:/srv/logs
+    - ./data/tmp:/srv/tmp
+    - ./data/php:/srv/php
+    - ./data/adminer:/srv/adminer
+    - ./data/run/php:/run/php
+    - ./data/run/alveare:/run/alveare
+  depends_on:
+    panel: { condition: service_healthy }
+
 services:
   panel:
     <<: *common
@@ -26,19 +40,26 @@ services:
       mariadb: { condition: service_healthy }
 
   php:
-    <<: *common
+    <<: *php
     image: ${ALVEARE_REGISTRY:-alveare}/php:${ALVEARE_VERSION:-dev}
     build: { context: ., dockerfile: docker/php/Dockerfile }
-    volumes:
-      - ./data/sites:/srv/sites
-      - ./data/logs:/srv/logs
-      - ./data/tmp:/srv/tmp
-      - ./data/php:/srv/php
-      - ./data/adminer:/srv/adminer
-      - ./data/run/php:/run/php
-      - ./data/run/alveare:/run/alveare
-    depends_on:
-      panel: { condition: service_healthy }
+
+  # Runtime PHP aggiuntivi: un container per versione, mai uno per sito. Si accendono con il
+  # profilo (docker compose --profile php84 up -d) e ALVEARE_PHP_RUNTIMES=8.4 nel .env.
+  php84:
+    <<: *php
+    profiles: [php84]
+    image: ${ALVEARE_REGISTRY:-alveare}/php:${ALVEARE_VERSION:-dev}-8.4
+    build: { context: ., dockerfile: docker/php/Dockerfile, args: { PHP_VERSION: "8.4" } }
+    environment: { TZ: Europe/Rome, ALVEARE_PHP_RUNTIME: "8.4" }
+
+  # Canary: la nuova immagine PHP provata su un sito di prova prima di darla a tutti
+  # (ALVEARE_CANARY_VERSION=<nuova versione>, ALVEARE_PHP_RUNTIMES=canary, profilo canary).
+  php-canary:
+    <<: *php
+    profiles: [canary]
+    image: ${ALVEARE_REGISTRY:-alveare}/php:${ALVEARE_CANARY_VERSION:-dev}
+    environment: { TZ: Europe/Rome, ALVEARE_PHP_RUNTIME: canary }
 
   caddy:
     <<: *common

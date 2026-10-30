@@ -13,12 +13,12 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 use std::{fs, thread};
 
-use alveare_core::agent::{Command, Response, AGENT_SOCKET};
+use alveare_core::agent::{agent_socket, Command, Response};
+use alveare_core::php::{runtime_pool_dirs, DEFAULT_RUNTIME};
 
 use crate::plan::{plan_cron, plan_php, plan_wp, site_uid, Exec};
 
-const STAGING_DIR: &str = "/srv/php/staging";
-const ACTIVE_DIR: &str = "/srv/php/pools";
+const FPM_CONF: &str = "/usr/local/etc/php-fpm.d/alveare.conf";
 const MAX_OUTPUT: usize = 64 * 1024;
 
 static FPM_PID: AtomicI32 = AtomicI32::new(0);
@@ -33,13 +33,32 @@ extern "C" fn on_term(_: libc::c_int) {
     }
 }
 
+/// Runtime PHP di questo container (ALVEARE_PHP_RUNTIME), di default quello principale.
+fn runtime() -> String {
+    std::env::var("ALVEARE_PHP_RUNTIME").ok().filter(|r| alveare_core::php::valid_runtime(r)).unwrap_or_else(|| DEFAULT_RUNTIME.into())
+}
+
+/// (staging, attivi) dei pool di questo runtime.
+fn pool_dirs() -> (String, String) {
+    let (active, staging) = runtime_pool_dirs(&runtime());
+    (format!("/srv/php/{staging}"), format!("/srv/php/{active}"))
+}
+
 fn main() {
+    let rt = runtime();
+    if rt != DEFAULT_RUNTIME {
+        let base = fs::read_to_string(FPM_CONF).expect("config di FPM");
+        fs::write(FPM_CONF, pool::runtime_fpm_conf(&base, &rt)).expect("config di FPM del runtime");
+    }
+    let (staging, active) = pool_dirs();
+    let _ = fs::create_dir_all(&staging);
+    let _ = fs::create_dir_all(&active);
     unsafe {
         libc::signal(libc::SIGTERM, on_term as extern "C" fn(libc::c_int) as libc::sighandler_t);
         libc::signal(libc::SIGINT, on_term as extern "C" fn(libc::c_int) as libc::sighandler_t);
     }
     // Il pannello scrive i pool in staging prima che questo container parta.
-    match pool::apply_pools(Path::new(STAGING_DIR), Path::new(ACTIVE_DIR), validate_pool) {
+    match pool::apply_pools(Path::new(&staging), Path::new(&active), validate_pool) {
         Ok(r) if !r.rejected.is_empty() => eprintln!("php-agent: pool rifiutati all'avvio: {:?}", r.rejected),
         Ok(_) => {}
         Err(e) => eprintln!("php-agent: applicazione dei pool all'avvio: {e}"),
@@ -68,7 +87,8 @@ fn supervise_fpm() {
 }
 
 fn serve() {
-    let path = Path::new(AGENT_SOCKET);
+    let socket = agent_socket(&runtime());
+    let path = Path::new(&socket);
     fs::create_dir_all(path.parent().expect("socket in una cartella")).expect("cartella del socket");
     let _ = fs::remove_file(path);
     let listener = UnixListener::bind(path).expect("bind del socket dell'agente");
@@ -123,7 +143,8 @@ fn signal_fpm(sig: libc::c_int) -> Response {
 }
 
 fn apply_pools() -> Response {
-    let report = match pool::apply_pools(Path::new(STAGING_DIR), Path::new(ACTIVE_DIR), validate_pool) {
+    let (staging, active) = pool_dirs();
+    let report = match pool::apply_pools(Path::new(&staging), Path::new(&active), validate_pool) {
         Ok(r) => r,
         Err(e) => return fail(format!("applicazione dei pool: {e}")),
     };

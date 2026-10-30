@@ -6,6 +6,11 @@ use crate::site::Slug;
 
 pub const AGENT_SOCKET: &str = "/run/alveare/agent.sock";
 
+/// Socket dell'agente di un runtime PHP: quello storico per il runtime di default.
+pub fn agent_socket(runtime: &str) -> String {
+    if runtime == crate::php::DEFAULT_RUNTIME { AGENT_SOCKET.into() } else { format!("/run/alveare/agent-{runtime}.sock") }
+}
+
 // Flag globali di WP-CLI che farebbero uscire il comando dal sito o dall'utente del sito.
 const FORBIDDEN_WP_FLAGS: [&str; 6] = ["--path", "--allow-root", "--ssh", "--http", "--require", "--exec"];
 

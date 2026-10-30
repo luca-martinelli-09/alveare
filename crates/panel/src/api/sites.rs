@@ -33,6 +33,8 @@ struct UpdateSite {
     staging: Option<bool>,
     log_retention_days: Option<u32>,
     update_rule: Option<crate::store::UpdateRule>,
+    /// Runtime PHP (versione) del sito: lo cambia il gestore dal form.
+    php_version: Option<String>,
     /// Account Cloudflare del sito (solo admin); stringa vuota = il primo configurato.
     cloudflare_account: Option<String>,
 }
@@ -64,6 +66,10 @@ async fn update_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m:
     if let Some(on) = r.staging {
         flows::set_staging(&app.ctx, id, on).await?;
         app.auth.audit(Some(user.id), if on { "site.staging.on" } else { "site.staging.off" }, Some(id), "").await?;
+    }
+    if let Some(rt) = &r.php_version {
+        flows::set_php_runtime(&app.ctx, id, rt, &app.php_runtimes).await?;
+        app.auth.audit(Some(user.id), "site.php_version", Some(id), rt).await?;
     }
     if let Some(acc) = &r.cloudflare_account {
         require_admin(&user)?;

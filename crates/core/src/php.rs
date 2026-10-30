@@ -31,6 +31,21 @@ pub struct SitePhp {
     pub settings: PhpSettings,
     /// Direttive extra dell'admin, già validate da `parse_extra`.
     pub extra: Vec<String>,
+    /// Container PHP che serve il sito (una versione, o "canary" per provare un'immagine nuova).
+    pub runtime: String,
+}
+
+/// Il container `php` del compose: i suoi pool e il suo agente stanno nei percorsi storici.
+pub const DEFAULT_RUNTIME: &str = "8.5";
+
+/// Cartelle dei pool di un runtime, relative a /srv/php: (attivi, in prova).
+pub fn runtime_pool_dirs(runtime: &str) -> (String, String) {
+    if runtime == DEFAULT_RUNTIME { ("pools".into(), "staging".into()) } else { (format!("runtimes/{runtime}/pools"), format!("runtimes/{runtime}/staging")) }
+}
+
+/// Nome di un runtime PHP: finisce in percorsi e nomi di socket.
+pub fn valid_runtime(name: &str) -> bool {
+    (1..=16).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.') && !name.contains("..")
 }
 
 /// Valori che reggono l'isolamento tra siti: nessun override li tocca.
@@ -92,14 +107,19 @@ pub fn parse_extra(text: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-pub fn socket_path(slug: &Slug) -> String {
-    format!("{SOCKET_DIR}/{}.sock", slug.as_str())
+/// Socket del pool: diverso per runtime, così durante uno spostamento due FPM non si contendono lo stesso file.
+pub fn socket_path(slug: &Slug, runtime: &str) -> String {
+    if runtime == DEFAULT_RUNTIME {
+        format!("{SOCKET_DIR}/{}.sock", slug.as_str())
+    } else {
+        format!("{SOCKET_DIR}/{}.{runtime}.sock", slug.as_str())
+    }
 }
 
 pub fn render_pool(site: &SitePhp) -> String {
     let s = site.slug.as_str();
     let PhpSettings { memory_limit_mb, upload_max_mb, max_execution_time_s, max_children } = site.settings;
-    let socket = socket_path(&site.slug);
+    let socket = socket_path(&site.slug, &site.runtime);
     format!(
         "[{s}]
 user = {s}
@@ -162,7 +182,19 @@ mod tests {
     use crate::site::Slug;
 
     fn site() -> SitePhp {
-        SitePhp { slug: Slug::parse("sona_it").unwrap(), uid: 20001, settings: PhpSettings::default(), extra: vec![] }
+        SitePhp { slug: Slug::parse("sona_it").unwrap(), uid: 20001, settings: PhpSettings::default(), extra: vec![], runtime: DEFAULT_RUNTIME.into() }
+    }
+
+    #[test]
+    fn each_runtime_has_its_own_socket_name() {
+        let slug = Slug::parse("sona_it").unwrap();
+        assert_eq!(socket_path(&slug, DEFAULT_RUNTIME), "/run/php/sona_it.sock");
+        assert_eq!(socket_path(&slug, "8.4"), "/run/php/sona_it.8.4.sock");
+        let mut s = site();
+        s.runtime = "canary".into();
+        assert!(render_pool(&s).contains("\nlisten = /run/php/sona_it.canary.sock\n"));
+        assert!(valid_runtime("8.4") && valid_runtime("canary"));
+        assert!(!valid_runtime("../x") && !valid_runtime("") && !valid_runtime("8 4"));
     }
 
     #[test]

@@ -35,6 +35,8 @@ pub struct Config {
     /// URL pubblico del pannello (link via email, origine delle passkey): ALVEARE_PANEL_URL o https://<host>.
     pub panel_url: Option<String>,
     pub metrics_token: Option<String>,
+    /// Runtime PHP aggiuntivi (ALVEARE_PHP_RUNTIMES=8.4,canary), ognuno con il suo container.
+    pub php_runtimes: Vec<String>,
 }
 
 fn url_encode(s: &str) -> String {
@@ -92,6 +94,10 @@ impl Config {
             }),
             _ => None,
         };
+        let php_runtimes: Vec<String> = get("ALVEARE_PHP_RUNTIMES").unwrap_or_default().split(',').map(str::trim).filter(|r| !r.is_empty()).map(String::from).collect();
+        if let Some(bad) = php_runtimes.iter().find(|r| !alveare_core::php::valid_runtime(r) || *r == alveare_core::php::DEFAULT_RUNTIME) {
+            bail!("ALVEARE_PHP_RUNTIMES: runtime non valido {bad}");
+        }
         let secure_cookie = match get("ALVEARE_INSECURE_COOKIE").as_deref() {
             None | Some("0") | Some("false") => true,
             Some("1") | Some("true") => false,
@@ -117,6 +123,7 @@ impl Config {
             smtp,
             panel_url,
             metrics_token: get("ALVEARE_METRICS_TOKEN"),
+            php_runtimes,
             site_env: vars.iter().filter_map(|(k, v)| Some((k.strip_prefix("SITE_ENV_")?.to_string(), v.clone()))).collect(),
         })
     }

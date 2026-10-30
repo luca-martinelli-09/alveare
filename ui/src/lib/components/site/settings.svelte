@@ -6,6 +6,7 @@
 	import * as Alert from '$lib/components/ui/alert';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
 	import OverrideEditor from '$lib/components/app/override-editor.svelte';
 	import { api, ApiError, errorMessage } from '$lib/api';
 	import { session } from '$lib/session.svelte';
@@ -44,6 +45,18 @@
 		}
 	}
 
+	async function setRuntime(v: string) {
+		if (v === detail.site.php_version) return;
+		if (!confirm(`Spostare il sito su PHP ${v}? Per qualche secondo può rispondere 502.`)) return;
+		try {
+			await api.patch(`/api/sites/${id}`, { php_version: v });
+			toast.success(`Sito su PHP ${v}`);
+			onchange();
+		} catch (e) {
+			toast.error(errorMessage(e));
+		}
+	}
+
 	async function unblock(b: Block) {
 		try {
 			await api.del(`/api/blocks/${b.id}`);
@@ -77,6 +90,22 @@
 					<Alert.Title>Serve una conferma</Alert.Title>
 					<Alert.Description>{confirmText}</Alert.Description>
 				</Alert.Root>
+			{/if}
+			{#if detail.php_runtimes.length > 1}
+				<Field.Field>
+					<Field.FieldLabel>Versione di PHP</Field.FieldLabel>
+					<Select.Root type="single" value={detail.site.php_version} onValueChange={setRuntime}>
+						<Select.Trigger class="w-48">PHP {detail.site.php_version}</Select.Trigger>
+						<Select.Content>
+							<Select.Group>
+								{#each detail.php_runtimes as rt (rt)}
+									<Select.Item value={rt}>PHP {rt}</Select.Item>
+								{/each}
+							</Select.Group>
+						</Select.Content>
+					</Select.Root>
+					<Field.FieldDescription>Ogni versione è un container a parte; "canary" è l'immagine nuova in prova.</Field.FieldDescription>
+				</Field.Field>
 			{/if}
 			<Field.FieldGroup class="grid gap-4 sm:grid-cols-2">
 				{#each fields as f (f.key)}

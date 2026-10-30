@@ -37,6 +37,16 @@ pub fn apply_pools(
     Ok(report)
 }
 
+/// Config FPM per un runtime aggiuntivo: i suoi pool, il suo pool interno, niente Adminer
+/// (Adminer vive solo nel container principale).
+pub fn runtime_fpm_conf(base: &str, runtime: &str) -> String {
+    let (active, _) = alveare_core::php::runtime_pool_dirs(runtime);
+    let without_adminer = base.split("\n; Adminer").next().unwrap_or(base);
+    without_adminer
+        .replace("include = /srv/php/pools/*.conf", &format!("include = /srv/php/{active}/*.conf"))
+        .replace("/run/php/_alveare.sock", &format!("/run/php/_alveare.{runtime}.sock"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +98,15 @@ mod tests {
         let r = apply_pools(&staging, &active, validator).unwrap();
         assert!(r.applied.is_empty() && r.rejected.is_empty());
         assert!(!active.join("note.txt").exists());
+    }
+
+    #[test]
+    fn runtime_config_has_its_pools_and_no_adminer() {
+        let base = include_str!("../../../docker/php/fpm.conf");
+        let conf = runtime_fpm_conf(base, "8.4");
+        assert!(conf.contains("include = /srv/php/runtimes/8.4/pools/*.conf"));
+        assert!(conf.contains("listen = /run/php/_alveare.8.4.sock"));
+        assert!(!conf.contains("_adminer"), "{conf}");
+        assert!(conf.contains("[_alveare]"));
     }
 }

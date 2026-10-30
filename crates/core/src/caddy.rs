@@ -21,6 +21,8 @@ pub struct CaddySite {
     pub extra: Option<String>,
     /// IP o reti CIDR bloccati dal pannello (del sito e globali), già validati.
     pub blocked: Vec<String>,
+    /// Runtime PHP del sito: decide il socket.
+    pub runtime: String,
 }
 
 const MAINTENANCE_PAGE: &str = "<!doctype html><html lang=\"it\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sito in manutenzione</title><body style=\"font-family:system-ui;text-align:center;padding:4rem 1rem\"><h1>Sito in manutenzione</h1><p>Torniamo online a breve.</p></body></html>";
@@ -122,7 +124,7 @@ fn render_site(out: &mut String, site: &CaddySite) {
 	file_server
 }}
 ",
-            socket = socket_path(&site.slug),
+            socket = socket_path(&site.slug, &site.runtime),
             keep = site.log_days * 24,
         )
         .unwrap();
@@ -162,8 +164,11 @@ fn check_value(key: &str, v: &str, slug: Option<&Slug>, out: &mut Vec<String>) {
             Some(dir) => format!("{v}/").starts_with(dir.as_str()),
             None => v.starts_with(&format!("{SITES_DIR}/")),
         },
+        // Il socket del sito in qualunque runtime: `<slug>.sock` o `<slug>.<runtime>.sock`.
         "dial" => match slug {
-            Some(s) => v == format!("unix/{}", socket_path(s)),
+            Some(s) => v.strip_prefix(&format!("unix/{SOCKET_DIR}/{}.", s.as_str())).is_some_and(|rest| {
+                rest == "sock" || rest.strip_suffix(".sock").is_some_and(crate::php::valid_runtime)
+            }),
             None => !v.starts_with(&format!("unix/{SOCKET_DIR}/")),
         },
         "filename" => match slug {
@@ -197,6 +202,7 @@ mod tests {
             log_days: 30,
             extra: None,
             blocked: vec![],
+            runtime: crate::php::DEFAULT_RUNTIME.into(),
         }
     }
 
@@ -236,6 +242,8 @@ mod tests {
         assert!(v.iter().any(|x| x.contains("upupa_it.sock")));
         let clean = serde_json::json!({"apps": {"http": {"servers": {"s": {"routes": [{"handle": [{"handler": "vars", "root": "/srv/sites/sona_it/public"}, {"upstreams": [{"dial": "unix//run/php/sona_it.sock"}]}]}]}}}}, "logging": {"logs": {"l": {"writer": {"filename": "/srv/logs/sona_it/access.log"}}}}});
         assert!(adapted_violations(&clean, Some(&sona)).is_empty());
+        let other_runtime = serde_json::json!({"upstreams": [{"dial": "unix//run/php/sona_it.8.4.sock"}, {"dial": "unix//run/php/sona_it_due.sock"}]});
+        assert_eq!(adapted_violations(&other_runtime, Some(&sona)).len(), 1, "un altro sito con lo stesso prefisso no");
         let bad_log = serde_json::json!({"logging": {"logs": {"l": {"writer": {"filename": "/srv/sites/upupa_it/public/x.php"}}}}});
         assert_eq!(adapted_violations(&bad_log, Some(&sona)).len(), 1);
         // Globale: niente socket dei siti, radici solo sotto /srv/sites.
@@ -269,6 +277,14 @@ mod tests {
         assert!(c.contains("\nhttp://sona.it, http://comune-sona.it {\n"));
         assert!(c.contains("\troot * /srv/sites/sona_it/public\n"));
         assert!(c.contains("\tfile_server\n"));
+    }
+
+    #[test]
+    fn sites_on_another_runtime_use_its_socket() {
+        let mut site = sona();
+        site.runtime = "8.4".into();
+        let c = render_caddyfile(&CaddyConfig { panel_host: None, adminer_host: None, global_extra: None, sites: vec![site] });
+        assert!(c.contains("\tphp_fastcgi unix//run/php/sona_it.8.4.sock {\n"));
     }
 
     #[test]

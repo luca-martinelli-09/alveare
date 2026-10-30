@@ -48,6 +48,8 @@ pub struct App<H> {
     pub passkeys: Option<crate::auth::passkeys::Passkeys>,
     /// Token di Prometheus per /metrics (senza, /metrics non c'è).
     pub metrics_token: Option<String>,
+    /// Runtime PHP disponibili, il principale per primo.
+    pub php_runtimes: Vec<String>,
 }
 
 impl<H> Clone for App<H> {
@@ -70,6 +72,7 @@ impl<H> Clone for App<H> {
             panel_url: self.panel_url.clone(),
             passkeys: self.passkeys.clone(),
             metrics_token: self.metrics_token.clone(),
+            php_runtimes: self.php_runtimes.clone(),
         }
     }
 }
@@ -77,7 +80,7 @@ impl<H> Clone for App<H> {
 impl<H: Host> App<H> {
     pub fn new(ctx: Ctx<H>, auth: Auth, templates: PathBuf, secure_cookie: bool) -> Self {
         let jobs = Jobs::new(ctx.store.pool().clone());
-        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None, recovery: vec![], reserved_hosts: vec![], ram_mb: crate::budget::ram_mb(), disk_alert_mb: 10 * 1024, mailer: crate::mailer::Mailer::None, panel_url: None, passkeys: None, metrics_token: None }
+        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None, recovery: vec![], reserved_hosts: vec![], ram_mb: crate::budget::ram_mb(), disk_alert_mb: 10 * 1024, mailer: crate::mailer::Mailer::None, panel_url: None, passkeys: None, metrics_token: None, php_runtimes: vec![alveare_core::php::DEFAULT_RUNTIME.into()] }
     }
 
     pub fn with_recovery(self, recovery: Vec<(String, String)>) -> Self {
@@ -87,6 +90,11 @@ impl<H: Host> App<H> {
     pub fn recovery_kit(&self) -> String {
         let pairs: Vec<(&str, &str)> = self.recovery.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         crate::backup::recovery_kit(&pairs)
+    }
+
+    pub fn with_php_runtimes(self, extra: &[String]) -> Self {
+        let php_runtimes = std::iter::once(alveare_core::php::DEFAULT_RUNTIME.to_string()).chain(extra.iter().cloned()).collect();
+        Self { php_runtimes, ..self }
     }
 
     pub fn with_metrics_token(self, metrics_token: Option<String>) -> Self {
@@ -660,7 +668,7 @@ async fn get_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Me
     let can_manage = app.auth.can(&user, id, Need::Manage).await?;
     let staging = if can_manage { sites::staging_json(flows::staging_password(&app.ctx, id).await?) } else { serde_json::Value::Null };
     let wp_admin_pending = user.is_admin && app.ctx.store.setting(&format!("wp_admin:{id}")).await?.is_some();
-    Ok(Json(json!({ "site": site, "domains": domains, "can_manage": can_manage, "staging": staging, "wp_admin_pending": wp_admin_pending })).into_response())
+    Ok(Json(json!({ "site": site, "domains": domains, "can_manage": can_manage, "staging": staging, "wp_admin_pending": wp_admin_pending, "php_runtimes": app.php_runtimes })).into_response())
 }
 
 async fn delete_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {

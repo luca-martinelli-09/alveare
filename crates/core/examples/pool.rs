@@ -4,7 +4,7 @@ use alveare_core::site::Slug;
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
-    let site = SitePhp { slug: Slug::parse(&a[1]).unwrap(), uid: a[2].parse().unwrap(), settings: PhpSettings::default(), extra: vec![] };
+    let site = SitePhp { slug: Slug::parse(&a[1]).unwrap(), uid: a[2].parse().unwrap(), settings: PhpSettings::default(), extra: vec![], runtime: alveare_core::php::DEFAULT_RUNTIME.into() };
     match a[3].as_str() {
         "pool" => print!("{}", render_pool(&site)),
         "passwd" => print!("{}", render_passwd(&[&site])),
