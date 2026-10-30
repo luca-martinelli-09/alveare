@@ -37,7 +37,7 @@ export function health(site: SiteRow, now = Date.now()): Health {
 }
 
 /** Prima i siti con problemi, poi per dominio. */
-const rank: Record<Level, number> = {
+export const rank: Record<Level, number> = {
 	down: 0,
 	warn: 1,
 	busy: 2,

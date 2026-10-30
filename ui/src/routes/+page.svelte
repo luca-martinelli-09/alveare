@@ -17,7 +17,15 @@
 	import ActivityList, { type Activity } from '$lib/components/app/activity-list.svelte';
 	import { page } from '$app/state';
 	import { sites, loadSites } from '$lib/sites.svelte';
-	import { health, byHealth, ago, BACKUP_STALE_H } from '$lib/health';
+	import { health, ago, BACKUP_STALE_H } from '$lib/health';
+	import { filterSites, sortSites, paginate, type Filters, type SortKey, type SortDir } from '$lib/site-table';
+	import * as InputGroup from '$lib/components/ui/input-group';
+	import SearchIcon from '@lucide/svelte/icons/search';
+	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
+	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
+	import ArrowUpDownIcon from '@lucide/svelte/icons/arrow-up-down';
+	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import SiteActions from '$lib/components/app/site-actions.svelte';
 	import JobLog from '$lib/components/app/job-log.svelte';
 	import ImportDialog from '$lib/components/app/import-dialog.svelte';
@@ -93,7 +101,25 @@
 	}
 
 	const siteName = (id: number | null) => sites.list?.find((s) => s.id === id)?.domain ?? 'Pannello';
-	const sorted = $derived((sites.list ?? []).toSorted(byHealth));
+	// Tabella dei siti: filtri, ordinamento per colonna (di partenza: prima i problemi) e pagine.
+	const PAGE_SIZE = 20;
+	let filters = $state<Filters>({ q: '', status: 'all', kind: 'all' });
+	let sort = $state<{ key: SortKey; dir: SortDir }>({ key: 'status', dir: 'asc' });
+	let pageNo = $state(1);
+	const filtered = $derived(filterSites(sites.list ?? [], filters));
+	const shown = $derived(paginate(sortSites(filtered, sort.key, sort.dir), pageNo, PAGE_SIZE));
+	const kindsPresent = $derived([...new Set((sites.list ?? []).map((s) => s.kind))]);
+	const filtering = $derived(filters.q.trim() !== '' || filters.status !== 'all' || filters.kind !== 'all');
+	$effect(() => {
+		// Filtri cambiati: si riparte dalla prima pagina.
+		[filters.q, filters.status, filters.kind];
+		pageNo = 1;
+	});
+	function sortBy(key: SortKey) {
+		// Testo e stato partono in ordine crescente, i numeri dal più grande (più lento, più pieno, più recente).
+		sort = sort.key === key ? { key, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'site' || key === 'status' ? 'asc' : 'desc' };
+	}
+	const statusLabels: Record<Filters['status'], string> = { all: 'Tutti gli stati', problems: 'Con problemi', ok: 'Online', off: 'Sospesi' };
 	const summary = $derived.by(() => {
 		const list = sites.list ?? [];
 		const live = list.filter((s) => s.status === 'active');
@@ -244,17 +270,39 @@
 	</Empty.Root>
 {:else}
 	<section class="flex flex-col gap-2" aria-labelledby="sites-title">
-		<div class="flex items-baseline justify-between">
-			<h2 id="sites-title" class="text-sm font-medium">Siti</h2>
-			<span class="text-muted-foreground text-xs">prima quelli con problemi</span>
+		<div class="flex flex-wrap items-center gap-2">
+			<h2 id="sites-title" class="mr-auto text-sm font-medium">Siti</h2>
+			<InputGroup.Root class="w-full sm:w-56">
+				<InputGroup.Addon><SearchIcon /></InputGroup.Addon>
+				<InputGroup.Input placeholder="Cerca un dominio" aria-label="Cerca un dominio" bind:value={filters.q} />
+			</InputGroup.Root>
+			<Select.Root type="single" bind:value={filters.status}>
+				<Select.Trigger size="sm" class="w-40" aria-label="Filtra per stato">{statusLabels[filters.status]}</Select.Trigger>
+				<Select.Content>
+					<Select.Group>
+						{#each Object.entries(statusLabels) as [value, label] (value)}<Select.Item {value} {label}>{label}</Select.Item>{/each}
+					</Select.Group>
+				</Select.Content>
+			</Select.Root>
+			{#if kindsPresent.length > 1}
+				<Select.Root type="single" bind:value={filters.kind}>
+					<Select.Trigger size="sm" class="w-36" aria-label="Filtra per tipo">{filters.kind === 'all' ? 'Tutti i tipi' : (kinds[filters.kind] ?? filters.kind)}</Select.Trigger>
+					<Select.Content>
+						<Select.Group>
+							<Select.Item value="all" label="Tutti i tipi">Tutti i tipi</Select.Item>
+							{#each kindsPresent as k (k)}<Select.Item value={k} label={kinds[k] ?? k}>{kinds[k] ?? k}</Select.Item>{/each}
+						</Select.Group>
+					</Select.Content>
+				</Select.Root>
+			{/if}
 		</div>
 		<!-- Telefono: una riga per sito, stato sul pallino dell'iniziale. -->
 		<ul class="bg-card divide-y rounded-lg border md:hidden">
-			{#each sorted as site (site.id)}
+			{#each shown.rows as site (site.id)}
 				{@const h = health(site)}
 				<li class="flex items-center gap-1 pr-2">
 					<a href={`/sites/${site.id}`} class="hover:bg-muted/50 flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-3">
-						<SiteAvatar name={site.domain ?? site.slug} health={h} />
+						<SiteAvatar name={site.domain ?? site.slug} url={site.staging ? null : site.url} health={h} />
 						<span class="flex min-w-0 flex-1 flex-col">
 							<span class="truncate font-medium">{site.domain ?? site.slug}</span>
 							<span class={['truncate text-xs', h.level === 'down' ? 'text-destructive' : h.level === 'warn' ? 'text-warning-text' : 'text-muted-foreground']}>
@@ -271,24 +319,24 @@
 			<Table.Root>
 				<Table.Header>
 					<Table.Row>
-						<Table.Head class="pl-4">Sito</Table.Head>
-						<Table.Head>Stato</Table.Head>
-						<Table.Head>Risposta</Table.Head>
-						<Table.Head>Ultimo backup</Table.Head>
-						<Table.Head class="w-44">Spazio</Table.Head>
-						<Table.Head class="text-right">Richieste 1 h</Table.Head>
+						{@render head('site', 'Sito', 'pl-4')}
+						{@render head('status', 'Stato')}
+						{@render head('response', 'Risposta')}
+						{@render head('backup', 'Ultimo backup')}
+						{@render head('space', 'Spazio', 'w-44')}
+						{@render head('requests', 'Richieste 1 h', 'text-right', true)}
 						<Table.Head class="w-20 pr-2"><span class="sr-only">Azioni</span></Table.Head>
 					</Table.Row>
 				</Table.Header>
 				<Table.Body>
-					{#each sorted as site (site.id)}
+					{#each shown.rows as site (site.id)}
 						{@const h = health(site)}
 						{@const u = site.monitor?.uptime}
 						{@const t = site.monitor?.traffic}
 						<Table.Row class="group cursor-pointer" onclick={() => goto(`/sites/${site.id}`)}>
 							<Table.Cell class="pl-4">
 								<a href={`/sites/${site.id}`} class="flex items-center gap-2.5" onclick={(e) => e.stopPropagation()}>
-									<SiteAvatar name={site.domain ?? site.slug} />
+									<SiteAvatar name={site.domain ?? site.slug} url={site.staging ? null : site.url} />
 									<span class="flex flex-col leading-tight">
 										<span class="font-medium group-hover:underline">{site.domain ?? site.slug}</span>
 										<span class="text-muted-foreground text-xs">
@@ -319,9 +367,35 @@
 								</div>
 							</Table.Cell>
 						</Table.Row>
+					{:else}
+						<Table.Row><Table.Cell colspan={7} class="text-muted-foreground py-8 text-center">Nessun sito con questi filtri.</Table.Cell></Table.Row>
 					{/each}
 				</Table.Body>
 			</Table.Root>
 		</div>
+		{#if filtering || shown.pages > 1}
+			<div class="text-muted-foreground flex flex-wrap items-center justify-between gap-2 text-xs">
+				<span>
+					{shown.total ? `${shown.from}–${shown.to} di ${shown.total}` : 'Nessun sito'}{filtering ? ` (filtrati su ${sites.list?.length ?? 0})` : ''}
+					{#if filtering}<Button variant="link" size="xs" onclick={() => (filters = { q: '', status: 'all', kind: 'all' })}>Togli i filtri</Button>{/if}
+				</span>
+				{#if shown.pages > 1}
+					<div class="flex items-center gap-1">
+						<Button variant="ghost" size="icon-sm" aria-label="Pagina precedente" disabled={shown.page === 1} onclick={() => (pageNo = shown.page - 1)}><ChevronLeftIcon /></Button>
+						<span class="tabular-nums">Pagina {shown.page} di {shown.pages}</span>
+						<Button variant="ghost" size="icon-sm" aria-label="Pagina successiva" disabled={shown.page === shown.pages} onclick={() => (pageNo = shown.page + 1)}><ChevronRightIcon /></Button>
+					</div>
+				{/if}
+			</div>
+		{/if}
 	</section>
+
+	{#snippet head(key: SortKey, label: string, cls = '', right = false)}
+		<Table.Head class={cls} aria-sort={sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+			<button type="button" class={['hover:text-foreground -mx-1 inline-flex items-center gap-1 rounded px-1', right && 'flex-row-reverse']} onclick={() => sortBy(key)}>
+				{label}
+				{#if sort.key !== key}<ArrowUpDownIcon class="size-3.5 opacity-40" />{:else if sort.dir === 'asc'}<ArrowUpIcon class="size-3.5" />{:else}<ArrowDownIcon class="size-3.5" />{/if}
+			</button>
+		</Table.Head>
+	{/snippet}
 {/if}
