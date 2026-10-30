@@ -347,6 +347,9 @@ pub struct SystemHost {
     pub redis_admin_password: String,
     /// Caddy in HTTP sulla rete interna, per le sonde (restore di prova, monitoraggio).
     pub caddy_http: String,
+    /// (token del bot, chat) per gli avvisi su Telegram.
+    pub telegram: Option<(String, String)>,
+    pub http: reqwest::Client,
 }
 
 impl SystemHost {
@@ -729,6 +732,28 @@ impl Host for SystemHost {
 
     async fn probe(&self, host: &Domain, auth: Option<(&str, &str)>) -> Result<u16> {
         http_probe(&self.caddy_http, host, auth, Duration::from_secs(30)).await
+    }
+
+    async fn notify(&self, text: &str) -> Result<bool> {
+        let Some((token, chat)) = &self.telegram else { return Ok(false) };
+        let resp = self
+            .http
+            .post(format!("https://api.telegram.org/bot{token}/sendMessage"))
+            .json(&serde_json::json!({ "chat_id": chat, "text": text, "disable_web_page_preview": true }))
+            .timeout(Duration::from_secs(20))
+            .send()
+            .await
+            // L'URL contiene il token del bot: fuori dal messaggio d'errore.
+            .map_err(|e| anyhow::anyhow!("Telegram non raggiungibile: {}", e.without_url()))?;
+        if !resp.status().is_success() {
+            bail!("Telegram ha risposto {}: {}", resp.status(), resp.text().await.unwrap_or_default());
+        }
+        Ok(true)
+    }
+
+    async fn site_disk_usage(&self, slug: &Slug) -> Result<u64> {
+        let dir = self.paths.sites.join(slug.as_str());
+        Ok(tokio::task::spawn_blocking(move || crate::monitor::dir_size(&dir)).await?)
     }
 
     async fn http_get(&self, host: &Domain, path: &str, auth: Option<(&str, &str)>, timeout_s: u32) -> Result<(u16, String)> {

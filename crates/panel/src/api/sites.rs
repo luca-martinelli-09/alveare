@@ -8,6 +8,7 @@ pub(super) fn routes<H: Host>() -> Router<App<H>> {
     Router::new()
         .route("/api/sites/{id}", patch(update_site::<H>))
         .route("/api/server", get(server::<H>))
+        .route("/api/sites/{id}/monitor", get(monitor::<H>))
         .route("/api/sites/{id}/clone", post(clone_site::<H>))
         .route("/api/sites/{id}/export", post(export_site::<H>))
         .route("/api/sites/{id}/template", post(save_template::<H>))
@@ -46,6 +47,7 @@ async fn update_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m:
             return Err(ApiError::new(StatusCode::CONFLICT, format!("i pool arriverebbero al {}% della RAM: conferma per applicare", b.percent)));
         }
         flows::set_php_settings(&app.ctx, id, php).await?;
+        flows::budget_alert(&app.ctx, app.ram_mb).await?;
         if b.over_ram() {
             warning = Some(format!("Attenzione: il massimo teorico dei pool è il {}% della RAM ({} MB su {} MB).", b.percent, b.total_mb, b.ram_mb));
         }
@@ -139,6 +141,19 @@ async fn save_template<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, 
         })
         .await?;
     Ok((StatusCode::ACCEPTED, Json(json!({ "job": job }))).into_response())
+}
+
+/// Ultimi valori del monitoraggio: raggiungibilità, spazio, traffico dell'ultima ora.
+async fn monitor<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_site(&app, &user, id, Need::Read).await?;
+    let mut out = serde_json::Map::new();
+    for key in ["uptime", "usage", "traffic"] {
+        let v: serde_json::Value = app.ctx.store.setting(&format!("{key}:{id}")).await?.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+        out.insert(key.into(), v);
+    }
+    out.insert("disk_alert_mb".into(), json!(app.disk_alert_mb));
+    Ok(Json(out).into_response())
 }
 
 /// Pagina del server (admin): RAM e budget di memoria dei pool.
@@ -321,6 +336,8 @@ mod tests {
         confirmed["confirm_budget"] = json!(true);
         let (s, _, _) = call(&t, req("PATCH", &url, Some(&manager), Some(confirmed))).await;
         assert_eq!(s, StatusCode::OK);
+        let alerts = t.app.ctx.store.open_alerts(None).await.unwrap();
+        assert!(alerts.iter().any(|a| a.kind == "budget" && a.site_id.is_none()), "{alerts:?}");
         let (s, _, _) = call(&t, req("PATCH", &url, Some(&manager), Some(php(16, 4)))).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
         let (s, body, _) = call(&t, req("GET", "/api/server", Some(&admin), None)).await;
@@ -334,6 +351,19 @@ mod tests {
         assert_eq!(s, StatusCode::CONFLICT, "{body}");
         let (s, _, _) = call(&t, req("POST", "/api/sites", Some(&admin), Some(json!({"domain": "nuovo.it", "template": "wordpress", "title": "x", "confirm_budget": true})))).await;
         assert_eq!(s, StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn monitor_values_are_readable_by_readers() {
+        let t = setup().await;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let id = create_site(&t, &admin, "sona.it").await;
+        let reader = user_with_role(&t, "r@example.org", id, Role::Readonly).await;
+        crate::monitor::uptime(&t.app.ctx, id).await.unwrap();
+        let (s, body, _) = call(&t, req("GET", &format!("/api/sites/{id}/monitor"), Some(&reader), None)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(body["uptime"]["status"], 200);
+        assert!(body["usage"].is_null());
     }
 
     #[tokio::test]

@@ -440,6 +440,25 @@ impl Store {
         Ok(())
     }
 
+    /// Avvisi da mandare: (avviso, è una risoluzione).
+    pub async fn alerts_to_notify(&self) -> Result<Vec<(Alert, bool)>> {
+        let rows = sqlx::query(
+            "SELECT id, site_id, kind, message, created_at, resolved_at IS NOT NULL AS resolved FROM alerts
+             WHERE (notified = 0 AND resolved_at IS NULL) OR (notified = 1 AND resolved_notified = 0 AND resolved_at IS NOT NULL) ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| Ok((Alert { id: r.try_get("id")?, site_id: r.try_get("site_id")?, kind: r.try_get("kind")?, message: r.try_get("message")?, created_at: r.try_get("created_at")? }, r.try_get("resolved")?)))
+            .collect()
+    }
+
+    pub async fn mark_notified(&self, id: i64, resolved: bool) -> Result<()> {
+        let q = if resolved { "UPDATE alerts SET resolved_notified = 1 WHERE id = ?" } else { "UPDATE alerts SET notified = 1 WHERE id = ?" };
+        sqlx::query(q).bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
     pub async fn resolve_alerts(&self, site_id: i64, kind: &str) -> Result<()> {
         sqlx::query("UPDATE alerts SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE site_id = ? AND kind = ? AND resolved_at IS NULL")
             .bind(site_id)
@@ -952,6 +971,27 @@ mod tests {
         s.set_cron_active(id, false).await.unwrap();
         assert!(s.crons(None).await.unwrap().is_empty(), "lo scheduler vede solo quelli attivi");
         assert_eq!(s.cron(id).await.unwrap().active, false);
+    }
+
+    #[tokio::test]
+    async fn alerts_are_notified_once_when_opened_and_once_when_resolved() {
+        let s = store().await;
+        let a = s.create_site(&new_site("a.it")).await.unwrap();
+        s.raise_alert(Some(a.id), "down", "giù").await.unwrap();
+        let todo = s.alerts_to_notify().await.unwrap();
+        assert_eq!((todo.len(), todo[0].1), (1, false));
+        s.mark_notified(todo[0].0.id, false).await.unwrap();
+        s.raise_alert(Some(a.id), "down", "ancora giù").await.unwrap();
+        assert!(s.alerts_to_notify().await.unwrap().is_empty(), "un aggiornamento non si rimanda");
+        s.resolve_alerts(a.id, "down").await.unwrap();
+        let todo = s.alerts_to_notify().await.unwrap();
+        assert_eq!((todo.len(), todo[0].1), (1, true));
+        s.mark_notified(todo[0].0.id, true).await.unwrap();
+        assert!(s.alerts_to_notify().await.unwrap().is_empty());
+        // Aperto e chiuso prima dell'invio: nessun messaggio.
+        s.raise_alert(Some(a.id), "disk", "x").await.unwrap();
+        s.resolve_alerts(a.id, "disk").await.unwrap();
+        assert!(s.alerts_to_notify().await.unwrap().is_empty());
     }
 
     #[tokio::test]

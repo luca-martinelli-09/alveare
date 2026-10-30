@@ -168,6 +168,14 @@ impl Host for FakeHost {
         self.record("probe", format!("{} {}", host.as_str(), auth.map_or("-".to_string(), |(u, _)| format!("{u}:"))))?;
         Ok(self.probe_status.unwrap_or(200))
     }
+    async fn notify(&self, text: &str) -> anyhow::Result<bool> {
+        self.record("notify", text.into())?;
+        Ok(true)
+    }
+    async fn site_disk_usage(&self, slug: &Slug) -> anyhow::Result<u64> {
+        self.record("site_disk_usage", slug.as_str().into())?;
+        Ok(5 * 1024 * 1024)
+    }
     async fn http_get(&self, host: &alveare_core::site::Domain, path: &str, auth: Option<(&str, &str)>, _timeout_s: u32) -> anyhow::Result<(u16, String)> {
         self.record("http_get", format!("{} {path} {}", host.as_str(), auth.map_or("-".to_string(), |(u, _)| format!("{u}:"))))?;
         Ok((self.probe_status.unwrap_or(200), "ok".into()))

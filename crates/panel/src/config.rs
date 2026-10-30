@@ -24,6 +24,10 @@ pub struct Config {
     pub restic_repository: Option<String>,
     /// Valori per il kit di ripristino.
     pub recovery: Vec<(String, String)>,
+    /// Bot e chat Telegram per gli avvisi (entrambi o nessuno).
+    pub telegram: Option<(String, String)>,
+    /// Soglia di spazio (file + database) per sito oltre la quale parte un avviso.
+    pub disk_alert_mb: u64,
 }
 
 fn url_encode(s: &str) -> String {
@@ -59,6 +63,15 @@ impl Config {
             .iter()
             .filter_map(|k| Some((k.to_string(), get(k)?)))
             .collect();
+        let telegram = match (get("TELEGRAM_BOT_TOKEN"), get("TELEGRAM_CHAT_ID")) {
+            (Some(t), Some(c)) => Some((t, c)),
+            (None, None) => None,
+            _ => bail!("TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID vanno impostati insieme"),
+        };
+        let disk_alert_mb = match get("ALVEARE_DISK_ALERT_MB") {
+            Some(v) => v.parse().context("ALVEARE_DISK_ALERT_MB: un numero di MB")?,
+            None => 10 * 1024,
+        };
         let secure_cookie = match get("ALVEARE_INSECURE_COOKIE").as_deref() {
             None | Some("0") | Some("false") => true,
             Some("1") | Some("true") => false,
@@ -78,6 +91,8 @@ impl Config {
             secure_cookie,
             restic_repository,
             recovery,
+            telegram,
+            disk_alert_mb,
             site_env: vars.iter().filter_map(|(k, v)| Some((k.strip_prefix("SITE_ENV_")?.to_string(), v.clone()))).collect(),
         })
     }
@@ -119,6 +134,16 @@ mod tests {
         let c = Config::from_vars(vars(&[("SITE_ENV_SMTP_HOST", "email-smtp.eu-west-1.amazonaws.com"), ("ALTRO", "x")])).unwrap();
         assert_eq!(c.site_env.get("SMTP_HOST").map(String::as_str), Some("email-smtp.eu-west-1.amazonaws.com"));
         assert_eq!(c.site_env.len(), 1);
+    }
+
+    #[test]
+    fn telegram_needs_token_and_chat_together() {
+        assert!(Config::from_vars(vars(&[])).unwrap().telegram.is_none());
+        let c = Config::from_vars(vars(&[("TELEGRAM_BOT_TOKEN", "123:abc"), ("TELEGRAM_CHAT_ID", "-100")])).unwrap();
+        assert_eq!(c.telegram, Some(("123:abc".into(), "-100".into())));
+        assert!(Config::from_vars(vars(&[("TELEGRAM_BOT_TOKEN", "123:abc")])).is_err());
+        assert_eq!(Config::from_vars(vars(&[])).unwrap().disk_alert_mb, 10240);
+        assert!(Config::from_vars(vars(&[("ALVEARE_DISK_ALERT_MB", "tanti")])).is_err());
     }
 
     #[test]

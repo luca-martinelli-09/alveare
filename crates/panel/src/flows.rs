@@ -81,6 +81,10 @@ pub trait Host: Send + Sync + 'static {
     /// Crea `templates/<name>/` con i file del sito (senza `.env`), il dump in `db.sql` e il manifest.
     /// `sql_file` è nella cartella tmp del sito, dove l'ha scritto WP-CLI.
     fn store_template(&self, slug: &Slug, name: &Slug, manifest: &crate::template::Manifest, sql_file: &str) -> impl Future<Output = Result<()>> + Send;
+    /// Messaggio sul canale degli avvisi (Telegram); `Ok(false)` se il canale non è configurato.
+    fn notify(&self, text: &str) -> impl Future<Output = Result<bool>> + Send;
+    /// Byte occupati dalla cartella del sito.
+    fn site_disk_usage(&self, slug: &Slug) -> impl Future<Output = Result<u64>> + Send;
     /// GET / di un sito attraverso Caddy (con la password dello staging se serve): lo stato HTTP.
     fn probe(&self, host: &Domain, auth: Option<(&str, &str)>) -> impl Future<Output = Result<u16>> + Send;
     /// GET di una pagina del sito attraverso Caddy: stato e inizio della risposta.
@@ -229,6 +233,23 @@ pub async fn run_cron<H: Host>(c: &Ctx<H>, cron_id: i64) -> Result<bool> {
     Ok(ok)
 }
 
+/// Manda gli avvisi nuovi e le risoluzioni sul canale configurato, una volta sola ciascuno.
+pub async fn dispatch_alerts<H: Host>(c: &Ctx<H>) -> Result<usize> {
+    let mut sent = 0;
+    for (alert, resolved) in c.store.alerts_to_notify().await? {
+        let site = match alert.site_id {
+            Some(id) => c.store.domains(id).await?.into_iter().next().map(|(d, _)| d.as_str().to_string()).unwrap_or_else(|| format!("sito {id}")),
+            None => "pannello".into(),
+        };
+        let text = if resolved { format!("✅ {site} · {}: risolto", alert.kind) } else { format!("⚠️ {site} · {}\n{}", alert.kind, alert.message) };
+        if c.host.notify(&text).await? {
+            sent += 1;
+        }
+        c.store.mark_notified(alert.id, resolved).await?;
+    }
+    Ok(sent)
+}
+
 /// Una modifica rifiutata dalla validazione: la UI la mostra così com'è (400).
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -272,6 +293,17 @@ pub async fn budget_with<H>(c: &Ctx<H>, site_id: i64, proposed: Option<&crate::s
         .chain(new_site)
         .collect();
     Ok(crate::budget::compute(&rows, ram_mb))
+}
+
+/// Avviso globale "budget" quando il massimo teorico dei pool supera la RAM.
+pub async fn budget_alert<H>(c: &Ctx<H>, ram_mb: u64) -> Result<()> {
+    let b = budget_with(c, -1, None, ram_mb).await?;
+    if b.over_ram() {
+        c.store.raise_alert(None, "budget", &format!("il massimo teorico dei pool è il {}% della RAM ({} MB su {} MB)", b.percent, b.total_mb, b.ram_mb)).await?;
+    } else {
+        c.store.resolve_global_alerts("budget").await?;
+    }
+    Ok(())
 }
 
 /// Override globale di PHP: scritto in conf.d e attivato con il reload di FPM.
@@ -1488,6 +1520,21 @@ mod tests {
         let c = Ctx { host: FakeHost::default(), ..c };
         assert!(run_cron(&c, http).await.unwrap());
         assert!(c.store.open_alerts(None).await.unwrap().is_empty(), "risolto al primo successo");
+    }
+
+    #[tokio::test]
+    async fn alerts_go_to_the_channel_with_the_site_name() {
+        let c = ctx(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        c.store.raise_alert(Some(site.id), "backup", "backup fallito: rete").await.unwrap();
+        c.store.raise_alert(None, "panel-backup", "x").await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        assert_eq!(dispatch_alerts(&c).await.unwrap(), 2);
+        assert_eq!(c.host.calls(), ["notify ⚠️ sona.it · backup\nbackup fallito: rete", "notify ⚠️ pannello · panel-backup\nx"]);
+        c.store.resolve_alerts(site.id, "backup").await.unwrap();
+        dispatch_alerts(&c).await.unwrap();
+        assert_eq!(c.host.calls().last().unwrap(), "notify ✅ sona.it · backup: risolto");
+        assert_eq!(dispatch_alerts(&c).await.unwrap(), 0);
     }
 
     #[tokio::test]

@@ -40,6 +40,8 @@ pub struct App<H> {
     pub reserved_hosts: Vec<Domain>,
     /// RAM del server per il budget di memoria (letta da /proc/meminfo).
     pub ram_mb: u64,
+    /// Soglia di spazio per sito (MB) del monitoraggio.
+    pub disk_alert_mb: u64,
 }
 
 impl<H> Clone for App<H> {
@@ -57,6 +59,7 @@ impl<H> Clone for App<H> {
             recovery: self.recovery.clone(),
             reserved_hosts: self.reserved_hosts.clone(),
             ram_mb: self.ram_mb,
+            disk_alert_mb: self.disk_alert_mb,
         }
     }
 }
@@ -64,7 +67,7 @@ impl<H> Clone for App<H> {
 impl<H: Host> App<H> {
     pub fn new(ctx: Ctx<H>, auth: Auth, templates: PathBuf, secure_cookie: bool) -> Self {
         let jobs = Jobs::new(ctx.store.pool().clone());
-        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None, recovery: vec![], reserved_hosts: vec![], ram_mb: crate::budget::ram_mb() }
+        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None, recovery: vec![], reserved_hosts: vec![], ram_mb: crate::budget::ram_mb(), disk_alert_mb: 10 * 1024 }
     }
 
     pub fn with_recovery(self, recovery: Vec<(String, String)>) -> Self {
@@ -74,6 +77,10 @@ impl<H: Host> App<H> {
     pub fn recovery_kit(&self) -> String {
         let pairs: Vec<(&str, &str)> = self.recovery.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         crate::backup::recovery_kit(&pairs)
+    }
+
+    pub fn with_disk_alert(self, disk_alert_mb: u64) -> Self {
+        Self { disk_alert_mb, ..self }
     }
 
     pub fn with_reserved_hosts(self, reserved_hosts: Vec<Domain>) -> Self {
@@ -454,7 +461,9 @@ async fn list_sites<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap)
     for site in app.ctx.store.sites().await? {
         if visible.as_ref().is_none_or(|v| v.contains(&site.id)) {
             let primary = app.ctx.store.domains(site.id).await?.into_iter().next().map(|(d, _)| d.as_str().to_string());
-            out.push(json!({ "id": site.id, "slug": site.slug, "domain": primary, "kind": site.kind, "status": site.status }));
+            let uptime: Option<serde_json::Value> = app.ctx.store.setting(&format!("uptime:{}", site.id)).await?.and_then(|v| serde_json::from_str(&v).ok());
+            let online = uptime.as_ref().and_then(|u| u["ok"].as_bool());
+            out.push(json!({ "id": site.id, "slug": site.slug, "domain": primary, "kind": site.kind, "status": site.status, "online": online, "staging": site.staging }));
         }
     }
     Ok(Json(out).into_response())
@@ -489,7 +498,7 @@ async fn create_site<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap
     if budget.needs_confirmation() && !r.confirm_budget {
         return Err(ApiError::new(StatusCode::CONFLICT, format!("con il nuovo sito i pool arriverebbero al {}% della RAM: conferma per creare", budget.percent)));
     }
-    let (ctx, auth, jobs, uid) = (app.ctx.clone(), app.auth.clone(), app.jobs.clone(), user.id);
+    let (ctx, auth, jobs, uid, ram_mb) = (app.ctx.clone(), app.auth.clone(), app.jobs.clone(), user.id, app.ram_mb);
     let job = app
         .jobs
         .spawn("site.create", None, Some(user.id), move |mut log| async move {
@@ -498,6 +507,7 @@ async fn create_site<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap
             }
             let site = flows::create_site(&ctx, &req, &mut log).await?;
             jobs.set_site(log.job_id, site.id).await?;
+            flows::budget_alert(&ctx, ram_mb).await?;
             auth.audit(Some(uid), "site.create", Some(site.id), req.domain.as_str()).await?;
             Ok(log)
         })

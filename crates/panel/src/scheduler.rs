@@ -29,6 +29,14 @@ pub enum Task {
     Integrity(i64),
     /// Aggiornamenti di WordPress secondo la regola del sito, dopo il backup notturno.
     NightlyUpdate(i64),
+    /// Raggiungibilità del sito, ogni 5 minuti.
+    Uptime(i64),
+    /// Spazio di file e database, ogni notte.
+    Usage(i64),
+    /// Errori 5xx e richieste lente dell'ultima ora, dall'access log.
+    Traffic(i64),
+    /// Avvisi nuovi o risolti verso Telegram.
+    Notify,
     /// Cron personalizzato arrivato alla sua ora.
     CustomCron(i64),
     /// Blocchi IP scaduti: si tolgono dal Caddyfile.
@@ -84,6 +92,7 @@ pub fn due(now: DateTime<Tz>, sites: &[SiteRef]) -> Vec<Task> {
         out.push(Task::RotateLogs);
     }
     out.push(Task::ExpireBlocks);
+    out.push(Task::Notify);
     if (h, m) == (4, 30) {
         out.push(Task::Cleanup);
     }
@@ -91,6 +100,15 @@ pub fn due(now: DateTime<Tz>, sites: &[SiteRef]) -> Vec<Task> {
         out.push(Task::PanelBackup);
     }
     for s in sites.iter().filter(|s| s.active) {
+        if m % 5 == (s.id + 2) % 5 {
+            out.push(Task::Uptime(s.id));
+        }
+        if m == (s.id * 17) % 60 {
+            out.push(Task::Traffic(s.id));
+        }
+        if (h, m) == (4, (s.id * 13) % 60) {
+            out.push(Task::Usage(s.id));
+        }
         if crate::backup::backup_slot(s.id) == (h as u32, m as u32) {
             out.push(Task::Backup(s.id));
         }
@@ -161,6 +179,10 @@ pub async fn run<H: Host>(app: App<H>) {
                     Task::NightlyUpdate(id) => (id, "update"),
                     // Il lock impedisce esecuzioni sovrapposte dello stesso cron.
                     Task::CustomCron(id) => (id, "custom-cron"),
+                    Task::Uptime(id) => (id, "uptime"),
+                    Task::Usage(id) => (id, "usage"),
+                    Task::Traffic(id) => (id, "traffic"),
+                    Task::Notify => (0, "notify"),
                     Task::RotateLogs => (0, "rotate"),
                     Task::Cleanup => (0, "cleanup"),
                 };
@@ -229,6 +251,18 @@ async fn execute<H: Host>(app: &App<H>, task: Task) -> anyhow::Result<()> {
                     Ok(log)
                 })
                 .await?;
+        }
+        Task::Uptime(id) => crate::monitor::uptime(&app.ctx, id).await?,
+        Task::Usage(id) => crate::monitor::usage(&app.ctx, id, app.disk_alert_mb).await?,
+        Task::Traffic(id) => {
+            let site = app.ctx.store.site(id).await?;
+            let path = app.paths.logs.join(site.slug.as_str()).join("access.log");
+            let lines = tokio::task::spawn_blocking(move || crate::logs::tail(&path, 50_000)).await??;
+            let since = chrono::Utc::now().timestamp() - 3600;
+            crate::monitor::record_traffic(&app.ctx, id, &crate::monitor::traffic(&lines, since)).await?;
+        }
+        Task::Notify => {
+            flows::dispatch_alerts(&app.ctx).await?;
         }
         Task::CustomCron(id) => {
             flows::run_cron(&app.ctx, id).await?;
@@ -387,6 +421,18 @@ mod tests {
         let (bh, bm) = crate::backup::backup_slot(1);
         let (h, m, _) = updates[0];
         assert!((h * 60 + m) > bh * 60 + bm, "dopo il backup");
+    }
+
+    #[test]
+    fn monitoring_cadence() {
+        let sites = [wp(1), SiteRef { id: 2, wordpress: false, active: false }];
+        let all: Vec<Task> = (0..24 * 60).flat_map(|i| due(at(i / 60, i % 60), &sites)).collect();
+        let count = |f: fn(&Task) -> bool| all.iter().filter(|t| f(t)).count();
+        assert_eq!(count(|t| matches!(t, Task::Uptime(1))), 24 * 12, "ogni 5 minuti");
+        assert_eq!(count(|t| matches!(t, Task::Traffic(1))), 24, "ogni ora");
+        assert_eq!(count(|t| matches!(t, Task::Usage(1))), 1, "ogni notte");
+        assert_eq!(count(|t| matches!(t, Task::Uptime(2))), 0, "solo i siti attivi");
+        assert_eq!(count(|t| matches!(t, Task::Notify)), 24 * 60);
     }
 
     #[test]

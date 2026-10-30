@@ -12,6 +12,7 @@ mod host;
 mod importer;
 mod jobs;
 mod logs;
+mod monitor;
 mod scheduler;
 mod secrets;
 mod store;
@@ -44,6 +45,8 @@ async fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("healthcheck") {
         return healthcheck().await;
     }
+    // TLS di reqwest (Telegram, Cloudflare) con ring: niente toolchain C extra per aws-lc.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())).init();
     let cfg = Config::from_env()?;
     // Crea cartelle e file di proprietà degli utenti dei siti: serve root.
@@ -68,6 +71,8 @@ async fn main() -> Result<()> {
         redis_addr: cfg.redis_addr.clone(),
         redis_admin_password: cfg.redis_admin_password.clone(),
         caddy_http: "caddy:80".into(),
+        telegram: cfg.telegram.clone(),
+        http: reqwest::Client::builder().user_agent("alveare").build()?,
     };
     let ctx = Ctx {
         store: store.clone(),
@@ -79,6 +84,7 @@ async fn main() -> Result<()> {
     };
     let app = App::new(ctx, auth, paths.templates.clone(), cfg.secure_cookie)
         .with_adminer(cfg.adminer_host.clone())
+        .with_disk_alert(cfg.disk_alert_mb)
         .with_reserved_hosts(cfg.panel_host.iter().chain(&cfg.adminer_host).cloned().collect())
         .with_recovery(cfg.recovery.clone());
     remind_recovery_kit(&app).await?;
