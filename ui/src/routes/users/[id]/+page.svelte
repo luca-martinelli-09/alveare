@@ -14,7 +14,8 @@
 	import SettingsSection from '$lib/components/app/settings-section.svelte';
 	import SettingRow from '$lib/components/app/setting-row.svelte';
 	import SiteAvatar from '$lib/components/app/site-avatar.svelte';
-	import { api, errorMessage, type User } from '$lib/api';
+	import { api, ApiError, errorMessage, type User } from '$lib/api';
+	import NotFound from '$lib/components/app/not-found.svelte';
 	import { askConfirm } from '$lib/ask.svelte';
 	import { session } from '$lib/session.svelte';
 	import { sites } from '$lib/sites.svelte';
@@ -33,8 +34,17 @@
 	let temp = $state<string | null>(null);
 	const self = $derived(session.user?.id === id);
 
+	let missing = $state(false);
+
 	async function load() {
-		[d, assignments] = await Promise.all([api.get<Detail>(`/api/users/${id}`), api.get<Assignment[]>(`/api/users/${id}/sites`)]);
+		try {
+			[d, assignments] = await Promise.all([api.get<Detail>(`/api/users/${id}`), api.get<Assignment[]>(`/api/users/${id}/sites`)]);
+			missing = false;
+		} catch (e) {
+			if (!(e instanceof ApiError) || e.status !== 404) throw e;
+			[d, missing] = [null, true];
+			return;
+		}
 		name = d.user.name;
 		email = d.user.email;
 		isAdmin = d.user.is_admin;
@@ -111,11 +121,13 @@
 	<Breadcrumb.List>
 		<Breadcrumb.Item><Breadcrumb.Link href="/users">Utenti</Breadcrumb.Link></Breadcrumb.Item>
 		<Breadcrumb.Separator />
-		<Breadcrumb.Item><Breadcrumb.Page>{d?.user.name ?? '…'}</Breadcrumb.Page></Breadcrumb.Item>
+		<Breadcrumb.Item><Breadcrumb.Page>{d?.user.name ?? (missing ? 'non trovato' : '…')}</Breadcrumb.Page></Breadcrumb.Item>
 	</Breadcrumb.List>
 </Breadcrumb.Root>
 
-{#if !d}
+{#if missing}
+	<NotFound title="Utente non trovato" description="Forse è stato eliminato." href="/users" label="Tutti gli utenti" />
+{:else if !d}
 	<Skeleton class="h-48 w-full" />
 {:else}
 	<header class="-mt-2 flex flex-col gap-1.5">

@@ -20,14 +20,23 @@
 	import Updates from '$lib/components/site/updates.svelte';
 	import Crons from '$lib/components/site/crons.svelte';
 	import AppTab from '$lib/components/site/app.svelte';
-	import { api } from '$lib/api';
+	import { api, ApiError } from '$lib/api';
+	import NotFound from '$lib/components/app/not-found.svelte';
 	import type { SiteDetail } from '$lib/components/site/types';
 
 	const id = $derived(Number(page.params.id));
 	let detail = $state<SiteDetail | null>(null);
+	// Stato HTTP quando il sito non si apre: eliminato, creazione fallita, link sbagliato o non tuo.
+	let missing = $state<number | null>(null);
 
 	async function load() {
-		detail = await api.get<SiteDetail>(`/api/sites/${id}`);
+		try {
+			detail = await api.get<SiteDetail>(`/api/sites/${id}`);
+			missing = null;
+		} catch (e) {
+			if (!(e instanceof ApiError) || e.status < 400 || e.status >= 500 || e.status === 401) throw e;
+			[detail, missing] = [null, e.status];
+		}
 	}
 
 	$effect(() => {
@@ -49,7 +58,11 @@
 	const kinds: Record<string, string> = { wordpress: 'WordPress', php: 'PHP', laravel: 'Laravel' };
 </script>
 
-{#if !detail}
+{#if missing === 403}
+	<NotFound forbidden title="Questo sito non è tra i tuoi" description="Chiedi a un amministratore di assegnartelo." />
+{:else if missing}
+	<NotFound title="Sito non trovato" description="Forse è stato eliminato, o la creazione non è andata a buon fine e il pannello l'ha annullata." />
+{:else if !detail}
 	<Skeleton class="h-5 w-40" />
 	<Skeleton class="h-9 w-72" />
 	<Skeleton class="h-64 w-full" />

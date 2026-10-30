@@ -8,10 +8,12 @@
 	import { api, errorMessage } from '$lib/api';
 	import { toast } from 'svelte-sonner';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import NotFound from '$lib/components/app/not-found.svelte';
 
 	type Template = { id: string; name: string; kind: string; snapshot: boolean; steps: number };
 	const id = $derived(page.params.id ?? '');
-	let template = $state<Template | null>(null);
+	// undefined mentre carica, null se non c'è.
+	let template = $state<Template | null | undefined>(undefined);
 
 	$effect(() => {
 		api.get<Template[]>('/api/templates').then((all) => (template = all.find((t) => t.id === id) ?? null));
@@ -27,6 +29,10 @@
 		}
 	}
 </script>
+
+{#if template === null}
+	<NotFound title="Template non trovato" description="Forse è stato eliminato: i template eliminati restano in templates/.trash." href="/templates" label="Tutti i template" />
+{:else}
 
 <Breadcrumb.Root>
 	<Breadcrumb.List>
@@ -64,3 +70,4 @@
 </header>
 
 <Files base={`/api/templates/${id}`} />
+{/if}
