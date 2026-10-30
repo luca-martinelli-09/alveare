@@ -11,6 +11,7 @@
 	import DomainsCard from './domains-card.svelte';
 	import StateCard from './state-card.svelte';
 	import CopiesCard from './copies-card.svelte';
+	import MonitorCard from './monitor-card.svelte';
 	import type { SiteDetail } from './types';
 
 	let { detail, onchange }: { detail: SiteDetail; onchange: () => void } = $props();
@@ -27,6 +28,7 @@
 
 <div class="grid gap-4 pt-4 md:grid-cols-2">
 	<DomainsCard {detail} {onchange} />
+	<MonitorCard id={detail.site.id} />
 	{#if detail.can_manage}
 		<StateCard {detail} {onchange} />
 		<CopiesCard {detail} />

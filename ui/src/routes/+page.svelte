@@ -7,6 +7,7 @@
 	import * as Alert from '$lib/components/ui/alert';
 	import * as Empty from '$lib/components/ui/empty';
 	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import StatusBadge from '$lib/components/app/status-badge.svelte';
@@ -21,6 +22,7 @@
 	let sites = $state<SiteRow[] | null>(null);
 	let alerts = $state<AlertT[]>([]);
 	let templates = $state<{ id: string; name: string }[]>([]);
+	let updates = $state<Record<number, number>>({});
 	let open = $state(false);
 	let domain = $state('');
 	let title = $state('');
@@ -30,6 +32,8 @@
 
 	async function load() {
 		[sites, alerts] = await Promise.all([api.get<SiteRow[]>('/api/sites'), api.get<AlertT[]>('/api/alerts')]);
+		const u = await api.get<{ site_id: number; pending: number }[]>('/api/updates');
+		updates = Object.fromEntries(u.map((x) => [x.site_id, x.pending]));
 	}
 
 	$effect(() => {
@@ -157,7 +161,14 @@
 					<Table.Cell class="font-medium">{site.domain}</Table.Cell>
 					<Table.Cell class="text-muted-foreground">{site.slug}</Table.Cell>
 					<Table.Cell>{site.kind}</Table.Cell>
-					<Table.Cell><StatusBadge status={site.status} /></Table.Cell>
+					<Table.Cell>
+						<div class="flex flex-wrap items-center gap-1">
+							<StatusBadge status={site.status} />
+							{#if site.status === 'active' && site.online === false}<Badge variant="destructive">non risponde</Badge>{/if}
+							{#if site.staging}<Badge variant="outline">staging</Badge>{/if}
+							{#if (updates[site.id] ?? 0) > 0}<Badge variant="secondary">{updates[site.id]} aggiornamenti</Badge>{/if}
+						</div>
+					</Table.Cell>
 				</Table.Row>
 			{/each}
 		</Table.Body>

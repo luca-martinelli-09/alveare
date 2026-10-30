@@ -39,7 +39,7 @@ export const api = {
 
 export type Stage = 'setup' | 'totp' | 'full';
 export type User = { id: number; email: string; name: string; is_admin: boolean };
-export type SiteRow = { id: number; slug: string; domain: string | null; kind: string; status: string };
+export type SiteRow = { id: number; slug: string; domain: string | null; kind: string; status: string; online: boolean | null; staging: boolean };
 export type Job = { id: number; kind: string; site_id: number | null; status: 'running' | 'done' | 'failed'; log: string[] };
 export type Alert = { id: number; site_id: number | null; kind: string; message: string; created_at: string };
 

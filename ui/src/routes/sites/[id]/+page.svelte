@@ -10,6 +10,8 @@
 	import Backups from '$lib/components/site/backups.svelte';
 	import Activity from '$lib/components/site/activity.svelte';
 	import Settings from '$lib/components/site/settings.svelte';
+	import Updates from '$lib/components/site/updates.svelte';
+	import Crons from '$lib/components/site/crons.svelte';
 	import { api } from '$lib/api';
 	import type { SiteDetail } from '$lib/components/site/types';
 
@@ -44,6 +46,10 @@
 				<Tabs.Trigger value="database">Database</Tabs.Trigger>
 			{/if}
 			<Tabs.Trigger value="backups">Backup</Tabs.Trigger>
+			{#if detail.site.kind === 'wordpress'}
+				<Tabs.Trigger value="updates">Aggiornamenti</Tabs.Trigger>
+			{/if}
+			<Tabs.Trigger value="cron">Cron</Tabs.Trigger>
 			{#if detail.can_manage}
 				<Tabs.Trigger value="settings">Impostazioni</Tabs.Trigger>
 			{/if}
@@ -56,6 +62,8 @@
 			<Tabs.Content value="settings"><Settings {detail} onchange={load} /></Tabs.Content>
 		{/if}
 		<Tabs.Content value="logs"><Logs {id} canManage={detail.can_manage} /></Tabs.Content>
+		<Tabs.Content value="updates"><Updates {id} canManage={detail.can_manage} /></Tabs.Content>
+		<Tabs.Content value="cron"><Crons {id} canManage={detail.can_manage} /></Tabs.Content>
 		<Tabs.Content value="backups"><Backups {id} canManage={detail.can_manage} /></Tabs.Content>
 		<Tabs.Content value="activity"><Activity {id} /></Tabs.Content>
 	</Tabs.Root>
