@@ -821,7 +821,8 @@ async fn list_backups<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m
     let user = caller(&app, &m, &h).await?;
     require_site(&app, &user, id, Need::Read).await?;
     let runs = app.ctx.store.backup_runs(id, 100).await?;
-    Ok(Json(json!({ "enabled": app.ctx.backups, "runs": runs })).into_response())
+    let restore_test: Option<serde_json::Value> = app.ctx.store.setting(&format!("restore_test:{id}")).await?.and_then(|v| serde_json::from_str(&v).ok());
+    Ok(Json(json!({ "enabled": app.ctx.backups, "runs": runs, "restore_test": restore_test })).into_response())
 }
 
 async fn backup_now<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {

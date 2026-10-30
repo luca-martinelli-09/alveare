@@ -5,21 +5,31 @@
 	import * as Alert from '$lib/components/ui/alert';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
+	import * as Field from '$lib/components/ui/field';
+	import { Input } from '$lib/components/ui/input';
 	import JobLog from '$lib/components/app/job-log.svelte';
+	import SnapshotBrowser from './snapshot-browser.svelte';
+	import { session } from '$lib/session.svelte';
 	import { api, errorMessage, formatBytes } from '$lib/api';
 	import { toast } from 'svelte-sonner';
 
 	let { id, canManage }: { id: number; canManage: boolean } = $props();
 	type Run = { id: number; started_at: string; status: string; snapshot_id: string | null; bytes_added: number | null; total_bytes: number | null; error: string | null };
 
+	type RestoreTest = { at: string; ok: boolean; detail: string } | null;
 	let enabled = $state(true);
 	let runs = $state<Run[]>([]);
+	let restoreTest = $state<RestoreTest>(null);
+	let browsing = $state<string | null>(null);
+	let newDomainFor = $state<string | null>(null);
+	let newDomain = $state('');
 	let job = $state<{ id: number; title: string } | null>(null);
 
 	async function load() {
-		const r = await api.get<{ enabled: boolean; runs: Run[] }>(`/api/sites/${id}/backups`);
+		const r = await api.get<{ enabled: boolean; runs: Run[]; restore_test: RestoreTest }>(`/api/sites/${id}/backups`);
 		enabled = r.enabled;
 		runs = r.runs;
+		restoreTest = r.restore_test;
 	}
 
 	$effect(() => {
@@ -41,6 +51,19 @@
 		if (!confirm(`Ripristinare ${what} dallo snapshot ${snapshot.slice(0, 8)}? Prima viene fatto un backup dello stato attuale.`)) return;
 		start('Ripristino', () => api.post(`/api/sites/${id}/backups/${snapshot}/restore`, { mode }));
 	}
+
+	function restorePath(snapshot: string, path: string) {
+		if (!confirm(`Ripristinare ${path} dallo snapshot ${snapshot.slice(0, 8)}? La versione attuale va nel cestino.`)) return;
+		browsing = null;
+		start('Ripristino di ' + path, () => api.post(`/api/sites/${id}/backups/${snapshot}/restore`, { mode: 'path', path }));
+	}
+
+	function restoreNewDomain(e: SubmitEvent) {
+		e.preventDefault();
+		const snapshot = newDomainFor!;
+		newDomainFor = null;
+		start('Ripristino su ' + newDomain, () => api.post(`/api/sites/${id}/backups/${snapshot}/restore`, { mode: 'new_domain', domain: newDomain }));
+	}
 </script>
 
 <div class="flex flex-col gap-4 pt-4">
@@ -51,6 +74,12 @@
 		</Alert.Root>
 	{:else if canManage}
 		<div><Button onclick={backupNow}>Backup adesso</Button></div>
+	{/if}
+	{#if restoreTest}
+		<Alert.Root variant={restoreTest.ok ? 'default' : 'destructive'}>
+			<Alert.Title>Ultimo restore di prova: {restoreTest.ok ? 'riuscito' : 'fallito'} ({new Date(restoreTest.at).toLocaleDateString('it-IT')})</Alert.Title>
+			<Alert.Description>{restoreTest.detail}</Alert.Description>
+		</Alert.Root>
 	{/if}
 	<Table.Root>
 		<Table.Header>
@@ -89,6 +118,10 @@
 										<DropdownMenu.Item onclick={() => restore(r.snapshot_id!, 'full')}>File e database</DropdownMenu.Item>
 										<DropdownMenu.Item onclick={() => restore(r.snapshot_id!, 'files')}>Solo file</DropdownMenu.Item>
 										<DropdownMenu.Item onclick={() => restore(r.snapshot_id!, 'database')}>Solo database</DropdownMenu.Item>
+										<DropdownMenu.Item onclick={() => (browsing = r.snapshot_id)}>Un file o una cartella…</DropdownMenu.Item>
+										{#if session.user?.is_admin}
+											<DropdownMenu.Item onclick={() => (newDomainFor = r.snapshot_id)}>Su un nuovo dominio…</DropdownMenu.Item>
+										{/if}
 									</DropdownMenu.Group>
 								</DropdownMenu.Content>
 							</DropdownMenu.Root>
@@ -104,5 +137,35 @@
 	<Dialog.Content>
 		<Dialog.Header><Dialog.Title>{job?.title}</Dialog.Title></Dialog.Header>
 		{#if job}<JobLog id={job.id} />{/if}
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root open={browsing !== null} onOpenChange={(o) => !o && (browsing = null)}>
+	<Dialog.Content class="sm:max-w-2xl">
+		<Dialog.Header>
+			<Dialog.Title>Snapshot {browsing?.slice(0, 8)}</Dialog.Title>
+			<Dialog.Description>Scegli un file o una cartella da ripristinare al suo posto.</Dialog.Description>
+		</Dialog.Header>
+		{#if browsing}
+			<SnapshotBrowser {id} snapshot={browsing} onrestore={(p) => restorePath(browsing!, p)} />
+		{/if}
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root open={newDomainFor !== null} onOpenChange={(o) => !o && (newDomainFor = null)}>
+	<Dialog.Content>
+		<Dialog.Header>
+			<Dialog.Title>Ripristina su un nuovo dominio</Dialog.Title>
+			<Dialog.Description>Lo snapshot diventa un sito nuovo, protetto da password: il sito in produzione non si tocca.</Dialog.Description>
+		</Dialog.Header>
+		<form onsubmit={restoreNewDomain}>
+			<Field.FieldGroup>
+				<Field.Field>
+					<Field.FieldLabel for="restore-domain">Dominio</Field.FieldLabel>
+					<Input id="restore-domain" placeholder="verifica.esempio.it" bind:value={newDomain} required />
+				</Field.Field>
+				<Dialog.Footer><Button type="submit">Ripristina</Button></Dialog.Footer>
+			</Field.FieldGroup>
+		</form>
 	</Dialog.Content>
 </Dialog.Root>
