@@ -1,6 +1,7 @@
 <script lang="ts">
 	import SettingsSection from '$lib/components/app/settings-section.svelte';
 	import SettingRow from '$lib/components/app/setting-row.svelte';
+	import Credentials from '$lib/components/app/credentials.svelte';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Switch } from '$lib/components/ui/switch';
@@ -60,7 +61,7 @@
 	<SettingRow label="Password sulle copie di prova" labelFor="staging" help="Chiede una password ai visitatori e blocca l'indicizzazione nei motori di ricerca.">
 		{#snippet extra()}
 			{#if detail.staging}
-				<p class="mt-1 text-sm">Utente <code>{detail.staging.user}</code>, password <code class="select-all">{detail.staging.password}</code></p>
+				<div class="mt-3"><Credentials id="staging" masked user={detail.staging.user} password={detail.staging.password} /></div>
 			{/if}
 		{/snippet}
 		<Switch

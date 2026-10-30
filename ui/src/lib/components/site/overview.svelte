@@ -5,6 +5,10 @@
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
+	import * as Alert from '$lib/components/ui/alert';
+	import Credentials from '$lib/components/app/credentials.svelte';
+	import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import JobLog from '$lib/components/app/job-log.svelte';
 	import { api, errorMessage } from '$lib/api';
 	import { session } from '$lib/session.svelte';
@@ -19,6 +23,7 @@
 	let deleting = $state<number | null>(null);
 
 	let wpAdmin = $state<{ user: string; password: string } | null>(null);
+	const wpAdminUrl = $derived(`${(detail.domains.find((d) => d.kind === 'primary') ?? detail.domains[0])?.url.replace(/\/$/, '')}/wp-admin/`);
 
 	async function revealWpAdmin() {
 		try {
@@ -40,12 +45,23 @@
 <div class="flex flex-col gap-6 pt-6">
 	{#if detail.wp_admin_pending}
 		<SettingsSection title="Accesso a WordPress">
-			<SettingRow label="Password dell'utente admin" help={'Si mostra una volta sola, entro 24 ore dalla creazione. Poi c\'è "Password dimenticata" di WordPress.'}>
-				{#snippet extra()}
-					{#if wpAdmin}<p class="mt-1 text-sm">Utente <code>{wpAdmin.user}</code>, password <code class="select-all">{wpAdmin.password}</code></p>{/if}
-				{/snippet}
-				{#if !wpAdmin}<Button onclick={revealWpAdmin}>Mostra la password</Button>{/if}
-			</SettingRow>
+			{#if !wpAdmin}
+				<SettingRow label="Credenziali dell'amministratore" help="Create con il sito. Si vedono una volta sola, entro 24 ore: tienile pronte per il tuo password manager.">
+					<Button onclick={revealWpAdmin}>Mostra le credenziali</Button>
+				</SettingRow>
+			{:else}
+				<div class="flex flex-col gap-4 px-4 py-4">
+					<Alert.Root>
+						<TriangleAlertIcon />
+						<Alert.Title>Copiale adesso</Alert.Title>
+						<Alert.Description>Lasciata questa pagina la password non si vede più: per cambiarla userai "Password dimenticata" di WordPress.</Alert.Description>
+					</Alert.Root>
+					<Credentials id="wp-admin" user={wpAdmin.user} password={wpAdmin.password} />
+					<div>
+						<Button size="sm" href={wpAdminUrl} target="_blank" rel="noopener"><ExternalLinkIcon data-icon="inline-start" /> Apri la bacheca di WordPress</Button>
+					</div>
+				</div>
+			{/if}
 		</SettingsSection>
 	{/if}
 	<MonitorCard id={detail.site.id} />
