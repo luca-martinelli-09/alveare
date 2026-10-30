@@ -1414,7 +1414,7 @@ mod tests {
         assert_eq!(job.status, "done", "{:?}", job.log);
         let calls = t.app.ctx.host.calls();
         let pos = |p: &str| calls.iter().position(|c| c.starts_with(p)).unwrap_or_else(|| panic!("manca {p}: {calls:?}"));
-        assert!(pos("db_dump sona_it") < pos("db_import sona_it INSERT INTO x VALUES (1);"));
+        assert!(pos("db_dump sona_it") < pos("db_import sona_it as sona_it INSERT INTO x VALUES (1);"));
         assert!(pos("db_import") < pos("wp sona_it search-replace vecchio.it sona.it --all-tables"));
         assert!(pos("wp sona_it search-replace") < pos("wp sona_it cache flush"), "la cache va svuotata dopo l'import");
         let safety: Vec<_> = std::fs::read_dir(t.app.paths.tmp.join("sona_it")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("db-before-import-")).collect();

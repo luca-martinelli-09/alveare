@@ -199,7 +199,7 @@ mod tests {
         assert_eq!(job.status, "done", "{:?}", job.log);
         let calls = t.app.ctx.host.calls();
         assert!(calls.iter().any(|c| c.starts_with("import_files epops_it ") && c.ends_with("imports/files/epops.zip")), "{calls:?}");
-        assert!(calls.contains(&"db_import epops_it -- dump".to_string()));
+        assert!(calls.contains(&"db_import epops_it as epops_it -- dump".to_string()));
         let (_, audit, _) = call(&t, req("GET", &format!("/api/sites/{}/audit", job.site_id.unwrap()), Some(&admin), None)).await;
         assert_eq!(audit[0]["action"], "site.import");
     }

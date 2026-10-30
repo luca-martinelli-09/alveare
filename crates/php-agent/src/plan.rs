@@ -129,16 +129,18 @@ pub fn plan_deploy(slug: &Slug, uid: u32, repo: &str, branch: &str, app: AppLayo
 }
 
 /// Crea la chiave di deploy del sito se manca (nella HOME del sito, fuori dalla document root).
+/// Chiave di deploy: cartella, chiave e lettura della pubblica tutte con l'utente del sito.
+/// Il tmp del sito è suo: root non deve mai creare, cambiare proprietario o leggere lì dentro.
 pub fn plan_deploy_key(slug: &Slug, uid: u32) -> Exec {
     let s = slug.as_str();
-    let key = format!("{TMP_DIR}/{s}/.ssh/id_ed25519");
+    const SCRIPT: &str = "umask 077 && mkdir -p .ssh && { [ -f .ssh/id_ed25519 ] || ssh-keygen -q -t ed25519 -N '' -C \"$1\" -f .ssh/id_ed25519; } && cat .ssh/id_ed25519.pub";
     Exec {
-        program: "ssh-keygen".into(),
-        args: ["-q", "-t", "ed25519", "-N", "", "-C", &format!("alveare-{s}"), "-f", &key].map(String::from).to_vec(),
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), SCRIPT.into(), "sh".into(), format!("alveare-{s}")],
         uid,
         gid: uid,
         cwd: PathBuf::from(format!("{TMP_DIR}/{s}")),
-        env: vec![("HOME".into(), format!("{TMP_DIR}/{s}"))],
+        env: vec![("HOME".into(), format!("{TMP_DIR}/{s}")), ("PATH".into(), "/usr/local/bin:/usr/bin:/bin".into())],
         timeout: Duration::from_secs(30),
     }
 }
@@ -151,6 +153,17 @@ pub fn plan_cron(slug: &Slug, uid: u32) -> Exec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deploy_key_is_made_and_read_by_the_site_user_not_root() {
+        let e = plan_deploy_key(&Slug::parse("sona_it").unwrap(), 1234);
+        assert_eq!((e.uid, e.gid), (1234, 1234));
+        assert_eq!(e.program, "/bin/sh");
+        assert!(e.args[1].contains("mkdir -p .ssh") && e.args[1].ends_with("cat .ssh/id_ed25519.pub"), "{:?}", e.args);
+        assert!(!e.args[1].contains("sona_it"), "il commento passa come argomento, non nel testo dello script");
+        assert_eq!(e.args[3], "alveare-sona_it");
+        assert_eq!(e.cwd, PathBuf::from("/srv/tmp/sona_it"));
+    }
 
     const PASSWD: &str = "root:x:0:0:root:/root:/bin/bash\nsona_it:x:20001:20001::/srv/sites/sona_it:/usr/sbin/nologin\nevil:x:0:0::/srv/sites/evil:/bin/sh\n";
 

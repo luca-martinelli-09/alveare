@@ -160,12 +160,13 @@ impl SiteFiles {
     /// Crea `to` (.zip o .tar.gz) con i file e le cartelle indicati, ciascuno col suo nome.
     pub fn compress(&self, paths: &[String], to: &str) -> Result<()> {
         let kind = crate::archive::Kind::of(to).ok_or(FileError::Archive("serve un .zip o un .tar.gz".into()))?;
+        // Percorsi relativi letti attraverso la Dir del sito: niente uscite con link messi a metà lavoro.
         let sources: Vec<(PathBuf, PathBuf)> = paths
             .iter()
             .map(|p| {
-                let real = self.real_path(p)?;
-                let name = real.file_name().map(PathBuf::from).ok_or(FileError::BadPath)?;
-                Ok((real, name))
+                let r = rel(p)?;
+                let name = r.file_name().map(PathBuf::from).ok_or(FileError::BadPath)?;
+                Ok((r, name))
             })
             .collect::<Result<_>>()?;
         let to_rel = rel(to)?;
@@ -178,14 +179,14 @@ impl SiteFiles {
             crate::archive::Kind::Zip => {
                 let mut w = crate::archive::ZipWriter::new(out);
                 for (src, name) in &sources {
-                    w.add_tree(src, name)?;
+                    w.add_tree(&self.root, src, name)?;
                 }
                 w.finish()
             }
             crate::archive::Kind::TarGz => {
                 let mut w = crate::archive::TarGzWriter::new(out);
                 for (src, name) in &sources {
-                    if src.is_dir() { w.add_tree(src, name)? } else { w.add_file(src, name)? }
+                    w.add_tree(&self.root, src, name)?;
                 }
                 w.finish()
             }
@@ -199,14 +200,14 @@ impl SiteFiles {
 
     /// Cartella come zip per il download: file temporaneo già scollegato, sparisce alla chiusura.
     pub fn zip_for_download(&self, path: &str) -> Result<std::fs::File> {
-        let real = self.real_path(path)?;
-        let name = real.file_name().map(PathBuf::from).ok_or(FileError::BadPath)?;
+        let r = rel(path)?;
+        let name = r.file_name().map(PathBuf::from).ok_or(FileError::BadPath)?;
         let tmp_name = format!("download-{}.zip", rand::distr::SampleString::sample_string(&rand::distr::Alphanumeric, &mut rand::rng(), 16));
         let out = self.tmp.create(&tmp_name)?.into_std();
         let reader = self.tmp.open(&tmp_name)?.into_std();
         self.tmp.remove_file(&tmp_name)?;
         let mut w = crate::archive::ZipWriter::new(out);
-        w.add_tree(&real, &name).map_err(archive_err)?;
+        w.add_tree(&self.root, &r, &name).map_err(archive_err)?;
         w.finish().map_err(archive_err)?;
         Ok(reader)
     }

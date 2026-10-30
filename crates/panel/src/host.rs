@@ -104,6 +104,46 @@ fn chown_tree(p: &Path, owner: Option<u32>) -> Result<()> {
     Ok(())
 }
 
+/// Legge un file direttamente nella cartella di un sito (che il sito possiede): mai attraverso un link.
+fn read_nofollow(path: &Path) -> Result<String> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path).with_context(|| format!("apertura di {}", path.display()))?;
+    if !f.metadata()?.is_file() {
+        bail!("{} non è un file", path.display());
+    }
+    let mut out = String::new();
+    f.read_to_string(&mut out)?;
+    Ok(out)
+}
+
+/// Scrive `content` in `path` (nella cartella di un sito) passando da `<path>.new` creato da zero:
+/// un link o un file messo lì dal sito non viene mai seguito né riusato.
+fn replace_site_file(path: &Path, content: &str, mode: u32, owner: Option<u32>) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let tmp = path.with_extension("new");
+    match fs::remove_file(&tmp) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).with_context(|| format!("pulizia di {}", tmp.display())),
+    }
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&tmp)
+        .with_context(|| format!("creazione di {}", tmp.display()))?;
+    f.write_all(content.as_bytes())?;
+    f.sync_all()?;
+    if let Some(uid) = owner {
+        std::os::unix::fs::fchown(&f, Some(uid), Some(uid))?;
+    }
+    drop(f);
+    fs::rename(&tmp, path).with_context(|| format!("sostituzione di {}", path.display()))
+}
+
 fn write_atomic(path: &Path, content: &str) -> Result<()> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, content).with_context(|| format!("scrittura di {}", tmp.display()))?;
@@ -141,17 +181,20 @@ pub fn create_dirs(p: &Paths, slug: &Slug, owner: Option<u32>) -> Result<()> {
 }
 
 pub fn write_env(p: &Paths, slug: &Slug, env: &Vars, owner: Option<u32>) -> Result<()> {
-    let path = p.sites.join(slug.as_str()).join(".env");
-    let _ = fs::remove_file(&path);
-    fs::write(&path, env_file(env)?)?;
-    set_mode(&path, 0o400)?;
-    chown(&path, owner)
+    replace_site_file(&p.sites.join(slug.as_str()).join(".env"), &env_file(env)?, 0o400, owner)
 }
 
 /// Copia ricorsiva per la clonazione: niente `.env` (credenziali della sorgente) né link simbolici.
-pub fn copy_site_tree(src: &Path, dest: &Path, rel: &Path) -> Result<()> {
+/// La sorgente si legge attraverso una Dir (cap-std): il sito non può far uscire la copia dalla sua cartella.
+pub fn copy_site_tree(src: &Path, dest: &Path) -> Result<()> {
+    let root = cap_std::fs::Dir::open_ambient_dir(src, cap_std::ambient_authority())?;
+    copy_dir(&root, Path::new(""), dest)
+}
+
+fn copy_dir(root: &cap_std::fs::Dir, rel: &Path, dest: &Path) -> Result<()> {
     fs::create_dir_all(dest.join(rel))?;
-    for entry in fs::read_dir(src.join(rel))? {
+    let entries = if rel.as_os_str().is_empty() { root.entries()? } else { root.read_dir(rel)? };
+    for entry in entries {
         let entry = entry?;
         let child = rel.join(entry.file_name());
         if child == Path::new(".env") {
@@ -159,9 +202,11 @@ pub fn copy_site_tree(src: &Path, dest: &Path, rel: &Path) -> Result<()> {
         }
         let ty = entry.file_type()?;
         if ty.is_dir() {
-            copy_site_tree(src, dest, &child)?;
+            copy_dir(root, &child, dest)?;
         } else if ty.is_file() {
-            fs::copy(entry.path(), dest.join(&child)).with_context(|| format!("copia di {}", child.display()))?;
+            let mut from = root.open(&child)?.into_std();
+            let mut to = fs::File::create(dest.join(&child)).with_context(|| format!("copia di {}", child.display()))?;
+            std::io::copy(&mut from, &mut to).with_context(|| format!("copia di {}", child.display()))?;
         }
     }
     Ok(())
@@ -590,11 +635,14 @@ impl Host for SystemHost {
         Ok(Dump { reader: Box::pin(stdout), finished: Box::pin(finished) })
     }
 
-    async fn db_import(&self, name: &str, mut sql: std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send>>) -> Result<()> {
+    async fn db_import(&self, db: &DbCreds, mut sql: std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send>>) -> Result<()> {
+        // Utente del sito (solo il suo database) e --sandbox: niente comandi del client come \! o source.
         let mut child = tokio::process::Command::new("mariadb")
-            .args(["--default-character-set=utf8mb4", "-h", &self.db_host, "-u", "root", "--"])
-            .arg(sql_safe(name)?)
-            .env("MYSQL_PWD", &self.root_password)
+            .args(["--default-character-set=utf8mb4", "--sandbox", "--local-infile=0", "-h", &self.db_host, "-u"])
+            .arg(sql_safe(&db.user)?)
+            .arg("--")
+            .arg(sql_safe(&db.name)?)
+            .env("MYSQL_PWD", &db.password)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
@@ -664,15 +712,33 @@ impl Host for SystemHost {
                 if fs::symlink_metadata(&restored).is_err() {
                     bail!("lo snapshot non contiene {}", if rel.as_os_str().is_empty() { "i file del sito".into() } else { rel.display().to_string() });
                 }
-                let (current, old) = (target_dir.join(rel), self.paths.trash.join(format!("{}-{now}", target.as_str())).join("site").join(rel));
-                if fs::symlink_metadata(&current).is_ok() {
-                    fs::create_dir_all(old.parent().context("percorso senza cartella")?)?;
-                    fs::rename(&current, &old)?;
+                // Spostamenti relativi a Dir (cap-std): un link nelle cartelle del sito non porta altrove.
+                let ambient = cap_std::ambient_authority();
+                let trash = self.paths.trash.join(format!("{}-{now}", target.as_str())).join("site");
+                if rel.as_os_str().is_empty() {
+                    // Tutto il sito: si sostituisce la cartella intera, il cui genitore è del pannello.
+                    fs::create_dir_all(trash.parent().context("cestino")?)?;
+                    if fs::symlink_metadata(&target_dir).is_ok() {
+                        fs::rename(&target_dir, &trash)?;
+                    }
+                    fs::rename(&restored, &target_dir)?;
+                } else {
+                    fs::create_dir_all(&trash)?;
+                    let (site, bin) = (cap_std::fs::Dir::open_ambient_dir(&target_dir, ambient)?, cap_std::fs::Dir::open_ambient_dir(&trash, ambient)?);
+                    let from = cap_std::fs::Dir::open_ambient_dir(restored.parent().context("percorso senza cartella")?, ambient)?;
+                    let restored_name = restored.file_name().context("percorso senza nome")?;
+                    if site.symlink_metadata(rel).is_ok() {
+                        if let Some(parent) = rel.parent().filter(|p| !p.as_os_str().is_empty()) {
+                            bin.create_dir_all(parent)?;
+                        }
+                        site.rename(rel, &bin, rel)?;
+                    }
+                    if let Some(parent) = rel.parent().filter(|p| !p.as_os_str().is_empty()) {
+                        site.create_dir_all(parent)?;
+                    }
+                    from.rename(restored_name, &site, rel)?;
                 }
-                if let Some(parent) = current.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::rename(&restored, &current)?;
+                let current = target_dir.join(rel);
                 if target != slug {
                     chown_tree(&current, Some(target_uid))?;
                 }
@@ -680,9 +746,22 @@ impl Host for SystemHost {
             if let Some(db) = db {
                 let restored = inside(&dump);
                 let file = tokio::fs::File::open(&restored).await.context("lo snapshot non contiene il dump del database")?;
+                // Il database attuale si salva prima di cancellarlo: se l'import fallisce torna com'era.
+                let previous = staging.join("db-prima-del-ripristino.sql");
+                let dump = self.db_dump(&db.name, &[]).await?;
+                let mut out = tokio::fs::File::create(&previous).await?;
+                let mut reader = dump.reader;
+                tokio::io::copy(&mut reader, &mut out).await?;
+                dump.finished.await?;
                 self.drop_database(&db.name, &db.user).await?;
                 self.create_database(db).await?;
-                self.db_import(&db.name, Box::pin(tokio::io::BufReader::new(file))).await?;
+                if let Err(e) = self.db_import(db, Box::pin(tokio::io::BufReader::new(file))).await {
+                    self.drop_database(&db.name, &db.user).await?;
+                    self.create_database(db).await?;
+                    let old = tokio::fs::File::open(&previous).await?;
+                    self.db_import(db, Box::pin(tokio::io::BufReader::new(old))).await.context("ripristino del database di prima")?;
+                    return Err(e.context("import del dump dello snapshot: il database è tornato com'era"));
+                }
             }
             Ok(())
         }
@@ -758,7 +837,8 @@ impl Host for SystemHost {
             set_mode(&dir, 0o700)?;
             let partial = dest.with_extension("partial");
             let mut w = crate::archive::TarGzWriter::new(fs::File::create(&partial)?);
-            w.add_tree_except(&site_dir, &prefix, &[".env"])?;
+            let site = cap_std::fs::Dir::open_ambient_dir(&site_dir, cap_std::ambient_authority())?;
+            w.add_tree_except(&site, Path::new(""), &prefix, &[".env"])?;
             w.add_bytes(&prefix.join(".env.example"), env_example.as_bytes())?;
             w.add_file(&dump2, &prefix.join("database.sql"))?;
             w.add_bytes(&prefix.join("LEGGIMI.txt"), readme.as_bytes())?;
@@ -782,8 +862,9 @@ impl Host for SystemHost {
             let partial = dest.with_extension("partial");
             let _ = fs::remove_dir_all(&partial);
             let result = (|| {
-                copy_site_tree(&site_dir, &partial.join("files"), Path::new(""))?;
-                fs::copy(&sql, partial.join("db.sql")).context("dump del template")?;
+                copy_site_tree(&site_dir, &partial.join("files"))?;
+                // Il dump sta nel tmp del sito: si legge senza seguire link.
+                fs::write(partial.join("db.sql"), read_nofollow(&sql).context("dump del template")?)?;
                 fs::write(partial.join("template.toml"), &toml)?;
                 fs::rename(&partial, &dest)?;
                 Ok(())
@@ -896,7 +977,7 @@ impl Host for SystemHost {
     async fn copy_site_files(&self, from: &Slug, to: &Slug, uid: u32) -> Result<()> {
         let (src, dest) = (self.paths.sites.join(from.as_str()), self.paths.sites.join(to.as_str()));
         tokio::task::spawn_blocking(move || {
-            copy_site_tree(&src, &dest, Path::new(""))?;
+            copy_site_tree(&src, &dest)?;
             chown_tree(&dest, Some(uid))
         })
         .await?
@@ -904,7 +985,7 @@ impl Host for SystemHost {
 
     async fn read_site_env(&self, slug: &Slug) -> Result<Vars> {
         let path = self.paths.sites.join(slug.as_str()).join(".env");
-        Ok(crate::template::parse_env(&fs::read_to_string(&path).context("lettura del .env")?))
+        Ok(crate::template::parse_env(&read_nofollow(&path).context("lettura del .env")?))
     }
 
     async fn write_site_env(&self, slug: &Slug, uid: u32, env: &Vars) -> Result<()> {
@@ -913,13 +994,9 @@ impl Host for SystemHost {
 
     async fn set_site_env(&self, slug: &Slug, uid: u32, key: &str, value: &str) -> Result<()> {
         let path = self.paths.sites.join(slug.as_str()).join(".env");
-        let current = fs::read_to_string(&path).context("lettura del .env")?;
+        let current = read_nofollow(&path).context("lettura del .env")?;
         let updated = crate::database::replace_env_value(&current, key, value)?;
-        let tmp = path.with_extension("new");
-        fs::write(&tmp, updated)?;
-        set_mode(&tmp, 0o400)?;
-        chown(&tmp, Some(uid))?;
-        fs::rename(&tmp, &path).context("sostituzione del .env")
+        replace_site_file(&path, &updated, 0o400, Some(uid))
     }
 
     async fn reopen_fpm_logs(&self) -> Result<()> {
@@ -977,6 +1054,23 @@ mod tests {
     }
 
     #[test]
+    fn site_files_are_never_written_or_read_through_links() {
+        let (t, other) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let victim = other.path().join("index.php");
+        fs::write(&victim, "originale").unwrap();
+        let env = t.path().join(".env");
+        fs::write(&env, "A='1'\n").unwrap();
+        std::os::unix::fs::symlink(&victim, t.path().join(".new")).unwrap();
+        std::os::unix::fs::symlink(&victim, env.with_extension("new")).unwrap();
+        replace_site_file(&env, "A='2'\n", 0o400, None).unwrap();
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "originale", "il link non si segue");
+        assert_eq!(fs::read_to_string(&env).unwrap(), "A='2'\n");
+        let link = t.path().join("link.env");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+        assert!(read_nofollow(&link).is_err(), "lettura attraverso un link rifiutata");
+    }
+
+    #[test]
     fn chunked_bodies_are_reassembled() {
         assert_eq!(dechunk("5\r\nciao \r\n5\r\nmondo\r\n0\r\n\r\n"), "ciao mondo");
         assert_eq!(dechunk("{\"a\":1}"), "{\"a\":1}");
@@ -990,7 +1084,7 @@ mod tests {
         fs::write(src.join(".env"), "DB_PASSWORD='x'").unwrap();
         fs::write(src.join("public/wp-content/a.txt"), "ciao").unwrap();
         std::os::unix::fs::symlink("/etc/passwd", src.join("public/link")).unwrap();
-        copy_site_tree(&src, &dest, Path::new("")).unwrap();
+        copy_site_tree(&src, &dest).unwrap();
         assert_eq!(fs::read_to_string(dest.join("public/wp-content/a.txt")).unwrap(), "ciao");
         assert!(!dest.join(".env").exists());
         assert!(fs::symlink_metadata(dest.join("public/link")).is_err());

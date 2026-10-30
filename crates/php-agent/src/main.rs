@@ -169,21 +169,8 @@ fn deploy(slug: &alveare_core::site::Slug, uid: u32, repo: &str, branch: &str) -
 }
 
 fn deploy_key(slug: &alveare_core::site::Slug, uid: u32) -> Response {
-    let ssh = Path::new(alveare_core::php::TMP_DIR).join(slug.as_str()).join(".ssh");
-    let key = ssh.join("id_ed25519");
-    if !key.exists() {
-        if let Err(e) = fs::create_dir_all(&ssh).and_then(|_| fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700))).and_then(|_| std::os::unix::fs::chown(&ssh, Some(uid), Some(uid))) {
-            return fail(format!("cartella .ssh: {e}"));
-        }
-        let r = exec(plan::plan_deploy_key(slug, uid));
-        if !r.ok {
-            return r;
-        }
-    }
-    match fs::read_to_string(key.with_extension("pub")) {
-        Ok(pubkey) => Response { ok: true, exit_code: Some(0), output: pubkey.trim().to_string() },
-        Err(e) => fail(format!("chiave pubblica: {e}")),
-    }
+    let r = exec(plan::plan_deploy_key(slug, uid));
+    Response { output: r.output.trim().to_string(), ..r }
 }
 
 pub(crate) fn fail(output: impl Into<String>) -> Response {

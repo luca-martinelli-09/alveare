@@ -77,7 +77,8 @@ pub trait Host: Send + Sync + 'static {
     fn db_tables(&self, name: &str) -> impl Future<Output = Result<Vec<TableInfo>>> + Send;
     /// Dump SQL in streaming; `finished` dice se mariadb-dump è arrivato in fondo.
     fn db_dump(&self, name: &str, tables: &[String]) -> impl Future<Output = Result<Dump>> + Send;
-    fn db_import(&self, name: &str, sql: Pin<Box<dyn AsyncRead + Send>>) -> impl Future<Output = Result<()>> + Send;
+    /// Import con l'utente del sito, mai root: un dump è input non fidato.
+    fn db_import(&self, db: &DbCreds, sql: Pin<Box<dyn AsyncRead + Send>>) -> impl Future<Output = Result<()>> + Send;
     fn set_db_password(&self, user: &str, password: &str) -> impl Future<Output = Result<()>> + Send;
     /// Dump del database + cartella del sito in uno snapshot restic.
     fn backup(&self, slug: &Slug, db_name: &str) -> impl Future<Output = Result<Snapshot>> + Send;
@@ -666,7 +667,7 @@ async fn create_steps<H: Host>(c: &Ctx<H>, req: &CreateSite, site: &Site, undo: 
     log.push("pool PHP attivo");
 
     if let Some((sql, fake_domain)) = &installed.sql {
-        c.host.db_import(&db.name, open_sql(sql).await?).await.context("import del dump del template")?;
+        c.host.db_import(&db, open_sql(sql).await?).await.context("import del dump del template")?;
         let args: Vec<String> = ["search-replace", fake_domain, req.domain.as_str(), "--all-tables", "--skip-columns=guid"].map(String::from).to_vec();
         c.host.wp(slug, &args).await?;
         log.push(format!("dump del template importato e portato su {}", req.domain.as_str()));
@@ -707,7 +708,7 @@ pub async fn clone_site<H: Host>(c: &Ctx<H>, src_id: i64, domain: &Domain, log: 
         configure_copy(c, &site, domain, &db, &src_env).await?;
         let src_db = c.db_creds(src_id).await?;
         let dump = c.host.db_dump(&src_db.name, &[]).await?;
-        c.host.db_import(&db.name, dump.reader).await?;
+        c.host.db_import(&db, dump.reader).await?;
         dump.finished.await?;
         log.push("database copiato");
         publish_copy(c, &site, &src_domain, domain, log).await
@@ -771,7 +772,7 @@ async fn import_steps<H: Host>(c: &Ctx<H>, req: &ImportSite, site: &Site, undo: 
         c.host.wp(slug, &["core", "download", "--skip-content", "--locale=it_IT"].map(String::from)).await?;
         log.push("core di WordPress scaricato");
     }
-    c.host.db_import(&db.name, open_sql(&req.dump).await?).await.context("import del dump")?;
+    c.host.db_import(&db, open_sql(&req.dump).await?).await.context("import del dump")?;
     log.push("dump importato");
     if wordpress {
         let home = c.host.wp(slug, &["option", "get", "home"].map(String::from)).await?;
@@ -980,7 +981,7 @@ pub async fn import_database<H: Host>(
     let db = c.db_creds(site_id).await?;
     save_dump(c, &db.name, safety).await.context("dump di sicurezza")?;
     log.push(format!("dump di sicurezza salvato in {}", safety.display()));
-    c.host.db_import(&db.name, sql).await?;
+    c.host.db_import(&db, sql).await?;
     log.push("dump importato");
     if let Some((from, to)) = search_replace {
         let args: Vec<String> = ["search-replace", &from, &to, "--all-tables", "--skip-columns=guid"].map(String::from).to_vec();
@@ -1007,7 +1008,15 @@ pub async fn save_dump<H: Host>(c: &Ctx<H>, db: &str, dest: &std::path::Path) ->
     use async_compression::tokio::write::GzipEncoder;
     use tokio::io::AsyncWriteExt;
     let dump = c.host.db_dump(db, &[]).await?;
-    let file = tokio::fs::File::create(dest).await.with_context(|| format!("creazione di {}", dest.display()))?;
+    // Il file sta nel tmp del sito, che il sito possiede: mai sovrascrivere un link o un file messo lì.
+    let file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(dest)
+        .await
+        .with_context(|| format!("creazione di {}", dest.display()))?;
     let mut gz = GzipEncoder::new(file);
     let mut reader = dump.reader;
     tokio::io::copy(&mut reader, &mut gz).await?;
@@ -1312,7 +1321,7 @@ mod tests {
         create_site(&c, &r, &mut JobLog::default()).await.unwrap();
         let calls = c.host.calls();
         let at = |prefix: &str| calls.iter().position(|x| x.starts_with(prefix)).unwrap_or_else(|| panic!("manca {prefix}: {calls:?}"));
-        assert!(at("sync_php") < at("db_import sona_it -- snapshot"));
+        assert!(at("sync_php") < at("db_import sona_it as sona_it -- snapshot"));
         assert!(at("db_import") < at("wp sona_it search-replace template.local sona.it --all-tables --skip-columns=guid"));
         assert!(at("wp sona_it search-replace") < at("wp sona_it core install"));
         assert_eq!(c.host.env.lock().unwrap()["TABLE_PREFIX"], "pl_");
@@ -1336,7 +1345,7 @@ mod tests {
                 "sync_redis prova_sona_it,sona_it",
                 "sync_php users=prova_sona_it,sona_it pools=prova_sona_it,sona_it",
                 "db_dump sona_it ",
-                "db_import prova_sona_it -- dump finto",
+                "db_import prova_sona_it as prova_sona_it -- dump finto",
                 "wp prova_sona_it search-replace //sona.it //prova.sona.it --all-tables --skip-columns=guid",
                 "sync_caddy prova_sona_it,sona_it",
             ]
@@ -1385,7 +1394,7 @@ mod tests {
                 "sync_redis epops_it",
                 "sync_php users=epops_it pools=epops_it",
                 "wp epops_it core download --skip-content --locale=it_IT",
-                "db_import epops_it -- vecchio dump",
+                "db_import epops_it as epops_it -- vecchio dump",
                 "wp epops_it option get home",
                 "wp epops_it search-replace //vecchio.epops.it //epops.it --all-tables --skip-columns=guid",
                 "sync_caddy epops_it",

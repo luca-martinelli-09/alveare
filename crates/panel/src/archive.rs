@@ -149,9 +149,10 @@ pub fn flatten_single_dir(dir: &Dir) -> Result<bool> {
     Ok(true)
 }
 
-/// File e cartelle sotto `root`, in ordine, senza link simbolici.
-fn walk(root: &Path, rel: &Path, out: &mut Vec<(PathBuf, bool)>) -> Result<()> {
-    let mut entries: Vec<_> = std::fs::read_dir(root.join(rel))?.collect::<std::io::Result<_>>()?;
+/// File e cartelle sotto `rel` di `root`, in ordine, senza link simbolici. Si legge sempre attraverso
+/// la `Dir` (cap-std): un link messo dal sito a metà lavoro non porta fuori dalla sua cartella.
+fn walk(root: &Dir, rel: &Path, out: &mut Vec<(PathBuf, bool)>) -> Result<()> {
+    let mut entries: Vec<_> = if rel.as_os_str().is_empty() { root.entries()? } else { root.read_dir(rel)? }.collect::<std::io::Result<_>>()?;
     entries.sort_by_key(|e| e.file_name());
     for e in entries {
         let ty = e.file_type()?;
@@ -166,12 +167,14 @@ fn walk(root: &Path, rel: &Path, out: &mut Vec<(PathBuf, bool)>) -> Result<()> {
     Ok(())
 }
 
-fn tree(root: &Path) -> Result<Vec<(PathBuf, bool)>> {
+fn tree(root: &Dir, rel: &Path) -> Result<Vec<(PathBuf, bool)>> {
     let mut out = Vec::new();
-    if std::fs::symlink_metadata(root)?.is_dir() {
-        walk(root, Path::new(""), &mut out)?;
-    }
-    Ok(out)
+    walk(root, rel, &mut out)?;
+    Ok(out.into_iter().map(|(p, d)| (p.strip_prefix(rel).map(Path::to_path_buf).unwrap_or(p), d)).collect())
+}
+
+fn is_dir(root: &Dir, rel: &Path) -> Result<bool> {
+    Ok(rel.as_os_str().is_empty() || root.symlink_metadata(rel)?.is_dir())
 }
 
 pub struct TarGzWriter {
@@ -185,26 +188,44 @@ impl TarGzWriter {
         Self { b }
     }
 
-    /// Aggiunge `src` come `prefix/...`; `skip` esclude percorsi relativi a `src` (es. il `.env`).
-    pub fn add_tree_except(&mut self, src: &Path, prefix: &Path, skip: &[&str]) -> Result<()> {
-        for (rel, is_dir) in tree(src)? {
-            if skip.iter().any(|s| rel.starts_with(s)) {
+    /// Aggiunge `rel` di `root` come `prefix/...`; `skip` esclude percorsi relativi a `rel` (es. il `.env`).
+    pub fn add_tree_except(&mut self, root: &Dir, rel: &Path, prefix: &Path, skip: &[&str]) -> Result<()> {
+        if !is_dir(root, rel)? {
+            return self.add_entry(root, rel, prefix);
+        }
+        for (child, is_dir) in tree(root, rel)? {
+            if skip.iter().any(|s| child.starts_with(s)) {
                 continue;
             }
-            let name = prefix.join(&rel);
+            let name = prefix.join(&child);
             if is_dir {
-                self.b.append_dir(&name, src.join(&rel))?;
+                let mut h = tar::Header::new_gnu();
+                h.set_entry_type(tar::EntryType::Directory);
+                h.set_mode(0o755);
+                h.set_size(0);
+                h.set_mtime(chrono::Utc::now().timestamp().max(0) as u64);
+                self.b.append_data(&mut h, &name, std::io::empty())?;
             } else {
-                self.b.append_path_with_name(src.join(&rel), &name)?;
+                self.add_entry(root, &rel.join(&child), &name)?;
             }
         }
         Ok(())
     }
 
-    pub fn add_tree(&mut self, src: &Path, prefix: &Path) -> Result<()> {
-        self.add_tree_except(src, prefix, &[])
+    pub fn add_tree(&mut self, root: &Dir, rel: &Path, prefix: &Path) -> Result<()> {
+        self.add_tree_except(root, rel, prefix, &[])
     }
 
+    fn add_entry(&mut self, root: &Dir, rel: &Path, name: &Path) -> Result<()> {
+        let f = root.open(rel)?.into_std();
+        let meta = f.metadata()?;
+        let mut h = tar::Header::new_gnu();
+        h.set_metadata(&meta);
+        self.b.append_data(&mut h, name, f)?;
+        Ok(())
+    }
+
+    /// Un file del pannello (dump, ecc.), non del sito.
     pub fn add_file(&mut self, src: &Path, name: &Path) -> Result<()> {
         self.b.append_path_with_name(src, name)?;
         Ok(())
@@ -235,26 +256,25 @@ impl ZipWriter {
         Self { z: zip::ZipWriter::new(out) }
     }
 
-    pub fn add_tree(&mut self, src: &Path, prefix: &Path) -> Result<()> {
+    pub fn add_tree(&mut self, root: &Dir, rel: &Path, prefix: &Path) -> Result<()> {
         let opts = zip::write::SimpleFileOptions::default();
-        let meta = std::fs::symlink_metadata(src)?;
-        if meta.is_file() {
-            return self.add_file(src, prefix);
+        if !is_dir(root, rel)? {
+            return self.add_file(root, rel, prefix);
         }
         self.z.add_directory(format!("{}/", prefix.display()), opts)?;
-        for (rel, is_dir) in tree(src)? {
-            let name = prefix.join(&rel);
+        for (child, is_dir) in tree(root, rel)? {
+            let name = prefix.join(&child);
             if is_dir {
                 self.z.add_directory(format!("{}/", name.display()), opts)?;
             } else {
-                self.add_file(&src.join(&rel), &name)?;
+                self.add_file(root, &rel.join(&child), &name)?;
             }
         }
         Ok(())
     }
 
-    fn add_file(&mut self, src: &Path, name: &Path) -> Result<()> {
-        let mut f = std::fs::File::open(src)?;
+    fn add_file(&mut self, root: &Dir, rel: &Path, name: &Path) -> Result<()> {
+        let mut f = root.open(rel)?.into_std();
         let big = f.metadata()?.len() > u32::MAX as u64;
         let opts = zip::write::SimpleFileOptions::default().large_file(big);
         self.z.start_file(name.to_string_lossy(), opts)?;
@@ -345,7 +365,7 @@ mod tests {
         std::os::unix::fs::symlink("/etc/passwd", src.path().join("public/passwd")).unwrap();
         let out = tempfile::NamedTempFile::new().unwrap();
         let mut w = TarGzWriter::new(out.reopen().unwrap());
-        w.add_tree(src.path(), Path::new("sito")).unwrap();
+        w.add_tree(&dir(&src), Path::new(""), Path::new("sito")).unwrap();
         w.add_bytes(Path::new("LEGGIMI.txt"), b"leggi").unwrap();
         w.finish().unwrap();
         let t = tempfile::tempdir().unwrap();
@@ -363,11 +383,26 @@ mod tests {
         std::fs::write(src.path().join("tema/css/a.css"), b"a{}").unwrap();
         let out = tempfile::NamedTempFile::new().unwrap();
         let mut w = ZipWriter::new(out.reopen().unwrap());
-        w.add_tree(&src.path().join("tema"), Path::new("tema")).unwrap();
+        w.add_tree(&dir(&src), Path::new("tema"), Path::new("tema")).unwrap();
         w.finish().unwrap();
         let t = tempfile::tempdir().unwrap();
         extract(std::fs::File::open(out.path()).unwrap(), Kind::Zip, &dir(&t), None, u64::MAX).unwrap();
         assert_eq!(std::fs::read(t.path().join("tema/css/a.css")).unwrap(), b"a{}");
+    }
+
+    #[test]
+    fn archives_never_follow_links_out_of_the_site() {
+        let (outside, src) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(outside.path().join("segreto.txt"), "chiave").unwrap();
+        std::os::unix::fs::symlink(outside.path(), src.path().join("altro")).unwrap();
+        std::fs::write(src.path().join("a.txt"), "a").unwrap();
+        let out = tempfile::NamedTempFile::new().unwrap();
+        let mut w = ZipWriter::new(out.reopen().unwrap());
+        assert!(w.add_tree(&dir(&src), Path::new("altro/segreto.txt"), Path::new("x")).is_err(), "un link verso fuori non si apre");
+        w.add_tree(&dir(&src), Path::new(""), Path::new("sito")).unwrap();
+        w.finish().unwrap();
+        let names: Vec<String> = zip::ZipArchive::new(std::fs::File::open(out.path()).unwrap()).unwrap().file_names().map(|n| n.unwrap().to_string()).collect();
+        assert!(names.iter().all(|n| !n.contains("segreto")), "{names:?}");
     }
 
     #[test]
