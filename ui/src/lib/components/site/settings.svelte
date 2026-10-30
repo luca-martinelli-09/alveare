@@ -12,7 +12,6 @@
 	import { session } from '$lib/session.svelte';
 	import { toast } from 'svelte-sonner';
 	import type { SiteDetail } from './types';
-	import EmailCard from './email-card.svelte';
 	import EnvEditor from './env-editor.svelte';
 
 	let { detail, onchange }: { detail: SiteDetail; onchange: () => void } = $props();
@@ -147,7 +146,6 @@
 		</SettingsSection>
 	{/if}
 
-	<EmailCard id={detail.site.id} />
 	{#if session.user?.is_admin}<EnvEditor id={detail.site.id} />{/if}
 
 	<SettingsSection title="IP bloccati">
