@@ -683,6 +683,18 @@ impl Store {
         self.crons(Some(site)).await?.into_iter().find(|c| c.id == id).ok_or(StoreError::NotFound)
     }
 
+    pub async fn update_cron(&self, id: i64, expression: &str, kind: &str, command: &str, timeout_s: u32) -> Result<()> {
+        sqlx::query("UPDATE cron_jobs SET expression = ?, kind = ?, command = ?, timeout_s = ? WHERE id = ?")
+            .bind(expression)
+            .bind(kind)
+            .bind(command)
+            .bind(timeout_s)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_cron_active(&self, id: i64, active: bool) -> Result<()> {
         sqlx::query("UPDATE cron_jobs SET active = ? WHERE id = ?").bind(active).bind(id).execute(&self.pool).await?;
         Ok(())

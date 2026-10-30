@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { askConfirm } from '$lib/ask.svelte';
+	import { askConfirm, askText } from '$lib/ask.svelte';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import * as Breadcrumb from '$lib/components/ui/breadcrumb';
@@ -18,6 +19,19 @@
 	$effect(() => {
 		api.get<Template[]>('/api/templates').then((all) => (template = all.find((t) => t.id === id) ?? null));
 	});
+
+	// Cambia solo il titolo mostrato; la cartella (templates/<id>) resta la stessa.
+	async function rename() {
+		const name = await askText({ title: 'Rinomina il template', description: `La cartella resta templates/${id}.`, label: 'Titolo', value: template?.name ?? '', confirmLabel: 'Rinomina' });
+		if (!name || name === template?.name) return;
+		try {
+			await api.patch(`/api/templates/${id}`, { name });
+			if (template) template = { ...template, name: name.trim() };
+			toast.success('Template rinominato');
+		} catch (e) {
+			toast.error(errorMessage(e));
+		}
+	}
 
 	async function remove() {
 		try {
@@ -44,7 +58,10 @@
 
 <header class="-mt-2 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
 	<div class="flex min-w-0 flex-col gap-1">
-		<h1 class="truncate text-2xl font-semibold tracking-tight">{template?.name ?? id}</h1>
+		<div class="flex min-w-0 items-center gap-1">
+			<h1 class="truncate text-2xl font-semibold tracking-tight">{template?.name ?? id}</h1>
+			<Button variant="ghost" size="icon-sm" aria-label="Rinomina il template" title="Rinomina" onclick={rename}><PencilIcon /></Button>
+		</div>
 		<p class="text-muted-foreground text-sm">
 			<span class="font-mono">templates/{id}</span> · {template?.snapshot ? 'copia di un sito: file e database' : 'installazione: file e comandi'} ·
 			<code class="text-foreground">template.toml</code> descrive il template, <code class="text-foreground">files/</code> diventa la cartella del sito.

@@ -21,6 +21,16 @@
 	let crons = $state<{ cron: Cron; last: Run | null }[]>([]);
 	let creating = $state(false);
 	let form = $state({ expression: '*/15 * * * *', kind: 'wp', command: '', timeout_s: 600 });
+	// Stesso dialogo per un cron nuovo e per uno da modificare (id).
+	let editing = $state<number | null>(null);
+
+	function openNew() {
+		[editing, form, creating] = [null, { expression: '*/15 * * * *', kind: 'wp', command: '', timeout_s: 600 }, true];
+	}
+
+	function openEdit(c: Cron) {
+		[editing, form, creating] = [c.id, { expression: c.expression, kind: c.kind, command: c.command, timeout_s: c.timeout_s }, true];
+	}
 	let job = $state<number | null>(null);
 	let history = $state<{ cron: Cron; runs: Run[] } | null>(null);
 	const kinds = { wp: 'WP-CLI', artisan: 'artisan', php: 'Script PHP', http: 'Pagina (HTTP)' };
@@ -37,7 +47,9 @@
 	async function create(e: SubmitEvent) {
 		e.preventDefault();
 		try {
-			await api.post(`/api/sites/${id}/cron`, form);
+			if (editing === null) await api.post(`/api/sites/${id}/cron`, form);
+			else await api.put(`/api/sites/${id}/cron/${editing}`, form);
+			toast.success(editing === null ? 'Cron creato' : 'Cron aggiornato');
 			creating = false;
 			form.command = '';
 			await load();
@@ -93,6 +105,7 @@
 										<DropdownMenu.Group>
 											<DropdownMenu.Item onclick={() => showRuns(cron)}>Ultime esecuzioni</DropdownMenu.Item>
 											{#if canManage}
+												<DropdownMenu.Item onclick={() => openEdit(cron)}>Modifica</DropdownMenu.Item>
 												<DropdownMenu.Item onclick={() => act(async () => (job = (await api.post<{ job: number }>(`/api/sites/${id}/cron/${cron.id}/run`)).job))}>Esegui ora</DropdownMenu.Item>
 												<DropdownMenu.Item onclick={() => act(() => api.patch(`/api/sites/${id}/cron/${cron.id}`, { active: !cron.active }))}>
 													{cron.active ? 'Metti in pausa' : 'Riattiva'}
@@ -111,14 +124,14 @@
 			</Table.Root>
 		</Card.Content>
 		{#if canManage}
-			<Card.Footer><Button onclick={() => (creating = true)}>Nuovo cron</Button></Card.Footer>
+			<Card.Footer><Button onclick={openNew}>Nuovo cron</Button></Card.Footer>
 		{/if}
 	</Card.Root>
 </div>
 
 <Dialog.Root bind:open={creating}>
 	<Dialog.Content>
-		<Dialog.Header><Dialog.Title>Nuovo cron</Dialog.Title></Dialog.Header>
+		<Dialog.Header><Dialog.Title>{editing === null ? 'Nuovo cron' : 'Modifica cron'}</Dialog.Title></Dialog.Header>
 		<form onsubmit={create}>
 			<Field.FieldGroup>
 				<Field.Field>
@@ -147,7 +160,7 @@
 					<Field.FieldLabel for="cron-timeout">Timeout (secondi)</Field.FieldLabel>
 					<Input id="cron-timeout" type="number" min="1" max="3600" bind:value={form.timeout_s} />
 				</Field.Field>
-				<Dialog.Footer><Button variant="primary" type="submit">Crea</Button></Dialog.Footer>
+				<Dialog.Footer><Button variant="primary" type="submit">{editing === null ? 'Crea' : 'Salva'}</Button></Dialog.Footer>
 			</Field.FieldGroup>
 		</form>
 	</Dialog.Content>

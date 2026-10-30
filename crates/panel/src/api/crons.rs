@@ -7,7 +7,7 @@ use crate::crons::{parse_expression, prepare, CronKind};
 pub(super) fn routes<H: Host>() -> Router<App<H>> {
     Router::new()
         .route("/api/sites/{id}/cron", get(list::<H>).post(create::<H>))
-        .route("/api/sites/{id}/cron/{cid}", patch(update::<H>).delete(remove::<H>))
+        .route("/api/sites/{id}/cron/{cid}", patch(update::<H>).put(edit::<H>).delete(remove::<H>))
         .route("/api/sites/{id}/cron/{cid}/run", post(run_now::<H>))
         .route("/api/sites/{id}/cron/{cid}/runs", get(runs::<H>))
 }
@@ -46,10 +46,8 @@ fn default_timeout() -> u32 {
     600
 }
 
-async fn create<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(r): Json<NewCron>) -> ApiResult<Response> {
-    let user = caller(&app, &m, &h).await?;
-    app.ctx.store.site(id).await?;
-    require_site(&app, &user, id, Need::Manage).await?;
+/// Stesse regole per un cron nuovo e per uno modificato.
+async fn check<H>(app: &App<H>, id: i64, r: &NewCron) -> ApiResult<()> {
     parse_expression(&r.expression).map_err(ApiError::bad_request)?;
     let max = if r.kind == CronKind::Wp { 600 } else { 3600 };
     if !(1..=max).contains(&r.timeout_s) {
@@ -57,6 +55,14 @@ async fn create<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Meth
     }
     let domains: Vec<Domain> = app.ctx.store.domains(id).await?.into_iter().map(|(d, _)| d).collect();
     prepare(r.kind, &r.command, &domains).map_err(ApiError::bad_request)?;
+    Ok(())
+}
+
+async fn create<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(r): Json<NewCron>) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    app.ctx.store.site(id).await?;
+    require_site(&app, &user, id, Need::Manage).await?;
+    check(&app, id, &r).await?;
     let cid = app.ctx.store.add_cron(id, r.expression.trim(), r.kind.as_str(), r.command.trim(), r.timeout_s).await?;
     app.auth.audit(Some(user.id), "cron.create", Some(id), &format!("{} {}: {}", r.expression.trim(), r.kind.as_str(), r.command.trim())).await?;
     Ok((StatusCode::CREATED, Json(json!({ "id": cid }))).into_response())
@@ -76,6 +82,17 @@ async fn update<H: Host>(State(app): State<App<H>>, Path((id, cid)): Path<(i64, 
         app.ctx.store.resolve_alerts(id, &format!("cron-{cid}")).await?;
     }
     app.auth.audit(Some(user.id), if r.active { "cron.resume" } else { "cron.pause" }, Some(id), &cron.command).await?;
+    Ok(Json(json!({})).into_response())
+}
+
+/// Espressione, tipo, comando e timeout; resta attivo o in pausa com'era.
+async fn edit<H: Host>(State(app): State<App<H>>, Path((id, cid)): Path<(i64, i64)>, m: Method, h: HeaderMap, Json(r): Json<NewCron>) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_site(&app, &user, id, Need::Manage).await?;
+    site_cron(&app, id, cid).await?;
+    check(&app, id, &r).await?;
+    app.ctx.store.update_cron(cid, r.expression.trim(), r.kind.as_str(), r.command.trim(), r.timeout_s).await?;
+    app.auth.audit(Some(user.id), "cron.update", Some(id), &format!("{} {}: {}", r.expression.trim(), r.kind.as_str(), r.command.trim())).await?;
     Ok(Json(json!({})).into_response())
 }
 
@@ -163,6 +180,18 @@ mod tests {
         assert_eq!(s, StatusCode::NOT_FOUND);
         let (s, _, _) = call(&t, req("GET", &format!("{url}/{cid}/runs"), Some(&reader), None)).await;
         assert_eq!(s, StatusCode::FORBIDDEN);
+        // Modifica: stesse regole della creazione.
+        let edited = json!({"expression": "0 3 * * *", "kind": "wp", "command": "cache flush --quiet", "timeout_s": 120});
+        let (s, _, _) = call(&t, req("PUT", &format!("{url}/{cid}"), Some(&reader), Some(edited.clone()))).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, _, _) = call(&t, req("PUT", &format!("{url}/{cid}"), Some(&manager), Some(json!({"expression": "mai", "kind": "wp", "command": "x"})))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let (s, _, _) = call(&t, req("PUT", &format!("/api/sites/{other}/cron/{cid}"), Some(&admin), Some(edited.clone()))).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "non passando da un altro sito");
+        let (s, body, _) = call(&t, req("PUT", &format!("{url}/{cid}"), Some(&manager), Some(edited))).await;
+        assert_eq!(s, StatusCode::OK, "{body}");
+        let c = t.app.ctx.store.cron(cid).await.unwrap();
+        assert_eq!((c.expression.as_str(), c.command.as_str(), c.timeout_s, c.active), ("0 3 * * *", "cache flush --quiet", 120, false), "resta in pausa com'era");
         let (_, runs, _) = call(&t, req("GET", &format!("{url}/{cid}/runs"), Some(&manager), None)).await;
         assert_eq!(runs.as_array().unwrap().len(), 1);
     }

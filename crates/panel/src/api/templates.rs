@@ -11,7 +11,7 @@ use crate::template::{Manifest, Template};
 pub(super) fn routes<H: Host>() -> Router<App<H>> {
     Router::new()
         .route("/api/templates", get(list::<H>).post(create::<H>))
-        .route("/api/templates/{name}", delete(remove::<H>))
+        .route("/api/templates/{name}", delete(remove::<H>).patch(rename::<H>))
         .route("/api/templates/{name}/files", get(list_files::<H>))
         .route("/api/templates/{name}/files/content", get(read_file::<H>).put(write_file::<H>).layer(DefaultBodyLimit::max(EDITOR_LIMIT as usize + 1024)))
         .route("/api/templates/{name}/files/download", get(download_file::<H>))
@@ -80,6 +80,28 @@ fn rename_manifest(text: &str, name: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
         + "\n"
+}
+
+#[derive(Deserialize)]
+struct Rename {
+    name: String,
+}
+
+/// Cambia il titolo nel template.toml, lasciando il resto (commenti compresi) com'è.
+async fn rename<H: Host>(State(app): State<App<H>>, Path(name): Path<String>, m: Method, h: HeaderMap, Json(r): Json<Rename>) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_admin(&user)?;
+    let title = r.name.trim();
+    if title.is_empty() || title.chars().count() > 100 || title.chars().any(char::is_control) {
+        return Err(ApiError::bad_request("titolo non valido"));
+    }
+    let path = template_dir(&app, &name)?.join("template.toml");
+    let text = std::fs::read_to_string(&path).map_err(|_| ApiError::new(StatusCode::NOT_FOUND, "template non trovato"))?;
+    let renamed = rename_manifest(&text, title);
+    toml::from_str::<Manifest>(&renamed).map_err(|e| ApiError::bad_request(format!("template.toml non valido: {}", e.message())))?;
+    std::fs::write(&path, renamed).map_err(internal)?;
+    app.auth.audit(Some(user.id), "template.rename", None, &format!("{name}: {title}")).await?;
+    Ok(Json(json!({})).into_response())
 }
 
 async fn create<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap, Json(r): Json<NewTemplate>) -> ApiResult<Response> {
@@ -180,6 +202,31 @@ mod tests {
         let (_, list, _) = call(&t, req("GET", "/api/templates", Some(&admin), None)).await;
         assert_eq!(list.as_array().unwrap().len(), 2, "le cartelle nascoste (cestino, tmp) non sono template");
         let (s, _, _) = call(&t, req("DELETE", "/api/templates/vetrina", Some(&admin), None)).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_template_title_changes_and_the_rest_of_the_manifest_stays() {
+        let t = setup().await;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let (_, plain) = token_for(&t, "u@example.org", false).await;
+        call(&t, req("POST", "/api/templates", Some(&admin), Some(json!({"id": "vetrina", "name": "Vetrina", "kind": "php"})))).await;
+        let manifest = t.app.templates.join("vetrina/template.toml");
+        std::fs::write(&manifest, "# commento da tenere\nname = \"Vetrina\"\nkind = \"php\"\n").unwrap();
+        let (s, _, _) = call(&t, req("PATCH", "/api/templates/vetrina", Some(&plain), Some(json!({"name": "X"})))).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        for bad in [json!({"name": "  "}), json!({"name": "a\nb"})] {
+            let (s, _, _) = call(&t, req("PATCH", "/api/templates/vetrina", Some(&admin), Some(bad.clone()))).await;
+            assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}");
+        }
+        let (s, _, _) = call(&t, req("PATCH", "/api/templates/vetrina", Some(&admin), Some(json!({"name": "Vetrina \"Pro\" 2026"})))).await;
+        assert_eq!(s, StatusCode::OK);
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        assert!(text.starts_with("# commento da tenere\n") && text.ends_with("kind = \"php\"\n"), "{text}");
+        assert_eq!(toml::from_str::<crate::template::Manifest>(&text).unwrap().name, "Vetrina \"Pro\" 2026");
+        let (_, list, _) = call(&t, req("GET", "/api/templates", Some(&admin), None)).await;
+        assert!(list.as_array().unwrap().iter().any(|t| t["name"] == "Vetrina \"Pro\" 2026"));
+        let (s, _, _) = call(&t, req("PATCH", "/api/templates/nessuno", Some(&admin), Some(json!({"name": "X"})))).await;
         assert_eq!(s, StatusCode::NOT_FOUND);
     }
 
