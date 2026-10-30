@@ -14,6 +14,7 @@
 	import { api, errorMessage, formatBytes } from '$lib/api';
 	import { uploadTo } from '$lib/upload';
 	import { toast } from 'svelte-sonner';
+	import { cn } from '$lib/utils';
 	import FolderIcon from '@lucide/svelte/icons/folder';
 	import FileIcon from '@lucide/svelte/icons/file';
 	import UploadIcon from '@lucide/svelte/icons/upload';
@@ -81,9 +82,53 @@
 		try {
 			await api.post(`${base}/files/ops`, body);
 			await load();
+			return true;
 		} catch (e) {
 			toast.error(errorMessage(e));
+			return false;
 		}
+	}
+
+	// Trascina e rilascia: una riga su una cartella, o su un pezzo del percorso in alto, la sposta lì.
+	// Da tastiera e da telefono resta "Rinomina o sposta" nel menu della riga.
+	let dragging = $state<string | null>(null);
+	let over = $state<string | null>(null);
+	const parentOf = (p: string) => p.slice(0, Math.max(p.lastIndexOf('/'), 0));
+	const canDrop = (dir: string) => dragging !== null && dir !== dragging && !dir.startsWith(`${dragging}/`) && parentOf(dragging) !== dir;
+
+	function dropTarget(dir: string) {
+		return {
+			'data-drop': over === dir ? 'true' : undefined,
+			ondragover: (ev: DragEvent) => {
+				if (!canDrop(dir)) return;
+				ev.preventDefault();
+				if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
+				over = dir;
+			},
+			ondragleave: () => {
+				if (over === dir) over = null;
+			},
+			ondrop: async (ev: DragEvent) => {
+				ev.preventDefault();
+				const from = dragging;
+				dragging = over = null;
+				if (!from) return;
+				const name = from.slice(from.lastIndexOf('/') + 1);
+				if (await op({ op: 'rename', path: from, to: dir ? `${dir}/${name}` : name })) toast.success(`${name} spostato in ${dir || 'radice'}`);
+			}
+		};
+	}
+
+	function dragSource(path: string) {
+		return {
+			draggable: true,
+			ondragstart: (ev: DragEvent) => {
+				dragging = path;
+				ev.dataTransfer?.setData('text/plain', path);
+				if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
+			},
+			ondragend: () => (dragging = over = null)
+		};
 	}
 
 	async function rename(e: Entry) {
@@ -141,7 +186,7 @@
 			<Breadcrumb.List class="gap-1 sm:gap-1">
 				<Breadcrumb.Item>
 					{#if crumbs.length}
-						<button type="button" class="hover:text-foreground flex items-center rounded p-1" aria-label="Radice del sito" onclick={() => (path = '')}><HouseIcon class="size-4" /></button>
+						<button type="button" class="hover:text-foreground data-[drop=true]:bg-accent data-[drop=true]:text-foreground flex items-center rounded p-1" aria-label="Radice del sito" onclick={() => (path = '')} {...dropTarget('')}><HouseIcon class="size-4" /></button>
 					{:else}
 						<span class="text-foreground flex items-center p-1" aria-current="page"><HouseIcon class="size-4" /><span class="sr-only">Radice del sito</span></span>
 					{/if}
@@ -152,7 +197,7 @@
 						{#if i === crumbs.length - 1}
 							<Breadcrumb.Page class="font-mono text-[13px]">{crumb}</Breadcrumb.Page>
 						{:else}
-							<button type="button" class="hover:text-foreground font-mono text-[13px]" onclick={() => (path = crumbs.slice(0, i + 1).join('/'))}>{crumb}</button>
+							<button type="button" class="hover:text-foreground data-[drop=true]:bg-accent data-[drop=true]:text-foreground rounded px-1 font-mono text-[13px]" onclick={() => (path = crumbs.slice(0, i + 1).join('/'))} {...dropTarget(crumbs.slice(0, i + 1).join('/'))}>{crumb}</button>
 						{/if}
 					</Breadcrumb.Item>
 				{/each}
@@ -201,7 +246,11 @@
 		</Table.Header>
 		<Table.Body>
 			{#each entries as e (e.name)}
-				<Table.Row>
+				<Table.Row
+					class={cn('data-[drop=true]:bg-accent', dragging === join(e.name) && 'opacity-50')}
+					{...dragSource(join(e.name))}
+					{...e.is_dir ? dropTarget(join(e.name)) : {}}
+				>
 					<Table.Cell>
 						<button class="flex items-center gap-2 text-left hover:underline" onclick={() => open(e)}>
 							{#if e.is_dir}<FolderIcon />{:else}<FileIcon />{/if}
