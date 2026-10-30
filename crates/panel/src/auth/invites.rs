@@ -39,6 +39,12 @@ impl Auth {
         Ok((id, self.new_link(id, "invite", INVITE_SECS, now).await?))
     }
 
+    /// Stato di ogni utente (invited, active, blocked), per l'elenco degli admin.
+    pub async fn statuses(&self) -> Result<std::collections::HashMap<i64, String>> {
+        let rows = sqlx::query("SELECT id, status FROM users").fetch_all(&self.pool).await?;
+        Ok(rows.iter().map(|r| (r.get("id"), r.get("status"))).collect())
+    }
+
     /// Solo per annullare un invito che non è partito.
     pub async fn delete_user(&self, id: i64) -> Result<()> {
         sqlx::query("DELETE FROM users WHERE id = ? AND status = 'invited'").bind(id).execute(&self.pool).await?;

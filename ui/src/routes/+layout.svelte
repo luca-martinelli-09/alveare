@@ -14,7 +14,8 @@
 
 	let { children }: LayoutProps = $props();
 
-	const isLogin = $derived(page.url.pathname.startsWith('/login'));
+	// Pagine raggiungibili senza sessione completa: login, invito, reset della password.
+	const isLogin = $derived(['/login', '/invito', '/reset'].some((p) => page.url.pathname.startsWith(p)));
 
 	$effect(() => {
 		if (!session.loaded) {

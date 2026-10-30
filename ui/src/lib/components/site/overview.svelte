@@ -17,6 +17,16 @@
 	let { detail, onchange }: { detail: SiteDetail; onchange: () => void } = $props();
 	let deleting = $state<number | null>(null);
 
+	let wpAdmin = $state<{ user: string; password: string } | null>(null);
+
+	async function revealWpAdmin() {
+		try {
+			wpAdmin = await api.post<{ user: string; password: string }>(`/api/sites/${detail.site.id}/wp-admin`);
+		} catch (e) {
+			toast.error(errorMessage(e));
+		}
+	}
+
 	async function remove() {
 		try {
 			deleting = (await api.del<{ job: number }>(`/api/sites/${detail.site.id}`)).job;
@@ -27,6 +37,22 @@
 </script>
 
 <div class="grid gap-4 pt-4 md:grid-cols-2">
+	{#if detail.wp_admin_pending}
+		<Card.Root class="md:col-span-2">
+			<Card.Header>
+				<Card.Title>Accesso a WordPress</Card.Title>
+				<Card.Description>La password dell'utente admin si mostra una volta sola, entro 24 ore dalla creazione. Poi c'è "Password dimenticata" di WordPress.</Card.Description>
+			</Card.Header>
+			<Card.Content>
+				{#if wpAdmin}
+					<p class="text-sm">Utente <code>{wpAdmin.user}</code>, password <code class="select-all">{wpAdmin.password}</code></p>
+				{/if}
+			</Card.Content>
+			{#if !wpAdmin}
+				<Card.Footer><Button variant="outline" onclick={revealWpAdmin}>Mostra la password (una volta)</Button></Card.Footer>
+			{/if}
+		</Card.Root>
+	{/if}
 	<DomainsCard {detail} {onchange} />
 	<MonitorCard id={detail.site.id} />
 	{#if detail.can_manage}

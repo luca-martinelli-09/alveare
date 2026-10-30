@@ -8,16 +8,19 @@
 	import { session } from '$lib/session.svelte';
 	import { toast } from 'svelte-sonner';
 	import DownloadIcon from '@lucide/svelte/icons/download';
+	import SecurityCards from '$lib/components/app/security-cards.svelte';
 
 	let name = $state('');
 	let days = $state(90);
 	let token = $state<string | null>(null);
+	let refresh = $state(0);
 
 	async function createToken(e: SubmitEvent) {
 		e.preventDefault();
 		try {
 			token = (await api.post<{ token: string }>('/api/me/tokens', { name, days: Number(days) })).token;
 			name = '';
+			refresh++;
 		} catch (err) {
 			toast.error(errorMessage(err));
 		}
@@ -70,4 +73,5 @@
 			</Card.Footer>
 		</Card.Root>
 	{/if}
+	<SecurityCards {refresh} />
 </div>

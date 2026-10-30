@@ -9,6 +9,8 @@
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { api, errorMessage, type Stage } from '$lib/api';
 	import { session, loadSession } from '$lib/session.svelte';
+	import { passkeysSupported, usePasskey } from '$lib/passkey';
+	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 
 	let stage = $state<Stage | null>(null);
 	let email = $state('');
@@ -18,6 +20,12 @@
 	let totp = $state<{ secret: string; otpauth_url: string; qr: string } | null>(null);
 	let error = $state('');
 	let busy = $state(false);
+	let options = $state({ email: false, passkeys: false });
+	let resetSent = $state(false);
+
+	$effect(() => {
+		api.get<typeof options>('/api/auth/options').then((o) => (options = o)).catch(() => {});
+	});
 
 	$effect(() => {
 		if (session.loaded && session.stage && stage === null) stage = session.stage;
@@ -40,6 +48,23 @@
 		run(async () => {
 			const r = await api.post<{ stage: Stage }>('/api/auth/login', { email, password });
 			stage = r.stage;
+		});
+
+	const withPasskey = () =>
+		run(async () => {
+			if (!email) throw new Error("Scrivi l'email, poi usa la passkey.");
+			const start = await api.post<{ id: string; options: unknown }>('/api/auth/passkey/start', { email });
+			const credential = await usePasskey(start.options);
+			await api.post('/api/auth/passkey/finish', { id: start.id, credential });
+			await loadSession();
+			stage = 'full';
+		});
+
+	const forgot = () =>
+		run(async () => {
+			if (!email) throw new Error("Scrivi l'email dell'account.");
+			await api.post('/api/auth/reset', { email });
+			resetSent = true;
 		});
 
 	const setPassword = () =>
@@ -88,12 +113,25 @@
 						</Field.Field>
 						<Field.Field>
 							<Field.FieldLabel for="password">Password</Field.FieldLabel>
-							<Input id="password" type="password" autocomplete="current-password" bind:value={password} required />
+							<Input id="password" type="password" autocomplete="current-password" bind:value={password} />
 						</Field.Field>
 						<Button type="submit" disabled={busy}>
 							{#if busy}<Spinner data-icon="inline-start" />{/if}
 							Accedi
 						</Button>
+						{#if options.passkeys && passkeysSupported()}
+							<Button type="button" variant="outline" disabled={busy} onclick={withPasskey}>
+								<KeyRoundIcon data-icon="inline-start" />
+								Accedi con una passkey
+							</Button>
+						{/if}
+						{#if options.email}
+							{#if resetSent}
+								<Field.FieldDescription>Se l'email è registrata, è partito un link per scegliere una nuova password.</Field.FieldDescription>
+							{:else}
+								<Button type="button" variant="link" size="sm" disabled={busy} onclick={forgot}>Password dimenticata?</Button>
+							{/if}
+						{/if}
 					</Field.FieldGroup>
 				</form>
 			{:else if stage === 'setup' && !totp}

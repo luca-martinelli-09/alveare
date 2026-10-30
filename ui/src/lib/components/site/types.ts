@@ -12,4 +12,5 @@ export type SiteDetail = {
 	domains: { hostname: string; kind: 'primary' | 'alias' | 'redirect' }[];
 	can_manage: boolean;
 	staging: { user: string; password: string } | null;
+	wp_admin_pending?: boolean;
 };

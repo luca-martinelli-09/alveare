@@ -394,7 +394,20 @@ async fn create_token<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMa
 
 async fn list_users<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     require_admin(&caller(&app, &m, &h).await?)?;
-    Ok(Json(app.auth.users().await?).into_response())
+    let statuses = app.auth.statuses().await?;
+    let users: Vec<_> = app
+        .auth
+        .users()
+        .await?
+        .into_iter()
+        .map(|u| {
+            let status = statuses.get(&u.id).cloned().unwrap_or_default();
+            let mut v = serde_json::to_value(u).unwrap_or_default();
+            v["status"] = json!(status);
+            v
+        })
+        .collect();
+    Ok(Json(users).into_response())
 }
 
 #[derive(Deserialize)]

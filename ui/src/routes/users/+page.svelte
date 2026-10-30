@@ -20,7 +20,9 @@
 	let email = $state('');
 	let name = $state('');
 	let isAdmin = $state(false);
-	let created = $state<{ email: string; password: string } | null>(null);
+	let invite = $state(true);
+	let canInvite = $state(false);
+	let created = $state<{ email: string; password: string | null } | null>(null);
 	let editing = $state<User | null>(null);
 	let assignments = $state<Assignment[]>([]);
 
@@ -30,13 +32,23 @@
 
 	$effect(() => {
 		load();
+		api.get<{ email: boolean }>('/api/auth/options').then((o) => (canInvite = o.email));
 	});
+
+	async function reinvite(u: User) {
+		try {
+			await api.post(`/api/users/${u.id}/invite`);
+			toast.success(`Nuovo invito mandato a ${u.email}`);
+		} catch (e) {
+			toast.error(errorMessage(e));
+		}
+	}
 
 	async function create(e: SubmitEvent) {
 		e.preventDefault();
 		try {
-			const r = await api.post<{ temporary_password: string }>('/api/users', { email, name, is_admin: isAdmin });
-			created = { email, password: r.temporary_password };
+			const r = await api.post<{ temporary_password?: string }>('/api/users', { email, name, is_admin: isAdmin, invite: canInvite && invite });
+			created = { email, password: r.temporary_password ?? null };
 			email = name = '';
 			isAdmin = false;
 			await load();
@@ -79,7 +91,12 @@
 				<Dialog.Title>Nuovo utente</Dialog.Title>
 				<Dialog.Description>Al primo accesso cambierà la password e attiverà il TOTP.</Dialog.Description>
 			</Dialog.Header>
-			{#if created}
+			{#if created && created.password === null}
+				<Alert.Root>
+					<Alert.Title>Invito mandato a {created.email}</Alert.Title>
+					<Alert.Description>Il link vale 72 ore: password e TOTP li sceglie chi lo riceve.</Alert.Description>
+				</Alert.Root>
+			{:else if created}
 				<Alert.Root>
 					<Alert.Title>Password temporanea per {created.email}</Alert.Title>
 					<Alert.Description>
@@ -98,6 +115,12 @@
 							<Field.FieldLabel for="name">Nome</Field.FieldLabel>
 							<Input id="name" bind:value={name} required />
 						</Field.Field>
+						{#if canInvite}
+							<Field.Field orientation="horizontal">
+								<Checkbox id="invite" bind:checked={invite} />
+								<Field.FieldLabel for="invite">Invita via email (altrimenti password temporanea)</Field.FieldLabel>
+							</Field.Field>
+						{/if}
 						<Field.Field orientation="horizontal">
 							<Checkbox id="admin" bind:checked={isAdmin} />
 							<Field.FieldLabel for="admin">Amministratore (tutti i siti e le impostazioni)</Field.FieldLabel>
@@ -124,8 +147,13 @@
 			<Table.Row>
 				<Table.Cell class="font-medium">{u.name}</Table.Cell>
 				<Table.Cell>{u.email}</Table.Cell>
-				<Table.Cell>{#if u.is_admin}<Badge>Admin</Badge>{:else}<Badge variant="outline">Per sito</Badge>{/if}</Table.Cell>
+				<Table.Cell>
+					{#if u.is_admin}<Badge>Admin</Badge>{:else}<Badge variant="outline">Per sito</Badge>{/if}
+					{#if u.status === 'invited'}<Badge variant="secondary">invitato</Badge>{/if}
+					{#if u.status === 'blocked'}<Badge variant="destructive">bloccato</Badge>{/if}
+				</Table.Cell>
 				<Table.Cell class="text-right">
+					{#if u.status === 'invited' && canInvite}<Button variant="ghost" size="sm" onclick={() => reinvite(u)}>Reinvia invito</Button>{/if}
 					{#if !u.is_admin}<Button variant="outline" size="sm" onclick={() => edit(u)}>Siti</Button>{/if}
 				</Table.Cell>
 			</Table.Row>
