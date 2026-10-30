@@ -150,11 +150,17 @@ fn user_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<User> {
 pub struct Auth {
     pub(crate) pool: SqlitePool,
     key: SecretKey,
+    /// ALVEARE_TOTP=false: basta la password (le passkey restano).
+    pub(crate) totp_required: bool,
 }
 
 impl Auth {
     pub fn new(pool: SqlitePool, key: SecretKey) -> Self {
-        Self { pool, key }
+        Self { pool, key, totp_required: true }
+    }
+
+    pub fn without_totp(self) -> Self {
+        Self { totp_required: false, ..self }
     }
 
     /// Restituisce l'id e la password temporanea, da cambiare al primo accesso.
@@ -266,7 +272,13 @@ impl Auth {
             return Err(AuthError::Invalid);
         };
         self.clear_failures(&keys).await?;
-        let stage = if r.get::<bool, _>("must_change_password") || !r.get::<bool, _>("has_totp") { Stage::Setup } else { Stage::Totp };
+        let stage = if r.get::<bool, _>("must_change_password") || (self.totp_required && !r.get::<bool, _>("has_totp")) {
+            Stage::Setup
+        } else if self.totp_required {
+            Stage::Totp
+        } else {
+            Stage::Full
+        };
         let token = Alphanumeric.sample_string(&mut rand::rng(), 48);
         sqlx::query("INSERT INTO sessions (id, user_id, stage, created_at, last_used, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?)")
             .bind(sha256_hex(&token))
@@ -306,11 +318,21 @@ impl Auth {
         self.session(token, now).await.filter(|s| s.stage == stage).ok_or(AuthError::WrongStage)
     }
 
-    /// Primo accesso: nuova password e segreto TOTP da confermare.
-    pub async fn setup_password(&self, token: &str, new_password: &str, now: i64) -> Result<TotpSetup> {
+    /// Primo accesso: nuova password e segreto TOTP da confermare (None se il TOTP è spento:
+    /// la sessione è già completa).
+    pub async fn setup_password(&self, token: &str, new_password: &str, now: i64) -> Result<Option<TotpSetup>> {
         let s = self.session_in(token, Stage::Setup, now).await?;
         if new_password.chars().count() < MIN_PASSWORD {
             return Err(AuthError::WeakPassword);
+        }
+        if !self.totp_required {
+            sqlx::query("UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?")
+                .bind(hash_password(new_password)?)
+                .bind(s.user.id)
+                .execute(&self.pool)
+                .await?;
+            self.set_stage(token, Stage::Full).await?;
+            return Ok(None);
         }
         let secret = Secret::generate().to_base32();
         sqlx::query("UPDATE users SET password_hash = ?, totp_pending_enc = ? WHERE id = ?")
@@ -320,7 +342,7 @@ impl Auth {
             .execute(&self.pool)
             .await?;
         let otpauth_url = totp(&secret, &s.user.email)?.to_url().map_err(|e| AuthError::Internal(format!("{e:?}")))?;
-        Ok(TotpSetup { secret, otpauth_url })
+        Ok(Some(TotpSetup { secret, otpauth_url }))
     }
 
     pub async fn confirm_totp(&self, token: &str, code: &str, ip: &str, now: i64) -> Result<()> {
@@ -509,7 +531,7 @@ mod tests {
         let (id, temp) = a.create_user(email, "Prova", admin).await.unwrap();
         let (tok, stage) = a.login(email, &temp, "1.1.1.1", "ua", T0).await.unwrap();
         assert_eq!(stage, Stage::Setup);
-        let secret = a.setup_password(&tok, "una-password-lunga", T0).await.unwrap().secret;
+        let secret = a.setup_password(&tok, "una-password-lunga", T0).await.unwrap().unwrap().secret;
         a.confirm_totp(&tok, &code(&secret, T0), "1.1.1.1", T0).await.unwrap();
         (id, secret)
     }
@@ -523,6 +545,19 @@ mod tests {
         assert_eq!(a.session(&tok, T0 + 40).await.unwrap().stage, Stage::Totp);
         a.verify_totp(&tok, &code(&secret, T0 + 40), "1.1.1.1", T0 + 40).await.unwrap();
         assert_eq!(a.session(&tok, T0 + 40).await.unwrap().stage, Stage::Full);
+    }
+
+    #[tokio::test]
+    async fn without_totp_password_is_enough() {
+        let a = auth().await.without_totp();
+        let (_, temp) = a.create_user("a@example.org", "A", false).await.unwrap();
+        let (tok, stage) = a.login("a@example.org", &temp, "1.1.1.1", "ua", T0).await.unwrap();
+        assert_eq!(stage, Stage::Setup, "la password temporanea va comunque cambiata");
+        assert!(a.setup_password(&tok, "una-password-lunga", T0).await.unwrap().is_none());
+        assert_eq!(a.session(&tok, T0).await.unwrap().stage, Stage::Full);
+        let (tok, stage) = a.login("a@example.org", "una-password-lunga", "1.1.1.1", "ua", T0 + 1).await.unwrap();
+        assert_eq!(stage, Stage::Full);
+        assert_eq!(a.session(&tok, T0 + 1).await.unwrap().stage, Stage::Full);
     }
 
     #[tokio::test]

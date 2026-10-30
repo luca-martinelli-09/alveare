@@ -11,6 +11,10 @@
 
 	let password = $state('');
 	let code = $state('');
+	let totp = $state(true);
+	$effect(() => {
+		api.get<{ totp: boolean }>('/api/auth/options').then((o) => (totp = o.totp)).catch(() => {});
+	});
 	let error = $state('');
 	let busy = $state(false);
 
@@ -36,7 +40,7 @@
 	<Card.Root class="w-full max-w-sm">
 		<Card.Header>
 			<Card.Title>Nuova password</Card.Title>
-			<Card.Description>Scegli la nuova password e conferma con il codice dell'app di autenticazione.</Card.Description>
+			<Card.Description>Scegli la nuova password{totp ? " e conferma con il codice dell'app di autenticazione" : ''}.</Card.Description>
 		</Card.Header>
 		<Card.Content>
 			<form onsubmit={submit}>
@@ -47,10 +51,12 @@
 						<Input id="pw" type="password" autocomplete="new-password" minlength={12} bind:value={password} required />
 						<Field.FieldDescription>Almeno 12 caratteri.</Field.FieldDescription>
 					</Field.Field>
-					<Field.Field>
-						<Field.FieldLabel for="code">Codice TOTP</Field.FieldLabel>
-						<Input id="code" inputmode="numeric" autocomplete="one-time-code" bind:value={code} />
-					</Field.Field>
+					{#if totp}
+						<Field.Field>
+							<Field.FieldLabel for="code">Codice TOTP</Field.FieldLabel>
+							<Input id="code" inputmode="numeric" autocomplete="one-time-code" bind:value={code} />
+						</Field.Field>
+					{/if}
 					<Button type="submit" disabled={busy}>Salva e accedi</Button>
 				</Field.FieldGroup>
 			</form>

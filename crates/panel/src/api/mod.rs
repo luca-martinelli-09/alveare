@@ -356,7 +356,10 @@ struct PasswordReq {
 
 async fn setup_password<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap, Json(r): Json<PasswordReq>) -> ApiResult<Response> {
     let token = pending_token(&m, &h).await?;
-    Ok(Json(app.auth.setup_password(&token, &r.password, now()).await?).into_response())
+    Ok(match app.auth.setup_password(&token, &r.password, now()).await? {
+        Some(setup) => Json(setup).into_response(),
+        None => Json(json!({ "stage": Stage::Full })).into_response(),
+    })
 }
 
 #[derive(Deserialize)]
@@ -465,8 +468,9 @@ async fn create_user<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap
 }
 
 async fn send_invite<H>(app: &App<H>, base: &str, email: &str, token: &str) -> ApiResult<()> {
+    let what = if app.auth.totp_required { "scegliere la password e attivare il secondo fattore (TOTP)" } else { "scegliere la password" };
     let body = format!(
-        "Ciao,\n\nsei stato invitato nel pannello Alveare. Apri questo link entro 72 ore per scegliere la password e attivare il secondo fattore (TOTP):\n\n{base}/invito#{token}\n\nSe non aspettavi questo invito, ignora l'email.\n"
+        "Ciao,\n\nsei stato invitato nel pannello Alveare. Apri questo link entro 72 ore per {what}:\n\n{base}/invito#{token}\n\nSe non aspettavi questo invito, ignora l'email.\n"
     );
     app.mailer.send(email, "Invito al pannello Alveare", &body).await.map_err(|e| {
         tracing::error!("invio dell'invito a {email}: {e:#}");
@@ -508,8 +512,9 @@ struct ResetReq {
 async fn request_reset<H: Host>(State(app): State<App<H>>, Json(r): Json<ResetReq>) -> ApiResult<Response> {
     let base = app.email_links().ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "reset via email non configurato: chiedi a un admin"))?.to_string();
     if let Some((email, token)) = app.auth.reset_link(&r.email, now()).await? {
+        let code = if app.auth.totp_required { " Ti servirà anche il codice dell'app TOTP." } else { "" };
         let body = format!(
-            "Ciao,\n\nper scegliere una nuova password del pannello Alveare apri questo link entro un'ora. Ti servirà anche il codice dell'app TOTP.\n\n{base}/reset#{token}\n\nSe non hai chiesto tu il reset, ignora l'email: la password resta quella di prima.\n"
+            "Ciao,\n\nper scegliere una nuova password del pannello Alveare apri questo link entro un'ora.{code}\n\n{base}/reset#{token}\n\nSe non hai chiesto tu il reset, ignora l'email: la password resta quella di prima.\n"
         );
         if let Err(e) = app.mailer.send(&email, "Nuova password del pannello Alveare", &body).await {
             tracing::error!("invio del reset a {email}: {e:#}");
@@ -534,7 +539,7 @@ async fn confirm_reset<H: Host>(State(app): State<App<H>>, h: HeaderMap, Json(r)
 }
 
 async fn auth_options<H: Host>(State(app): State<App<H>>) -> ApiResult<Response> {
-    Ok(Json(json!({ "email": app.email_links().is_some(), "passkeys": app.passkeys.is_some() })).into_response())
+    Ok(Json(json!({ "email": app.email_links().is_some(), "passkeys": app.passkeys.is_some(), "totp": app.auth.totp_required })).into_response())
 }
 
 #[derive(Deserialize)]

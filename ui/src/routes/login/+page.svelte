@@ -47,6 +47,7 @@
 	const login = () =>
 		run(async () => {
 			const r = await api.post<{ stage: Stage }>('/api/auth/login', { email, password });
+			if (r.stage === 'full') await loadSession();
 			stage = r.stage;
 		});
 
@@ -69,7 +70,13 @@
 
 	const setPassword = () =>
 		run(async () => {
-			const r = await api.post<{ secret: string; otpauth_url: string }>('/api/auth/setup', { password: newPassword });
+			const r = await api.post<{ secret: string; otpauth_url: string } | { stage: 'full' }>('/api/auth/setup', { password: newPassword });
+			// Con ALVEARE_TOTP=false la password basta: la sessione è già completa.
+			if ('stage' in r) {
+				await loadSession();
+				stage = 'full';
+				return;
+			}
 			totp = { ...r, qr: await QRCode.toDataURL(r.otpauth_url, { margin: 1, width: 200 }) };
 		});
 

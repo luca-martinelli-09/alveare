@@ -19,6 +19,8 @@ pub struct Config {
     pub adminer_host: Option<Domain>,
     pub admin_email: Option<String>,
     pub secure_cookie: bool,
+    /// Secondo fattore TOTP obbligatorio (ALVEARE_TOTP=false per spegnerlo).
+    pub totp: bool,
     pub site_env: Vars,
     /// restic legge da solo RESTIC_REPOSITORY, RESTIC_PASSWORD e AWS_* dall'ambiente.
     pub restic_repository: Option<String>,
@@ -109,6 +111,11 @@ impl Config {
             Some("1") | Some("true") => false,
             Some(other) => bail!("ALVEARE_INSECURE_COOKIE: valore non valido {other}"),
         };
+        let totp = match get("ALVEARE_TOTP").as_deref() {
+            None | Some("1") | Some("true") => true,
+            Some("0") | Some("false") => false,
+            Some(other) => bail!("ALVEARE_TOTP: valore non valido {other}"),
+        };
         Ok(Self {
             listen: get("ALVEARE_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".into()),
             key,
@@ -121,6 +128,7 @@ impl Config {
             adminer_host,
             admin_email: get("ALVEARE_ADMIN_EMAIL"),
             secure_cookie,
+            totp,
             restic_repository,
             recovery,
             telegram,
@@ -158,6 +166,13 @@ mod tests {
         assert_eq!(c.mysql_url, "mysql://root:root@mariadb:3306/mysql");
         assert!(c.panel_host.is_none());
         assert!(c.secure_cookie);
+    }
+
+    #[test]
+    fn totp_is_on_unless_disabled() {
+        assert!(Config::from_vars(vars(&[])).unwrap().totp);
+        assert!(!Config::from_vars(vars(&[("ALVEARE_TOTP", "false")])).unwrap().totp);
+        assert!(Config::from_vars(vars(&[("ALVEARE_TOTP", "boh")])).is_err());
     }
 
     #[test]

@@ -123,6 +123,7 @@ impl Auth {
         let user = self.user(user_id).await?;
         let secret: Option<Vec<u8>> = sqlx::query_scalar("SELECT totp_secret_enc FROM users WHERE id = ?").bind(user_id).fetch_one(&self.pool).await?;
         let stage = match secret {
+            _ if !self.totp_required => Stage::Full,
             Some(enc) => {
                 let secret = self.key.decrypt(&enc).map_err(|e| AuthError::Internal(e.to_string()))?;
                 // Un codice sbagliato non consuma il link: si può riprovare (con il blocco dopo 5 errori).
@@ -151,6 +152,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn without_totp_reset_needs_no_code() {
+        let a = auth().await.without_totp();
+        let (_, temp) = a.create_user("a@x.it", "A", false).await.unwrap();
+        let (s, _) = a.login("a@x.it", &temp, "1.1.1.1", "x", 100).await.unwrap();
+        a.setup_password(&s, "una-password-lunga", 100).await.unwrap();
+        let (_, token) = a.reset_link("a@x.it", 1000).await.unwrap().unwrap();
+        let (_, stage) = a.reset_password(&token, "nuova-password-lunga", "", "1.1.1.1", "x", 1000).await.unwrap();
+        assert_eq!(stage, Stage::Full);
+    }
+
+    #[tokio::test]
     async fn invite_link_opens_first_access_once_and_expires() {
         let a = auth().await;
         let (id, token) = a.create_invited_user("nuovo@x.it", "Nuovo", false, 1000).await.unwrap();
@@ -168,7 +180,7 @@ mod tests {
         let a = auth().await;
         let (id, temp) = a.create_user("a@x.it", "A", false).await.unwrap();
         let (s, _) = a.login("a@x.it", &temp, "1.1.1.1", "x", 100).await.unwrap();
-        let setup = a.setup_password(&s, "una-password-lunga", 100).await.unwrap();
+        let setup = a.setup_password(&s, "una-password-lunga", 100).await.unwrap().unwrap();
         let code = |t: i64| super::super::totp(&setup.secret, "a@x.it").unwrap().generate(t as u64).to_string();
         a.confirm_totp(&s, &code(100), "1.1.1.1", 100).await.unwrap();
         let (_, link) = a.reset_link("a@x.it", 1000).await.unwrap().unwrap();

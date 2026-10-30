@@ -26,7 +26,7 @@ docker compose logs panel | grep "password temporanea"
 Poi:
 
 1. Nel tunnel Cloudflare, punta l'hostname di `ALVEARE_PANEL_HOST` (e di `ALVEARE_ADMINER_HOST`) a `http://caddy:80`, protetti da Cloudflare Access.
-2. Accedi con l'email dell'admin e la password temporanea: al primo accesso cambi la password e attivi il TOTP. Dal profilo puoi aggiungere una passkey.
+2. Accedi con l'email dell'admin e la password temporanea: al primo accesso cambi la password e attivi il TOTP (salvo `ALVEARE_TOTP=false` nel `.env`). Dal profilo puoi aggiungere una passkey.
 3. **Scarica il kit di ripristino** (Account → Kit di ripristino) e conservalo fuori dal server.
 4. Crea un sito. Con un account Cloudflare configurato (`CLOUDFLARE_<ETICHETTA>_*`) l'hostname va da solo sul tunnel con il suo CNAME; senza, aggiungilo a mano verso `http://caddy:80`.
 

@@ -22,6 +22,7 @@
 	let isAdmin = $state(false);
 	let invite = $state(true);
 	let canInvite = $state(false);
+	let totp = $state(true);
 	let created = $state<{ email: string; password: string | null } | null>(null);
 	let editing = $state<User | null>(null);
 	let assignments = $state<Assignment[]>([]);
@@ -32,7 +33,7 @@
 
 	$effect(() => {
 		load();
-		api.get<{ email: boolean }>('/api/auth/options').then((o) => (canInvite = o.email));
+		api.get<{ email: boolean; totp: boolean }>('/api/auth/options').then((o) => ((canInvite = o.email), (totp = o.totp)));
 	});
 
 	async function reinvite(u: User) {
@@ -89,12 +90,12 @@
 		<Dialog.Content>
 			<Dialog.Header>
 				<Dialog.Title>Nuovo utente</Dialog.Title>
-				<Dialog.Description>Al primo accesso cambierà la password e attiverà il TOTP.</Dialog.Description>
+				<Dialog.Description>Al primo accesso cambierà la password{totp ? ' e attiverà il TOTP' : ''}.</Dialog.Description>
 			</Dialog.Header>
 			{#if created && created.password === null}
 				<Alert.Root>
 					<Alert.Title>Invito mandato a {created.email}</Alert.Title>
-					<Alert.Description>Il link vale 72 ore: password e TOTP li sceglie chi lo riceve.</Alert.Description>
+					<Alert.Description>Il link vale 72 ore: {totp ? 'password e TOTP li sceglie' : 'la password la sceglie'} chi lo riceve.</Alert.Description>
 				</Alert.Root>
 			{:else if created}
 				<Alert.Root>

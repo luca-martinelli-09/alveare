@@ -64,6 +64,7 @@ async fn main() -> Result<()> {
     }
     let store = Store::open(&panel_dir.join("panel.db")).await?;
     let auth = Auth::new(store.pool().clone(), cfg.key.clone());
+    let auth = if cfg.totp { auth } else { auth.without_totp() };
     bootstrap_admin(&auth, cfg.admin_email.as_deref()).await?;
     write_state_to_disk(&store, &paths, &cfg).await?;
 
