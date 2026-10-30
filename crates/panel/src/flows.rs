@@ -61,6 +61,10 @@ pub trait Host: Send + Sync + 'static {
     fn sync_redis(&self, users: &[RedisUser]) -> impl Future<Output = Result<()>> + Send;
     /// Token monouso per aprire Adminer già autenticato su questo database.
     fn adminer_grant(&self, db: &DbCreds) -> impl Future<Output = Result<String>> + Send;
+    /// Copia i file di un sito in un altro (tranne `.env` e link), assegnandoli al nuovo utente.
+    fn copy_site_files(&self, from: &Slug, to: &Slug, uid: u32) -> impl Future<Output = Result<()>> + Send;
+    fn read_site_env(&self, slug: &Slug) -> impl Future<Output = Result<Vars>> + Send;
+    fn write_site_env(&self, slug: &Slug, uid: u32, env: &Vars) -> impl Future<Output = Result<()>> + Send;
     /// Riscrive una chiave del .env del sito.
     fn set_site_env(&self, slug: &Slug, uid: u32, key: &str, value: &str) -> impl Future<Output = Result<()>> + Send;
 }
@@ -212,14 +216,7 @@ pub async fn create_site<H: Host>(c: &Ctx<H>, req: &CreateSite, log: &mut JobLog
 
 async fn create_steps<H: Host>(c: &Ctx<H>, req: &CreateSite, site: &Site, undo: &mut Vec<Undo>, log: &mut JobLog) -> Result<()> {
     let slug = &site.slug;
-    let db = DbCreds { name: slug.as_str().into(), user: slug.as_str().into(), password: random_password() };
-    c.store.save_db_creds(site.id, &db.name, &db.user, &c.key.encrypt(&db.password)).await?;
-    c.host.create_database(&db).await?;
-    undo.push(Undo::Database { name: db.name.clone(), user: db.user.clone() });
-    log.push("database e utente creati");
-
-    c.host.create_site_dirs(slug, site.uid()).await?;
-    undo.push(Undo::Dirs(slug.clone()));
+    let db = new_database(c, site, undo, log).await?;
     let redis_password = random_password();
     c.store.save_redis_password(site.id, &c.key.encrypt(&redis_password)).await?;
     let (vars, env) = site_vars(c, req, site, &db, &redis_password);
@@ -229,11 +226,7 @@ async fn create_steps<H: Host>(c: &Ctx<H>, req: &CreateSite, site: &Site, undo: 
     c.sync_redis().await?;
     log.push("utente Redis creato");
 
-    let rejected = c.sync_php().await?;
-    let own = format!("{}.conf", slug.as_str());
-    if rejected.contains(&own) {
-        bail!("il pool PHP del sito non è valido");
-    }
+    check_own_pool(c, site).await?;
     log.push("pool PHP attivo");
 
     if let Some((sql, fake_domain)) = &installed.sql {
@@ -254,6 +247,88 @@ async fn create_steps<H: Host>(c: &Ctx<H>, req: &CreateSite, site: &Site, undo: 
     c.store.set_status(site.id, SiteStatus::Active).await?;
     c.sync_caddy().await?;
     log.push(format!("sito attivo: aggiungi {} al tunnel Cloudflare verso http://caddy:80", req.domain.as_str()));
+    Ok(())
+}
+
+/// Copia un sito su un nuovo dominio: file, database e `wp search-replace` del dominio.
+/// La copia nasce protetta come staging, con `WP_ENVIRONMENT_TYPE=staging`.
+pub async fn clone_site<H: Host>(c: &Ctx<H>, src_id: i64, domain: &Domain, log: &mut JobLog) -> Result<Site> {
+    let src = c.store.site(src_id).await?;
+    if !matches!(src.status, SiteStatus::Active | SiteStatus::Suspended) {
+        bail!("si clona solo un sito attivo o sospeso");
+    }
+    let src_domain = c.store.domains(src_id).await?.into_iter().next().map(|(d, _)| d).context("sito senza dominio")?;
+    let src_env = c.host.read_site_env(&src.slug).await?;
+    let site = c.store.create_site(&NewSite { primary: domain.clone(), kind: src.kind, template: src.template.clone() }).await?;
+    log.push(format!("sito {} registrato come copia di {}", site.slug.as_str(), src.slug.as_str()));
+    let mut undo = vec![Undo::Row(site.id)];
+    let req = CreateSite {
+        domain: domain.clone(),
+        kind: src.kind,
+        template: src.template.clone(),
+        title: src_env.get("SMTP_FROM_NAME").cloned().unwrap_or_else(|| domain.as_str().into()),
+        admin_email: String::new(),
+        table_prefix: src_env.get("TABLE_PREFIX").cloned().unwrap_or_else(|| "wp_".into()),
+    };
+    let steps = async {
+        let db = new_database(c, &site, &mut undo, log).await?;
+        c.host.copy_site_files(&src.slug, &site.slug, site.uid()).await?;
+        log.push("file copiati");
+        let redis_password = random_password();
+        c.store.save_redis_password(site.id, &c.key.encrypt(&redis_password)).await?;
+        let (_, mut env) = site_vars(c, &req, &site, &db, &redis_password);
+        env.insert("WP_ENVIRONMENT_TYPE".into(), "staging".into());
+        if let Some(rule) = src_env.get("ALVEARE_UPDATE_RULE") {
+            env.insert("ALVEARE_UPDATE_RULE".into(), rule.clone());
+        }
+        c.host.write_site_env(&site.slug, site.uid(), &env).await?;
+        c.sync_redis().await?;
+        check_own_pool(c, &site).await?;
+        let src_db = c.db_creds(src_id).await?;
+        let dump = c.host.db_dump(&src_db.name, &[]).await?;
+        c.host.db_import(&db.name, dump.reader).await?;
+        dump.finished.await?;
+        log.push("database copiato");
+        let (from, to) = (format!("//{}", src_domain.as_str()), format!("//{}", domain.as_str()));
+        let args: Vec<String> = ["search-replace", &from, &to, "--all-tables", "--skip-columns=guid"].map(String::from).to_vec();
+        c.host.wp(&site.slug, &args).await?;
+        log.push(format!("search-replace {from} → {to}"));
+        let password = random_password();
+        c.store.set_staging(site.id, Some((&c.key.encrypt(&password), &bcrypt::hash(&password, bcrypt::DEFAULT_COST)?))).await?;
+        c.store.set_status(site.id, SiteStatus::Active).await?;
+        c.sync_caddy().await?;
+        log.push(format!("copia attiva e protetta (utente staging): aggiungi {} al tunnel Cloudflare", domain.as_str()));
+        Ok::<_, anyhow::Error>(())
+    };
+    match steps.await {
+        Ok(()) => Ok(c.store.site(site.id).await?),
+        Err(e) => {
+            log.push(format!("errore: {e:#}"));
+            rollback(c, undo, log).await;
+            Err(e)
+        }
+    }
+}
+
+/// Database e cartelle di un sito appena registrato, con i passi per annullarli.
+async fn new_database<H: Host>(c: &Ctx<H>, site: &Site, undo: &mut Vec<Undo>, log: &mut JobLog) -> Result<DbCreds> {
+    let slug = &site.slug;
+    let db = DbCreds { name: slug.as_str().into(), user: slug.as_str().into(), password: random_password() };
+    c.store.save_db_creds(site.id, &db.name, &db.user, &c.key.encrypt(&db.password)).await?;
+    c.host.create_database(&db).await?;
+    undo.push(Undo::Database { name: db.name.clone(), user: db.user.clone() });
+    log.push("database e utente creati");
+    c.host.create_site_dirs(slug, site.uid()).await?;
+    undo.push(Undo::Dirs(slug.clone()));
+    Ok(db)
+}
+
+/// Rigenera i pool e fallisce se quello del sito è stato rifiutato.
+async fn check_own_pool<H: Host>(c: &Ctx<H>, site: &Site) -> Result<()> {
+    let rejected = c.sync_php().await?;
+    if rejected.contains(&format!("{}.conf", site.slug.as_str())) {
+        bail!("il pool PHP del sito non è valido");
+    }
     Ok(())
 }
 
@@ -526,6 +601,48 @@ mod tests {
         assert!(at("db_import") < at("wp sona_it search-replace template.local sona.it --all-tables --skip-columns=guid"));
         assert!(at("wp sona_it search-replace") < at("wp sona_it core install"));
         assert_eq!(c.host.env.lock().unwrap()["TABLE_PREFIX"], "pl_");
+    }
+
+    #[tokio::test]
+    async fn clone_copies_files_and_database_then_protects_the_copy() {
+        let c = ctx(FakeHost::default()).await;
+        let src = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        c.host.env.lock().unwrap().insert("TABLE_PREFIX".into(), "pl_".into());
+        c.host.calls.lock().unwrap().clear();
+        let copy = clone_site(&c, src.id, &Domain::parse("prova.sona.it").unwrap(), &mut JobLog::default()).await.unwrap();
+        assert_eq!(
+            c.host.calls(),
+            [
+                "read_site_env sona_it",
+                "create_database prova_sona_it",
+                "create_site_dirs prova_sona_it",
+                "copy_site_files sona_it prova_sona_it",
+                "write_site_env prova_sona_it",
+                "sync_redis prova_sona_it,sona_it",
+                "sync_php users=prova_sona_it,sona_it pools=prova_sona_it,sona_it",
+                "db_dump sona_it ",
+                "db_import prova_sona_it -- dump finto",
+                "wp prova_sona_it search-replace //sona.it //prova.sona.it --all-tables --skip-columns=guid",
+                "sync_caddy prova_sona_it,sona_it",
+            ]
+        );
+        let copy = c.store.site(copy.id).await.unwrap();
+        assert_eq!((copy.status, copy.staging, copy.kind), (SiteStatus::Active, true, SiteKind::Wordpress));
+        let env = c.host.env.lock().unwrap().clone();
+        assert_eq!(env["TABLE_PREFIX"], "pl_", "stesso prefisso della sorgente");
+        assert_eq!(env["WP_HOME"], "https://prova.sona.it");
+        assert_eq!(env["WP_ENVIRONMENT_TYPE"], "staging");
+        assert_eq!(env["DB_NAME"], "prova_sona_it");
+    }
+
+    #[tokio::test]
+    async fn failed_clone_leaves_the_source_untouched_and_rolls_back() {
+        let c = ctx(FakeHost::failing("db_import")).await;
+        let src = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        assert!(clone_site(&c, src.id, &Domain::parse("prova.sona.it").unwrap(), &mut JobLog::default()).await.is_err());
+        let ops = c.host.ops();
+        assert!(ops.ends_with(&["remove_site_dirs", "drop_database", "sync_php", "sync_redis", "sync_caddy"].map(String::from)), "{ops:?}");
+        assert_eq!(c.store.sites().await.unwrap().len(), 1);
     }
 
     #[tokio::test]

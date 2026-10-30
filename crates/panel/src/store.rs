@@ -266,6 +266,10 @@ impl Store {
         Ok(())
     }
 
+    pub async fn hostname_taken(&self, hostname: &Domain) -> Result<bool> {
+        Ok(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM domains WHERE hostname = ?").bind(hostname.as_str()).fetch_one(&self.pool).await? > 0)
+    }
+
     pub async fn domains(&self, site_id: i64) -> Result<Vec<(Domain, DomainKind)>> {
         let rows = sqlx::query("SELECT hostname, kind FROM domains WHERE site_id = ? ORDER BY kind = 'primary' DESC, hostname")
             .bind(site_id)

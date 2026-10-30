@@ -137,6 +137,22 @@ pub fn env_file(vars: &Vars) -> Result<String> {
         .collect()
 }
 
+/// Legge un `.env` scritto da `env_file` (o a mano): `KEY='v'`, `KEY="v"` o `KEY=v`.
+pub fn parse_env(text: &str) -> Vars {
+    text.lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .filter_map(|l| l.split_once('='))
+        .map(|(k, v)| {
+            let v = v.trim();
+            let unquoted = [('\'', '\''), ('"', '"')]
+                .iter()
+                .find_map(|(a, b)| v.strip_prefix(*a).and_then(|x| x.strip_suffix(*b)))
+                .unwrap_or(v);
+            (k.trim().to_string(), unquoted.to_string())
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +236,13 @@ post_create = [["option", "update", "home", "https://{{DOMAIN}}"]]
     fn env_file_single_quotes_every_value() {
         // Apici singoli: phpdotenv non espande `$` né interpreta `\\`.
         assert_eq!(env_file(&vars()).unwrap(), "DB_NAME='sona_it'\nDOMAIN='sona.it'\n");
+    }
+
+    #[test]
+    fn env_file_parses_back_to_the_same_values() {
+        let v = Vars::from([("A".to_string(), "x y".to_string()), ("B".to_string(), String::new())]);
+        assert_eq!(parse_env(&env_file(&v).unwrap()), v);
+        assert_eq!(parse_env("# commento\nC=nudo\nD=\"doppi\"\n\n"), Vars::from([("C".into(), "nudo".into()), ("D".into(), "doppi".into())]));
     }
 
     #[test]

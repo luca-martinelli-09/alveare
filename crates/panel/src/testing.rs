@@ -125,6 +125,17 @@ impl Host for FakeHost {
         self.env.lock().unwrap().insert("DB_PASSWORD".into(), password.into());
         self.record("set_db_password", user.to_string())
     }
+    async fn copy_site_files(&self, from: &Slug, to: &Slug, _uid: u32) -> anyhow::Result<()> {
+        self.record("copy_site_files", format!("{} {}", from.as_str(), to.as_str()))
+    }
+    async fn read_site_env(&self, slug: &Slug) -> anyhow::Result<Vars> {
+        self.record("read_site_env", slug.as_str().into())?;
+        Ok(self.env.lock().unwrap().clone())
+    }
+    async fn write_site_env(&self, slug: &Slug, _uid: u32, env: &Vars) -> anyhow::Result<()> {
+        *self.env.lock().unwrap() = env.clone();
+        self.record("write_site_env", slug.as_str().into())
+    }
     async fn set_site_env(&self, slug: &Slug, _uid: u32, key: &str, value: &str) -> anyhow::Result<()> {
         self.env.lock().unwrap().insert(format!("SITE_ENV {key}"), value.into());
         self.record("set_site_env", format!("{} {key}", slug.as_str()))

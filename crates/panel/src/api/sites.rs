@@ -7,6 +7,7 @@ use crate::store::DomainKind;
 pub(super) fn routes<H: Host>() -> Router<App<H>> {
     Router::new()
         .route("/api/sites/{id}", patch(update_site::<H>))
+        .route("/api/sites/{id}/clone", post(clone_site::<H>))
         .route("/api/sites/{id}/domains", get(list_domains::<H>).post(add_domain::<H>))
         .route("/api/sites/{id}/domains/{hostname}", delete(remove_domain::<H>))
 }
@@ -35,6 +36,39 @@ async fn update_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m:
     }
     let site = app.ctx.store.site(id).await?;
     Ok(Json(json!({ "site": site, "staging": staging_json(flows::staging_password(&app.ctx, id).await?) })).into_response())
+}
+
+/// Dominio nuovo per un sito: valido, non riservato, non già usato.
+async fn free_domain<H: Host>(app: &App<H>, raw: &str) -> ApiResult<Domain> {
+    let domain = Domain::parse(raw).map_err(|_| ApiError::bad_request("dominio non valido"))?;
+    app.check_not_reserved(&domain)?;
+    if app.ctx.store.hostname_taken(&domain).await? {
+        return Err(StoreError::HostnameTaken(domain.as_str().into()).into());
+    }
+    Ok(domain)
+}
+
+#[derive(Deserialize)]
+struct CloneReq {
+    domain: String,
+}
+
+async fn clone_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(r): Json<CloneReq>) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_admin(&user)?;
+    let src = app.ctx.store.site(id).await?;
+    let domain = free_domain(&app, &r.domain).await?;
+    let (ctx, auth, jobs, uid) = (app.ctx.clone(), app.auth.clone(), app.jobs.clone(), user.id);
+    let job = app
+        .jobs
+        .spawn("site.clone", None, Some(user.id), move |mut log| async move {
+            let site = flows::clone_site(&ctx, id, &domain, &mut log).await?;
+            jobs.set_site(log.job_id, site.id).await?;
+            auth.audit(Some(uid), "site.clone", Some(site.id), &format!("copia di {}", src.slug.as_str())).await?;
+            Ok(log)
+        })
+        .await?;
+    Ok((StatusCode::ACCEPTED, Json(json!({ "job": job }))).into_response())
 }
 
 async fn list_domains<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
@@ -185,6 +219,29 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         let (s, _, _) = call(&t, req("POST", &url, Some(&manager), Some(json!({"hostname": "www.sona.it", "kind": "redirect"})))).await;
         assert_eq!(s, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn admin_clones_a_site_as_a_job() {
+        let t = setup().await;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let id = create_site(&t, &admin, "sona.it").await;
+        let manager = user_with_role(&t, "g@example.org", id, Role::Manager).await;
+        let body = json!({"domain": "prova.sona.it"});
+        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/clone"), Some(&manager), Some(body.clone()))).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/clone"), Some(&admin), Some(json!({"domain": "sona.it"})))).await;
+        assert_eq!(s, StatusCode::CONFLICT, "hostname già usato");
+        let (s, body, _) = call(&t, req("POST", &format!("/api/sites/{id}/clone"), Some(&admin), Some(body))).await;
+        assert_eq!(s, StatusCode::ACCEPTED);
+        let job = wait_job(&t, body["job"].as_i64().unwrap()).await;
+        assert_eq!(job.status, "done", "{:?}", job.log);
+        let copy = job.site_id.unwrap();
+        let (_, detail, _) = call(&t, req("GET", &format!("/api/sites/{copy}"), Some(&admin), None)).await;
+        assert_eq!(detail["site"]["staging"], true);
+        assert_eq!(detail["domains"][0]["hostname"], "prova.sona.it");
+        let (_, audit, _) = call(&t, req("GET", &format!("/api/sites/{copy}/audit"), Some(&admin), None)).await;
+        assert_eq!(audit[0]["action"], "site.clone");
     }
 
     #[tokio::test]

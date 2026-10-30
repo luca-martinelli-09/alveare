@@ -139,6 +139,25 @@ pub fn write_env(p: &Paths, slug: &Slug, env: &Vars, owner: Option<u32>) -> Resu
     chown(&path, owner)
 }
 
+/// Copia ricorsiva per la clonazione: niente `.env` (credenziali della sorgente) né link simbolici.
+pub fn copy_site_tree(src: &Path, dest: &Path, rel: &Path) -> Result<()> {
+    fs::create_dir_all(dest.join(rel))?;
+    for entry in fs::read_dir(src.join(rel))? {
+        let entry = entry?;
+        let child = rel.join(entry.file_name());
+        if child == Path::new(".env") {
+            continue;
+        }
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_site_tree(src, dest, &child)?;
+        } else if ty.is_file() {
+            fs::copy(entry.path(), dest.join(&child)).with_context(|| format!("copia di {}", child.display()))?;
+        }
+    }
+    Ok(())
+}
+
 pub fn trash_dirs(p: &Paths, slug: &Slug, now: u64) -> Result<()> {
     let s = slug.as_str();
     let dest = p.trash.join(format!("{s}-{now}"));
@@ -555,6 +574,24 @@ impl Host for SystemHost {
         Ok(())
     }
 
+    async fn copy_site_files(&self, from: &Slug, to: &Slug, uid: u32) -> Result<()> {
+        let (src, dest) = (self.paths.sites.join(from.as_str()), self.paths.sites.join(to.as_str()));
+        tokio::task::spawn_blocking(move || {
+            copy_site_tree(&src, &dest, Path::new(""))?;
+            chown_tree(&dest, Some(uid))
+        })
+        .await?
+    }
+
+    async fn read_site_env(&self, slug: &Slug) -> Result<Vars> {
+        let path = self.paths.sites.join(slug.as_str()).join(".env");
+        Ok(crate::template::parse_env(&fs::read_to_string(&path).context("lettura del .env")?))
+    }
+
+    async fn write_site_env(&self, slug: &Slug, uid: u32, env: &Vars) -> Result<()> {
+        write_env(&self.paths, slug, env, Some(uid))
+    }
+
     async fn set_site_env(&self, slug: &Slug, uid: u32, key: &str, value: &str) -> Result<()> {
         let path = self.paths.sites.join(slug.as_str()).join(".env");
         let current = fs::read_to_string(&path).context("lettura del .env")?;
@@ -596,6 +633,20 @@ mod tests {
 
     fn php(s: &str, uid: u32) -> SitePhp {
         SitePhp { slug: slug(s), uid, settings: PhpSettings::default() }
+    }
+
+    #[test]
+    fn clone_copy_skips_env_and_symlinks() {
+        let t = tempfile::tempdir().unwrap();
+        let (src, dest) = (t.path().join("a"), t.path().join("b"));
+        fs::create_dir_all(src.join("public/wp-content")).unwrap();
+        fs::write(src.join(".env"), "DB_PASSWORD='x'").unwrap();
+        fs::write(src.join("public/wp-content/a.txt"), "ciao").unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", src.join("public/link")).unwrap();
+        copy_site_tree(&src, &dest, Path::new("")).unwrap();
+        assert_eq!(fs::read_to_string(dest.join("public/wp-content/a.txt")).unwrap(), "ciao");
+        assert!(!dest.join(".env").exists());
+        assert!(fs::symlink_metadata(dest.join("public/link")).is_err());
     }
 
     #[test]
