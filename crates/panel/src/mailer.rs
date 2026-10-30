@@ -1,6 +1,5 @@
 //! Email del pannello (inviti, reset della password) via SMTP, di solito AWS SES.
 //! Senza SMTP gli utenti nuovi ricevono una password temporanea, come nell'MVP.
-use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 
@@ -18,7 +17,8 @@ pub enum Mailer {
     None,
     Smtp(Smtp),
     /// Nei test: le email restano qui.
-    Memory(Arc<Mutex<Vec<(String, String, String)>>>),
+    #[cfg(test)]
+    Memory(std::sync::Arc<std::sync::Mutex<Vec<(String, String, String)>>>),
 }
 
 impl Mailer {
@@ -29,6 +29,7 @@ impl Mailer {
     pub async fn send(&self, to: &str, subject: &str, body: &str) -> Result<()> {
         match self {
             Mailer::None => anyhow::bail!("SMTP del pannello non configurato"),
+            #[cfg(test)]
             Mailer::Memory(sent) => {
                 sent.lock().expect("lock").push((to.into(), subject.into(), body.into()));
                 Ok(())

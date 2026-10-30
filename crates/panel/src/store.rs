@@ -259,6 +259,7 @@ impl Store {
     }
 
     /// Su un pool già migrato.
+    #[cfg(test)]
     pub fn from_pool(pool: SqlitePool) -> Self {
         Self { pool }
     }

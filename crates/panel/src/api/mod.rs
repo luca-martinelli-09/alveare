@@ -134,6 +134,7 @@ impl<H: Host> App<H> {
         Self { adminer_host, ..self }
     }
 
+    #[cfg(test)]
     pub fn with_files(self, paths: Paths, chown: bool) -> Self {
         Self { paths, chown, ..self }
     }
