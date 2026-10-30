@@ -1,8 +1,8 @@
 <script lang="ts">
+	import { askConfirm } from '$lib/ask.svelte';
 	import { goto } from '$app/navigation';
 	import SettingsSection from '$lib/components/app/settings-section.svelte';
 	import SettingRow from '$lib/components/app/setting-row.svelte';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import * as Alert from '$lib/components/ui/alert';
@@ -78,23 +78,7 @@
 	{#if session.user?.is_admin}
 		<SettingsSection title="Zona pericolosa">
 			<SettingRow label="Elimina il sito" help="Prima un backup finale, poi route, pool, file (nel cestino per 7 giorni), database e utente.">
-				<AlertDialog.Root>
-					<AlertDialog.Trigger>
-						{#snippet child({ props })}
-							<Button variant="destructive" size="sm" {...props}>Elimina…</Button>
-						{/snippet}
-					</AlertDialog.Trigger>
-					<AlertDialog.Content>
-						<AlertDialog.Header>
-							<AlertDialog.Title>Eliminare {detail.domains[0]?.hostname}?</AlertDialog.Title>
-							<AlertDialog.Description>Il sito smette di rispondere subito. Il backup finale resta per 30 giorni.</AlertDialog.Description>
-						</AlertDialog.Header>
-						<AlertDialog.Footer>
-							<AlertDialog.Cancel>Annulla</AlertDialog.Cancel>
-							<AlertDialog.Action variant="destructive" onclick={remove}>Elimina</AlertDialog.Action>
-						</AlertDialog.Footer>
-					</AlertDialog.Content>
-				</AlertDialog.Root>
+				<Button variant="destructive" size="sm" onclick={async () => (await askConfirm({ title: `Eliminare ${detail.domains[0]?.hostname}?`, description: `Il sito smette di rispondere subito. Il backup finale resta per 30 giorni.`, confirmLabel: 'Elimina', destructive: true })) && remove()}>Elimina…</Button>
 			</SettingRow>
 		</SettingsSection>
 	{/if}

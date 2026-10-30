@@ -991,7 +991,9 @@ async fn database_password<H: Host>(State(app): State<App<H>>, Path(id): Path<i6
     require_site(&app, &user, id, Need::Manage).await?;
     flows::reset_db_password(&app.ctx, id).await?;
     app.auth.audit(Some(user.id), "database.password", Some(id), "").await?;
-    Ok(Json(json!({})).into_response())
+    // Mostrata una volta a chi gestisce il sito (per un client esterno o Adminer); poi sta solo nel .env.
+    let db = app.ctx.db_creds(id).await?;
+    Ok(Json(json!({ "user": db.user, "password": db.password, "database": db.name })).into_response())
 }
 
 async fn database_adminer<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
@@ -1460,10 +1462,12 @@ mod tests {
         let t = setup().await;
         let (admin, id) = site_with_files(&t).await;
         let before = t.app.ctx.db_creds(id).await.unwrap().password;
-        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/database/password"), Some(&admin), None)).await;
+        let (s, body, _) = call(&t, req("POST", &format!("/api/sites/{id}/database/password"), Some(&admin), None)).await;
         assert_eq!(s, StatusCode::OK);
-        let after = t.app.ctx.db_creds(id).await.unwrap().password;
+        let creds = t.app.ctx.db_creds(id).await.unwrap();
+        let after = creds.password.clone();
         assert_ne!(before, after);
+        assert_eq!(body, serde_json::json!({ "user": creds.user, "password": after, "database": creds.name }), "la nuova password si vede una volta");
         let env = t.app.ctx.host.env.lock().unwrap().clone();
         assert_eq!(env["DB_PASSWORD"], after);
         assert_eq!(env["SITE_ENV DB_PASSWORD"], after);

@@ -3,11 +3,12 @@
 	import * as Table from '$lib/components/ui/table';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Field from '$lib/components/ui/field';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import JobLog from '$lib/components/app/job-log.svelte';
 	import { api, errorMessage, formatBytes } from '$lib/api';
+	import { askConfirm } from '$lib/ask.svelte';
+	import Credentials from '$lib/components/app/credentials.svelte';
 	import { toast } from 'svelte-sonner';
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
@@ -43,10 +44,12 @@
 		}
 	}
 
+	let newCreds = $state<{ user: string; password: string; database: string } | null>(null);
+
 	async function resetPassword() {
+		if (!(await askConfirm({ title: 'Cambiare la password del database?', description: 'Il sito usa subito la nuova password. Altri programmi che usano la vecchia smetteranno di collegarsi.', confirmLabel: 'Cambia' }))) return;
 		try {
-			await api.post(`/api/sites/${id}/database/password`);
-			toast.success('Password cambiata e .env aggiornato');
+			newCreds = await api.post<{ user: string; password: string; database: string }>(`/api/sites/${id}/database/password`);
 		} catch (e) {
 			toast.error(errorMessage(e));
 		}
@@ -130,23 +133,7 @@
 				<Card.Description>Nuova password per l'utente del database, scritta anche nel .env del sito.</Card.Description>
 			</Card.Header>
 			<Card.Footer>
-				<AlertDialog.Root>
-					<AlertDialog.Trigger>
-						{#snippet child({ props })}
-							<Button variant="outline" {...props}>Cambia password</Button>
-						{/snippet}
-					</AlertDialog.Trigger>
-					<AlertDialog.Content>
-						<AlertDialog.Header>
-							<AlertDialog.Title>Cambiare la password del database?</AlertDialog.Title>
-							<AlertDialog.Description>Il sito usa subito la nuova password. Altri programmi che usano la vecchia smetteranno di collegarsi.</AlertDialog.Description>
-						</AlertDialog.Header>
-						<AlertDialog.Footer>
-							<AlertDialog.Cancel>Annulla</AlertDialog.Cancel>
-							<AlertDialog.Action onclick={resetPassword}>Cambia</AlertDialog.Action>
-						</AlertDialog.Footer>
-					</AlertDialog.Content>
-				</AlertDialog.Root>
+				<Button variant="outline" onclick={resetPassword}>Cambia password</Button>
 			</Card.Footer>
 		</Card.Root>
 	</div>
@@ -156,5 +143,21 @@
 	<Dialog.Content>
 		<Dialog.Header><Dialog.Title>Import del database</Dialog.Title></Dialog.Header>
 		{#if job}<JobLog id={job} />{/if}
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root open={newCreds !== null} onOpenChange={(o) => !o && (newCreds = null)}>
+	<Dialog.Content class="sm:max-w-xl">
+		<Dialog.Header>
+			<Dialog.Title>Password del database cambiata</Dialog.Title>
+			<Dialog.Description>
+				Il .env del sito è già aggiornato. Copiala ora se ti serve per un altro programma: chiusa questa finestra non si rivede.
+			</Dialog.Description>
+		</Dialog.Header>
+		{#if newCreds}
+			<p class="text-muted-foreground text-sm">Database <code class="text-foreground">{newCreds.database}</code></p>
+			<Credentials id="db" user={newCreds.user} password={newCreds.password} />
+		{/if}
+		<Dialog.Footer><Button onclick={() => (newCreds = null)}>Fatto</Button></Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

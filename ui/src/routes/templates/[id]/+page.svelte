@@ -1,8 +1,8 @@
 <script lang="ts">
+	import { askConfirm } from '$lib/ask.svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import * as Breadcrumb from '$lib/components/ui/breadcrumb';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { Button } from '$lib/components/ui/button';
 	import Files from '$lib/components/site/files.svelte';
 	import { api, errorMessage } from '$lib/api';
@@ -50,23 +50,7 @@
 			<code class="text-foreground">template.toml</code> descrive il template, <code class="text-foreground">files/</code> diventa la cartella del sito.
 		</p>
 	</div>
-	<AlertDialog.Root>
-		<AlertDialog.Trigger>
-			{#snippet child({ props })}
-				<Button variant="outline" size="sm" {...props}><Trash2Icon data-icon="inline-start" /> Elimina</Button>
-			{/snippet}
-		</AlertDialog.Trigger>
-		<AlertDialog.Content>
-			<AlertDialog.Header>
-				<AlertDialog.Title>Eliminare il template {template?.name ?? id}?</AlertDialog.Title>
-				<AlertDialog.Description>I siti già creati non cambiano. La cartella va in templates/.trash, da dove si recupera a mano.</AlertDialog.Description>
-			</AlertDialog.Header>
-			<AlertDialog.Footer>
-				<AlertDialog.Cancel>Annulla</AlertDialog.Cancel>
-				<AlertDialog.Action variant="destructive" onclick={remove}>Elimina</AlertDialog.Action>
-			</AlertDialog.Footer>
-		</AlertDialog.Content>
-	</AlertDialog.Root>
+	<Button variant="outline" size="sm" onclick={async () => (await askConfirm({ title: `Eliminare il template ${template?.name ?? id}?`, description: `I siti già creati non cambiano. La cartella va in templates/.trash, da dove si recupera a mano.`, confirmLabel: 'Elimina', destructive: true })) && remove()}><Trash2Icon data-icon="inline-start" /> Elimina</Button>
 </header>
 
 <Files base={`/api/templates/${id}`} />

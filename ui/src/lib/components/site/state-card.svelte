@@ -1,8 +1,8 @@
 <script lang="ts">
+	import { askConfirm } from '$lib/ask.svelte';
 	import SettingsSection from '$lib/components/app/settings-section.svelte';
 	import SettingRow from '$lib/components/app/setting-row.svelte';
 	import Credentials from '$lib/components/app/credentials.svelte';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Input } from '$lib/components/ui/input';
@@ -37,25 +37,7 @@
 		{#if suspended}
 			<Button disabled={busy} onclick={() => update({ suspended: false }, 'Sito riattivato')}>Riattiva il sito</Button>
 		{:else}
-			<AlertDialog.Root>
-				<AlertDialog.Trigger>
-					{#snippet child({ props })}
-						<Button variant="outline" size="sm" disabled={busy} {...props}>Sospendi…</Button>
-					{/snippet}
-				</AlertDialog.Trigger>
-				<AlertDialog.Content>
-					<AlertDialog.Header>
-						<AlertDialog.Title>Sospendere {detail.domains[0]?.hostname}?</AlertDialog.Title>
-						<AlertDialog.Description>
-							I visitatori vedono una pagina di manutenzione e PHP si ferma. File e database restano intatti.
-						</AlertDialog.Description>
-					</AlertDialog.Header>
-					<AlertDialog.Footer>
-						<AlertDialog.Cancel>Annulla</AlertDialog.Cancel>
-						<AlertDialog.Action onclick={() => update({ suspended: true }, 'Sito sospeso')}>Sospendi</AlertDialog.Action>
-					</AlertDialog.Footer>
-				</AlertDialog.Content>
-			</AlertDialog.Root>
+			<Button variant="outline" size="sm" disabled={busy} onclick={async () => (await askConfirm({ title: `Sospendere ${detail.domains[0]?.hostname}?`, description: `I visitatori vedono una pagina di manutenzione e PHP si ferma. File e database restano intatti.`, confirmLabel: 'Sospendi' })) && update({ suspended: true }, 'Sito sospeso')}>Sospendi…</Button>
 		{/if}
 	</SettingRow>
 	<SettingRow label="Password sulle copie di prova" labelFor="staging" help="Chiede una password ai visitatori e blocca l'indicizzazione nei motori di ricerca.">
