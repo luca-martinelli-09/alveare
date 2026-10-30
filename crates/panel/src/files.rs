@@ -224,7 +224,8 @@ impl SiteFiles {
             cur.push(c);
             if !self.root.exists(&cur) {
                 self.root.create_dir(&cur)?;
-                self.give_to_site(&self.root.open_dir(&cur)?.into_std_file())?;
+                // open_dir dà un descrittore O_PATH, su cui fchown non funziona: si apre in lettura.
+                self.give_to_site(&self.root.open_with(&cur, cap_std::fs::OpenOptions::new().read(true))?.into_std())?;
             }
         }
         Ok(())
@@ -460,6 +461,19 @@ mod tests {
             assert_eq!(f.read_text("public/estratto/tema/style.css").unwrap(), "body{}");
             f.delete("public/estratto", ts).unwrap();
         }
+    }
+
+    /// Con il proprietario impostato (come in produzione): le cartelle nuove vanno date al sito.
+    /// Qui al proprio utente, che si può fare anche senza root.
+    #[test]
+    fn new_folders_get_the_site_owner() {
+        let (_t, p, _) = site();
+        let me = unsafe { libc::getuid() };
+        let f = SiteFiles::open(&p, &Slug::parse("sona_it").unwrap(), Some(me)).unwrap();
+        f.write("public/a/b/c.txt", b"x").unwrap();
+        f.compress(&["public/a".into()], "a.zip").unwrap();
+        f.extract("a.zip", "nuova/cartella").unwrap();
+        assert_eq!(f.read_text("nuova/cartella/a/b/c.txt").unwrap(), "x");
     }
 
     #[test]

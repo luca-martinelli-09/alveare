@@ -69,7 +69,8 @@ impl Sink<'_> {
             cur.push(c);
             if !self.dest.exists(&cur) {
                 self.dest.create_dir(&cur).with_context(|| format!("cartella {}", cur.display()))?;
-                self.own(&self.dest.open_dir(&cur)?.into_std_file())?;
+                // Non open_dir: il suo descrittore O_PATH non accetta fchown.
+                self.own(&self.dest.open_with(&cur, cap_std::fs::OpenOptions::new().read(true))?.into_std())?;
             } else if !self.dest.symlink_metadata(&cur)?.is_dir() {
                 bail!("{} esiste e non è una cartella", cur.display());
             }
