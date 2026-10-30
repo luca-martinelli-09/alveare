@@ -43,7 +43,7 @@
 	<SettingRow label="Password sulle copie di prova" labelFor="staging" help="Chiede una password ai visitatori e blocca l'indicizzazione nei motori di ricerca.">
 		{#snippet extra()}
 			{#if detail.staging}
-				<div class="mt-3"><Credentials id="staging" masked user={detail.staging.user} password={detail.staging.password} /></div>
+				<div class="mt-3"><Credentials id="staging" user={detail.staging.user} password={detail.staging.password} /></div>
 			{/if}
 		{/snippet}
 		<Switch

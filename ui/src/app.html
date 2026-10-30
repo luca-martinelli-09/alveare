@@ -4,6 +4,19 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
+		<meta name="color-scheme" content="light dark" />
+		<!-- Tema prima del primo disegno: senza, a ogni caricamento si vede un lampo bianco finché parte il JS. -->
+		<style>
+			html { background: oklch(1 0 0); }
+			html.dark { background: oklch(0.17 0.006 56); color-scheme: dark; }
+		</style>
+		<script>
+			try {
+				var m = localStorage.getItem('mode-watcher-mode');
+				var dark = m === 'dark' || (m !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+				document.documentElement.classList.toggle('dark', dark);
+			} catch (e) {}
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">
