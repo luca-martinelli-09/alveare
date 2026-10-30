@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use crate::Api;
 
 #[derive(Parser)]
-#[command(name = "alveare", version, about = "CLI di Alveare: stessa API e stessi permessi del pannello")]
+#[command(name = "alveare", version = option_env!("ALVEARE_BUILD").unwrap_or(env!("CARGO_PKG_VERSION")), about = "CLI di Alveare: stessa API e stessi permessi del pannello")]
 pub struct Cli {
     /// URL del pannello (es. https://pannello.esempio.it)
     #[arg(long, env = "ALVEARE_URL", global = true)]

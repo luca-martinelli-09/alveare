@@ -15,7 +15,7 @@
 	type Budget = { pools_mb: number; reserved_mb: number; total_mb: number; ram_mb: number; percent: number };
 	type SiteBudget = { id: number; slug: string; domain: string | null; status: string; pool_mb: number; settings: { memory_limit_mb: number; max_children: number } };
 	type Block = { id: number; site_id: number | null; cidr: string; expires_at: number | null };
-	let server = $state<{ budget: Budget; sites: SiteBudget[]; version: string } | null>(null);
+	let server = $state<{ budget: Budget; sites: SiteBudget[]; version: string; build: string | null } | null>(null);
 	let blocks = $state<Block[]>([]);
 	let perSite = $state(false);
 
@@ -40,7 +40,7 @@
 	const siteName = (id: number | null) => (id === null ? 'tutti i siti' : (server?.sites.find((s) => s.id === id)?.domain ?? `sito ${id}`));
 </script>
 
-<PageHeader title="Server" description={server ? `Alveare ${server.version} · ${server.sites.length} ${server.sites.length === 1 ? 'sito' : 'siti'} · ${gb(server.budget.ram_mb)} di RAM` : undefined} />
+<PageHeader title="Server" description={server ? `Alveare ${server.version}${server.build && server.build !== `v${server.version}` ? ` (${server.build})` : ''} · ${server.sites.length} ${server.sites.length === 1 ? 'sito' : 'siti'} · ${gb(server.budget.ram_mb)} di RAM` : undefined} />
 
 {#if !server}
 	<Skeleton class="h-40 w-full" />

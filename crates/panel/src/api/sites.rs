@@ -230,7 +230,7 @@ async fn server<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> 
         sites.push(json!({ "id": s.id, "slug": s.slug, "domain": domain, "status": s.status, "pool_mb": crate::budget::pool_mb(&s.settings), "settings": s.settings }));
     }
     sites.sort_by_key(|s| std::cmp::Reverse(s["pool_mb"].as_u64()));
-    Ok(Json(json!({ "budget": budget, "sites": sites, "version": crate::upgrade::VERSION })).into_response())
+    Ok(Json(json!({ "budget": budget, "sites": sites, "version": crate::upgrade::VERSION, "build": crate::upgrade::BUILD.filter(|b| !b.is_empty()) })).into_response())
 }
 
 const EXPORT_DAYS: i64 = 7;

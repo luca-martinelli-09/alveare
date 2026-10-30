@@ -1,9 +1,9 @@
 name: CI
 
+# Sulle PR; su main e sui tag la chiama build.yml prima di pubblicare.
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_call:
 
 jobs:
   unit:
@@ -36,7 +36,8 @@ jobs:
 
   integration:
     name: Integrazione (${{ matrix.arch }})
-    if: github.event_name == 'pull_request'
+    # Pesante: sulle PR e prima di una release, non a ogni push su main.
+    if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/')
     needs: [unit, ui]
     strategy:
       matrix:

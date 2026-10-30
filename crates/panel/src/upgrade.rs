@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Etichetta della build (dev-<commit> o il tag), messa dalla CI; solo da mostrare.
+pub const BUILD: Option<&str> = option_env!("ALVEARE_BUILD");
 const KEEP: usize = 5;
 
 /// Se la versione registrata è diversa da `current`, copia il database e restituisce la copia.

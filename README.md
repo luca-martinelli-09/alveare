@@ -20,16 +20,17 @@ I container sono fissi e non dipendono dal numero di siti: `panel`, `php`, `cadd
 ```bash
 git clone <repo> alveare && cd alveare
 cp .env.example .env        # compila chiave, password MariaDB, email admin, restic
+# immagini pubblicate: ALVEARE_REGISTRY=ghcr.io/<owner>/alveare e ALVEARE_VERSION=v0.1.0 nel .env
 docker network create cloudflared   # se non esiste già quella dei connettori
-docker compose up -d --build
+docker compose up -d        # oppure `docker compose up -d --build` per costruire dai sorgenti
 docker compose logs panel | grep "password temporanea"
 ```
 
 Poi:
 
 1. Nel tunnel Cloudflare, punta l'hostname di `ALVEARE_PANEL_HOST` (e di `ALVEARE_ADMINER_HOST`) a `http://caddy:80`, protetti da Cloudflare Access.
-2. Accedi con l'email dell'admin e la password temporanea: al primo accesso cambi la password e attivi il TOTP (salvo `ALVEARE_TOTP=false` nel `.env`). Dal profilo puoi aggiungere una passkey.
-3. **Scarica il kit di ripristino** (Account → Kit di ripristino) e conservalo fuori dal server.
+2. Accedi con l'email dell'admin e la password temporanea: al primo accesso cambi la password e attivi il TOTP (salvo `ALVEARE_TOTP=false` nel `.env`). Da Account → Sicurezza puoi aggiungere una passkey.
+3. **Scarica il kit di ripristino** (Account → Ripristino) e conservalo fuori dal server.
 4. Crea un sito. Con un account Cloudflare configurato (`CLOUDFLARE_<ETICHETTA>_*`) l'hostname va da solo sul tunnel con il suo CNAME e le regole della zona (se qualcosa fallisce resta un avviso e il pannello riprova ogni 5 minuti); senza, aggiungilo a mano verso `http://caddy:80`.
 
 Funzioni facoltative, tutte dal `.env` (vedi `.env.example`):
@@ -43,6 +44,27 @@ Funzioni facoltative, tutte dal `.env` (vedi `.env.example`):
 | Altre versioni di PHP | `ALVEARE_PHP_RUNTIMES=8.4` e `docker compose --profile php84 up -d` |
 | Immagine PHP in prova | `ALVEARE_CANARY_VERSION=<versione>`, `ALVEARE_PHP_RUNTIMES=canary`, profilo `canary`; si sposta un sito di prova e poi tutti |
 | App Laravel (worker, deploy da git) | template `laravel`, `docker compose --profile workers up -d` |
+
+## Il pannello
+
+- **Panoramica**: stato di tutti i siti in una riga (online, da guardare, backup recenti, aggiornamenti), avvisi aperti e attività recente, tabella dei siti con i problemi in testa, risposta, ultimo backup, spazio rispetto alla soglia e azioni rapide.
+- **Ricerca ⌘K** (o Ctrl+K): siti, azioni sui siti (backup, log, file, aggiornamenti) e pagine del pannello da tastiera.
+- **Pagina del sito**, a schede: panoramica con il tempo di risposta (24 h, 7 e 30 giorni) e le impostazioni a righe, file manager con editor, log a pagine con ricerca nei file ruotati, database e Adminer, backup e ripristini, aggiornamenti WordPress, cron, app Laravel, impostazioni PHP e override, attività.
+- **Template, Utenti, Server** per gli admin: template modificabili dal pannello, utenti con ruoli per sito, password temporanea, azzeramento del TOTP e sessioni; memoria dei pool, configurazione globale e regole Cloudflare.
+- **Account**: profilo, password, TOTP su un'altra app, passkey, sessioni, token API e kit di ripristino.
+
+Tema chiaro e scuro (segue il sistema), interfaccia in italiano, usabile da telefono. Il sistema visivo è descritto in [DESIGN.md](DESIGN.md), il prodotto in [PRODUCT.md](PRODUCT.md).
+
+## Versioni e canali
+
+| Canale | Quando | Immagini su GHCR | CLI |
+| --- | --- | --- | --- |
+| Release | tag `vX.Y.Z` | `ghcr.io/<owner>/alveare/panel:vX.Y.Z`, `php:vX.Y.Z`, `php:vX.Y.Z-8.4` | allegata alla release, con le note generate |
+| Dev | ogni push su `main` | `:dev` e `:dev-<commit>` | pre-release `dev`, ricreata a ogni push |
+
+Le immagini sono multi-arch (amd64 e arm64) e non c'è mai `latest`: il `.env` dice quale versione usare (`ALVEARE_VERSION=v0.1.0`, oppure `dev` per seguire `main`). Prima di pubblicare, `.github/workflows/build.yml` fa girare i test (`ci.yml`); per una release anche l'integrazione completa. La versione della build (`dev-<commit>` o il tag) compare nella pagina Server e in `alveare --version`.
+
+Per una release: aggiorna `version` nei `Cargo.toml` dei crate, fai il commit e poi `git tag v0.2.0 && git push --tags`. Un tag che non corrisponde alla versione di `crates/panel/Cargo.toml` viene rifiutato.
 
 ## Aggiornare il pannello
 
@@ -79,7 +101,7 @@ Crea un `.env` di prova (se non c'è già quello vero), costruisce le immagini e
 | Cosa | Comando |
 | --- | --- |
 | Test Rust (unità e sicurezza) | `cargo test --workspace` |
-| Controllo dei tipi della UI | `cd ui && npm ci && npm run check` |
+| Controllo dei tipi e test della UI | `cd ui && npm ci && npm run check && npm test` |
 | UI in sviluppo | `cd ui && npm run dev` |
 | Immagini | `docker compose build` (serve un `.env`, anche fittizio) |
 | CLI | `cargo run -p alveare -- --help` |
@@ -99,7 +121,9 @@ Il test di integrazione avvia il compose vero (con i profili `workers` e `php84`
 | `ui` | SvelteKit + shadcn-svelte, incorporata nel binario del pannello |
 | `docker/` | Immagini del pannello e di PHP (8.5, WP-CLI, Adminer) |
 | `templates/` | Template dei siti (`wordpress`: ricetta; `laravel`: app da git; i template snapshot salvati dal pannello). Si creano, copiano, modificano (file e `template.toml`) ed eliminano dalla pagina Template |
-| `scripts/` | Aggiornamento e ritorno alla versione precedente |
+| `scripts/` | Prova in locale, aggiornamento e ritorno alla versione precedente |
+| `.github/workflows/` | `ci.yml` (test sulle PR), `build.yml` (immagini e CLI: dev su `main`, release sui tag) |
+| `docs/` | Specifica, logo, dashboard Grafana |
 
 ## Stato rispetto alla roadmap
 
@@ -107,5 +131,6 @@ Il test di integrazione avvia il compose vero (con i profili `workers` e `php84`
 
 - **Fase 2**: importa (archivio + dump, prefisso letto dal vecchio wp-config.php) e clona sito, salva come template snapshot e crea da snapshot, restore di un percorso, su nuovo dominio e di prova mensile; zip ed estrazione nel file manager, ricerca nei log ruotati, errori PHP raggruppati, retention dei log per sito; vista aggiornamenti WordPress con aggiornamento in blocco e aggiornamenti notturni secondo la regola del sito; monitoraggio (raggiungibilità, spazio, 5xx, richieste lente) e avvisi su Telegram; cron personalizzati; override di PHP e Caddy con storico, diff e ripristino; budget di memoria; sospensione e protezione dello staging; blocco IP; regole Cloudflare da un modello unico; esporta sito; aggiornamento del pannello; CLI; test Playwright.
 - **Fase 3**: passkey, inviti e reset via email, sessioni e token dal profilo; hostname dei tunnel Cloudflare via API; più versioni di PHP e canary; app Laravel con worker supervisionati e deploy da git; metriche Prometheus per Grafana.
+- **Interfaccia**: nuovo design (palette miele, ricerca ⌘K, impostazioni a righe, codice in anteprima, dialoghi), gestione dei template e degli utenti dal pannello, storico del tempo di risposta.
 
-Non verificato su questo computer: ARM64 reale (gira la CI su runner ARM), Cloudflare vero (API provate contro un finto Cloudflare), R2 (restic provato su un repository locale), SES (email provate in memoria), passkey in un browser vero (provate con un autenticatore software), deploy di un'app Laravel completa da un repository vero.
+Non verificato su questo computer: ARM64 reale (gira la CI su runner ARM), Cloudflare vero (API provate contro un finto Cloudflare), R2 (restic provato su un repository locale), SES (email provate in memoria), passkey in un browser vero (provate con un autenticatore software), deploy di un'app Laravel completa da un repository vero, i workflow di GitHub Actions (validati con actionlint ma mai eseguiti: il repository non è ancora su GitHub).

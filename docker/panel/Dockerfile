@@ -12,7 +12,9 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 COPY --from=ui /ui/build ui/build
-RUN cargo build --release -p panel
+# dev-<commit> o il tag della release, dalla CI (vuoto in locale).
+ARG ALVEARE_BUILD
+RUN ALVEARE_BUILD=${ALVEARE_BUILD} cargo build --release -p panel
 
 FROM debian:trixie-slim
 RUN apt-get update \
