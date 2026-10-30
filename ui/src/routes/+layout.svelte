@@ -82,7 +82,7 @@
 					<SearchIcon class="size-4" />
 				</button>
 			</header>
-			<main class="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-6 md:px-8 md:py-8">
+			<main class="mx-auto flex w-full max-w-[88rem] flex-1 flex-col gap-6 px-4 py-6 md:px-8 md:py-8">
 				{@render children()}
 			</main>
 		</Sidebar.Inset>

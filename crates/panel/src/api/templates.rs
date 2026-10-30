@@ -16,6 +16,7 @@ pub(super) fn routes<H: Host>() -> Router<App<H>> {
         .route("/api/templates/{name}/files/content", get(read_file::<H>).put(write_file::<H>).layer(DefaultBodyLimit::max(EDITOR_LIMIT as usize + 1024)))
         .route("/api/templates/{name}/files/download", get(download_file::<H>))
         .route("/api/templates/{name}/files/ops", post(file_op::<H>))
+        .route("/api/templates/{name}/files/trash", get(list_trash::<H>))
         .route("/api/templates/{name}/files/uploads", post(upload_start::<H>))
         .route("/api/templates/{name}/files/uploads/{upload}", get(upload_status::<H>))
         .route("/api/templates/{name}/files/uploads/{upload}/{n}", put(upload_chunk::<H>).layer(DefaultBodyLimit::max(CHUNK as usize + 1024)))

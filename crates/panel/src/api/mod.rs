@@ -317,6 +317,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/sites/{id}/files/content", get(read_file::<H>).put(write_file::<H>).layer(DefaultBodyLimit::max(EDITOR_LIMIT as usize + 1024)))
         .route("/api/sites/{id}/files/download", get(download_file::<H>))
         .route("/api/sites/{id}/files/ops", post(file_op::<H>))
+        .route("/api/sites/{id}/files/trash", get(list_trash::<H>))
         .route("/api/sites/{id}/files/uploads", post(upload_start::<H>))
         .route("/api/sites/{id}/files/uploads/{upload}", get(upload_status::<H>))
         .route("/api/sites/{id}/files/uploads/{upload}/{n}", put(upload_chunk::<H>).layer(DefaultBodyLimit::max(CHUNK as usize + 1024)))
@@ -820,6 +821,16 @@ enum FileOp {
     Extract { path: String, to: String },
     /// Crea l'archivio `to` (.zip o .tar.gz) con `paths`.
     Compress { paths: Vec<String>, to: String },
+    /// Rimette una voce del cestino dov'era.
+    Restore { id: String },
+    /// Elimina per sempre una voce del cestino.
+    Purge { id: String },
+}
+
+async fn list_trash<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    let files = files_for(&app, &user, &t).await?;
+    Ok(Json(blocking(move || files.trash()).await?).into_response())
 }
 
 async fn file_op<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, m: Method, h: HeaderMap, Json(op): Json<FileOp>) -> ApiResult<Response> {
@@ -832,23 +843,33 @@ async fn file_op<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, m
         FileOp::Chmod { path, mode } => ("file.chmod", format!("{path} {mode:o}")),
         FileOp::Extract { path, to } => ("file.extract", format!("{path} → {to}")),
         FileOp::Compress { paths, to } => ("file.compress", format!("{} → {to}", paths.join(", "))),
+        FileOp::Restore { id } => ("file.restore", id.clone()),
+        FileOp::Purge { id } => ("file.purge", id.clone()),
     };
     if let FileOp::Delete { path } | FileOp::Rename { path, .. } = &op {
         if t.is_template_core(path) {
             return Err(ApiError::bad_request("template.toml e files/ non si spostano né si cancellano"));
         }
     }
-    blocking(move || match op {
-        FileOp::Mkdir { path } => files.mkdir(&path),
-        FileOp::Rename { path, to } => files.rename(&path, &to),
-        FileOp::Delete { path } => files.delete(&path, now()),
-        FileOp::Chmod { path, mode } => files.chmod(&path, mode),
-        FileOp::Extract { path, to } => files.extract(&path, &to).map(drop),
-        FileOp::Compress { paths, to } => files.compress(&paths, &to),
+    // Solo il ripristino restituisce qualcosa: il percorso in cui è tornato il file.
+    let restored = blocking(move || match op {
+        FileOp::Mkdir { path } => files.mkdir(&path).map(|_| None),
+        FileOp::Rename { path, to } => files.rename(&path, &to).map(|_| None),
+        FileOp::Delete { path } => files.delete(&path, now()).map(|_| None),
+        FileOp::Chmod { path, mode } => files.chmod(&path, mode).map(|_| None),
+        FileOp::Extract { path, to } => files.extract(&path, &to).map(|_| None),
+        FileOp::Compress { paths, to } => files.compress(&paths, &to).map(|_| None),
+        FileOp::Restore { id } => files.restore(&id).map(Some),
+        FileOp::Purge { id } => files.purge(&id).map(|_| None),
     })
     .await?;
+    let detail = restored.as_ref().map_or(detail.clone(), |p| format!("{detail} → {p}"));
     app.auth.audit(Some(user.id), action, t.site(), &t.detail(&detail)).await?;
-    Ok(Json(json!({})).into_response())
+    Ok(Json(match restored {
+        Some(path) => json!({ "path": path }),
+        None => json!({}),
+    })
+    .into_response())
 }
 
 #[derive(Deserialize)]
@@ -1282,8 +1303,21 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         let (_, list, _) = call(&t, req("GET", &format!("/api/sites/{id}/files?path=public"), Some(&admin), None)).await;
         assert!(list.as_array().unwrap().is_empty());
+        let (s, trash, _) = call(&t, req("GET", &format!("/api/sites/{id}/files/trash"), Some(&admin), None)).await;
+        assert_eq!((s, trash[0]["origin"].as_str()), (StatusCode::OK, Some("public/home.php")));
+        let tid = trash[0]["id"].as_str().unwrap().to_string();
+        let (s, body, _) = call(&t, req("POST", &format!("/api/sites/{id}/files/ops"), Some(&admin), Some(serde_json::json!({"op": "restore", "id": tid})))).await;
+        assert_eq!((s, body["path"].as_str()), (StatusCode::OK, Some("public/home.php")), "{body}");
+        call(&t, req("POST", &format!("/api/sites/{id}/files/ops"), Some(&admin), Some(serde_json::json!({"op": "delete", "path": "public/home.php"})))).await;
+        let (_, trash, _) = call(&t, req("GET", &format!("/api/sites/{id}/files/trash"), Some(&admin), None)).await;
+        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/files/ops"), Some(&admin), Some(serde_json::json!({"op": "purge", "id": trash[0]["id"]})))).await;
+        assert_eq!(s, StatusCode::OK);
+        let (_, trash, _) = call(&t, req("GET", &format!("/api/sites/{id}/files/trash"), Some(&admin), None)).await;
+        assert!(trash.as_array().unwrap().is_empty(), "eliminato per sempre");
         let (_, audit, _) = call(&t, req("GET", &format!("/api/sites/{id}/audit"), Some(&admin), None)).await;
-        assert!(audit.as_array().unwrap().iter().any(|a| a["action"] == "file.delete"));
+        for action in ["file.delete", "file.restore", "file.purge"] {
+            assert!(audit.as_array().unwrap().iter().any(|a| a["action"] == action), "{action}");
+        }
     }
 
     #[tokio::test]

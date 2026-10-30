@@ -11,6 +11,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import CodeEditor from '$lib/components/app/code-editor.svelte';
+	import TrashDialog from './trash-dialog.svelte';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import { api, errorMessage, formatBytes } from '$lib/api';
 	import { uploadTo } from '$lib/upload';
 	import { toast } from 'svelte-sonner';
@@ -29,6 +31,7 @@
 	let entries = $state<Entry[]>([]);
 	let editing = $state<{ path: string; content: string; original: string } | null>(null);
 	let fullscreen = $state(false);
+	let trashOpen = $state(false);
 	let saving = $state(false);
 	let progress = $state<number | null>(null);
 	let picker: HTMLInputElement;
@@ -204,6 +207,7 @@
 			</Breadcrumb.List>
 		</Breadcrumb.Root>
 		<div class="ml-auto flex gap-2">
+			<Button size="sm" variant="ghost" onclick={() => (trashOpen = true)}><Trash2Icon data-icon="inline-start" /> Cestino</Button>
 			<Button size="sm" onclick={mkdir}>
 				<FolderPlusIcon data-icon="inline-start" />
 				Nuova cartella
@@ -278,7 +282,7 @@
 									<DropdownMenu.Item onclick={() => compress(e)}>Comprimi</DropdownMenu.Item>
 									<DropdownMenu.Item onclick={() => rename(e)}>Rinomina o sposta</DropdownMenu.Item>
 									<DropdownMenu.Item onclick={() => chmod(e)}>Permessi</DropdownMenu.Item>
-									<DropdownMenu.Item variant="destructive" onclick={async () => (await askConfirm({ title: `Spostare ${e.name} nel cestino?`, description: 'Resta recuperabile per 7 giorni.', confirmLabel: 'Sposta nel cestino', destructive: true })) && op({ op: 'delete', path: join(e.name) })}>
+									<DropdownMenu.Item variant="destructive" onclick={async () => (await askConfirm({ title: `Spostare ${e.name} nel cestino?`, description: 'Per 7 giorni lo ritrovi nel Cestino, in alto a destra, e lo rimetti dov\'era.', confirmLabel: 'Sposta nel cestino', destructive: true })) && op({ op: 'delete', path: join(e.name) })}>
 										Elimina
 									</DropdownMenu.Item>
 								</DropdownMenu.Group>
@@ -319,3 +323,5 @@
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
+
+<TrashDialog {base} bind:open={trashOpen} onrestored={(p) => ((path = parentOf(p)), load())} />

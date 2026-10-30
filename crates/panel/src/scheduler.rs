@@ -328,6 +328,8 @@ async fn cleanup<H: Host>(app: &App<H>) -> anyhow::Result<()> {
     let week = TRASH_DAYS * 86400;
     let mut removed = purge_older(&app.paths.trash, now, week)?;
     removed += purge_older(&app.paths.exports, now, week)?;
+    // Cestino del file manager dei template (gli altri file temporanei dei template restano).
+    removed += purge_older(&app.templates.join(".tmp/.trash"), now, week)?;
     app.ctx.store.expire_exports(now - week).await?;
     removed += purge_stale_uploads(&app.paths.imports.join("tmp/uploads"), 86400)?;
     for site in app.ctx.store.sites().await? {

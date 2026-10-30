@@ -40,6 +40,21 @@ pub enum FileError {
     Io(#[from] std::io::Error),
 }
 
+/// Voce del cestino: `origin` è il percorso da cui è stata eliminata (assente nelle voci vecchie).
+#[derive(Debug, serde::Serialize)]
+pub struct TrashItem {
+    pub id: String,
+    pub name: String,
+    pub origin: Option<String>,
+    pub deleted_at: i64,
+    pub is_dir: bool,
+    pub size: u64,
+}
+
+const TRASH: &str = ".trash";
+/// Dentro ogni voce del cestino: il percorso originale.
+const ORIGIN: &str = ".alveare-origine";
+
 #[derive(Debug, serde::Serialize)]
 pub struct UploadInfo {
     pub id: String,
@@ -288,17 +303,82 @@ impl SiteFiles {
         Ok(self.root.rename(&from, &self.root, &to)?)
     }
 
-    /// Nel cestino del sito (tmp/<slug>/.trash), svuotato dopo 7 giorni.
+    /// Nel cestino del sito (tmp/<slug>/.trash), svuotato dopo 7 giorni. Ogni voce è una cartella
+    /// `<istante>-<casuale>` con dentro il file e il percorso da cui veniva, per rimetterlo lì.
     pub fn delete(&self, path: &str, now: i64) -> Result<()> {
         let p = rel(path)?;
         if is_protected(&p) {
             return Err(FileError::Protected);
         }
-        let name = p.file_name().ok_or(FileError::BadPath)?.to_string_lossy().into_owned();
-        if !self.tmp.exists(".trash") {
-            self.tmp.create_dir(".trash")?;
+        let name = p.file_name().ok_or(FileError::BadPath)?;
+        let entry = Path::new(TRASH).join(format!("{now}-{:08x}", rand::random::<u32>()));
+        self.tmp.create_dir_all(&entry)?;
+        self.tmp.write(entry.join(ORIGIN), p.to_string_lossy().as_bytes())?;
+        if let Err(e) = self.root.rename(&p, &self.tmp, entry.join(name)) {
+            self.tmp.remove_dir_all(&entry)?;
+            return Err(e.into());
         }
-        Ok(self.root.rename(&p, &self.tmp, Path::new(".trash").join(format!("{now}-{name}")))?)
+        Ok(())
+    }
+
+    /// Voci del cestino, le più recenti prima.
+    pub fn trash(&self) -> Result<Vec<TrashItem>> {
+        let Ok(dir) = self.tmp.open_dir(TRASH) else { return Ok(vec![]) };
+        let mut out = Vec::new();
+        for entry in dir.entries()? {
+            let id = entry?.file_name().to_string_lossy().into_owned();
+            let Some((ts, rest)) = id.split_once('-') else { continue };
+            let Ok(deleted_at) = ts.parse() else { continue };
+            let (item, origin) = self.trash_entry(&id)?;
+            let m = self.tmp.symlink_metadata(&item)?;
+            let name = match (&origin, item.file_name()) {
+                (Some(_), Some(n)) => n.to_string_lossy().into_owned(),
+                _ => rest.to_string(),
+            };
+            out.push(TrashItem { origin, name, deleted_at, is_dir: m.is_dir(), size: if m.is_dir() { 0 } else { m.len() }, id });
+        }
+        out.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at).then_with(|| a.name.cmp(&b.name)));
+        Ok(out)
+    }
+
+    /// (file nel cestino, percorso originale). Le voci vecchie sono il file stesso, `<istante>-<nome>`.
+    fn trash_entry(&self, id: &str) -> Result<(PathBuf, Option<String>)> {
+        if id.is_empty() || id.contains('/') || id.starts_with('.') {
+            return Err(FileError::BadPath);
+        }
+        let entry = Path::new(TRASH).join(id);
+        let Ok(origin) = self.tmp.read_to_string(entry.join(ORIGIN)) else { return Ok((entry, None)) };
+        let item = self.tmp.read_dir(&entry)?.flatten().map(|e| e.file_name()).find(|n| n != ORIGIN).ok_or(FileError::BadPath)?;
+        Ok((entry.join(item), Some(origin)))
+    }
+
+    /// Rimette la voce dov'era (le vecchie nella radice); mai sopra un file che c'è già.
+    pub fn restore(&self, id: &str) -> Result<String> {
+        let (item, origin) = self.trash_entry(id)?;
+        let name = id.split_once('-').map_or(id, |(_, n)| n);
+        let dest = rel(origin.as_deref().unwrap_or(name))?;
+        if is_protected(&dest) {
+            return Err(FileError::Protected);
+        }
+        if self.root.symlink_metadata(&dest).is_ok() {
+            return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists).into());
+        }
+        if let Some(parent) = dest.parent().filter(|x| !x.as_os_str().is_empty()) {
+            self.mkdirs(parent)?;
+        }
+        self.tmp.rename(&item, &self.root, &dest)?;
+        if origin.is_some() {
+            self.tmp.remove_dir_all(Path::new(TRASH).join(id))?;
+        }
+        Ok(dest.to_string_lossy().into_owned())
+    }
+
+    /// Elimina definitivamente una voce del cestino.
+    pub fn purge(&self, id: &str) -> Result<()> {
+        self.trash_entry(id)?;
+        let entry = Path::new(TRASH).join(id);
+        if self.tmp.symlink_metadata(&entry)?.is_dir() { self.tmp.remove_dir_all(&entry)? } else { self.tmp.remove_file(&entry)? }
+        Ok(())
     }
 
     pub fn chmod(&self, path: &str, mode: u32) -> Result<()> {
@@ -517,12 +597,38 @@ mod tests {
     }
 
     #[test]
-    fn delete_moves_to_site_trash() {
-        let (_t, p, f) = site();
+    fn deleted_files_go_to_the_trash_and_come_back_where_they_were() {
+        let (_t, _p, f) = site();
         f.write("public/tema/style.css", b"x").unwrap();
         f.delete("public/tema", 1_700_000_000).unwrap();
         assert!(f.list("public").unwrap().is_empty());
-        assert!(p.tmp.join("sona_it/.trash/1700000000-tema/style.css").exists());
+        let trash = f.trash().unwrap();
+        assert_eq!(trash.len(), 1);
+        let t = &trash[0];
+        assert_eq!((t.name.as_str(), t.origin.as_deref(), t.deleted_at, t.is_dir), ("tema", Some("public/tema"), 1_700_000_000, true));
+        // Al suo posto c'è altro: non si sovrascrive.
+        f.write("public/tema/nuovo.css", b"y").unwrap();
+        assert!(f.restore(&t.id).is_err());
+        f.delete("public/tema", 1_700_000_000).unwrap();
+        assert_eq!(f.trash().unwrap().len(), 2, "stesso nome nello stesso secondo: due voci");
+        assert_eq!(f.restore(&t.id).unwrap(), "public/tema");
+        assert_eq!(f.read_text("public/tema/style.css").unwrap(), "x");
+        let left = f.trash().unwrap();
+        assert_eq!(left.len(), 1);
+        f.purge(&left[0].id).unwrap();
+        assert!(f.trash().unwrap().is_empty());
+        assert!(f.restore("..").is_err() && f.purge("../uploads").is_err());
+    }
+
+    #[test]
+    fn old_trash_entries_without_a_path_go_back_to_the_root() {
+        let (_t, p, f) = site();
+        std::fs::create_dir_all(p.tmp.join("sona_it/.trash")).unwrap();
+        std::fs::write(p.tmp.join("sona_it/.trash/1700000000-vecchio.txt"), "v").unwrap();
+        let trash = f.trash().unwrap();
+        assert_eq!((trash[0].name.as_str(), trash[0].origin.as_deref(), trash[0].deleted_at), ("vecchio.txt", None, 1_700_000_000));
+        assert_eq!(f.restore(&trash[0].id).unwrap(), "vecchio.txt");
+        assert_eq!(f.read_text("vecchio.txt").unwrap(), "v");
     }
 
     #[test]

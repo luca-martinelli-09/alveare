@@ -1033,6 +1033,21 @@ pub async fn reset_db_password<H: Host>(c: &Ctx<H>, site_id: i64) -> Result<()> 
     c.host.set_site_env(&site.slug, site.uid(), "DB_PASSWORD", &password).await
 }
 
+/// "backup a54ec52a: 245.6 KB nuovi": l'id breve come lo mostra la UI, le dimensioni leggibili.
+fn backup_line(snap: &Snapshot) -> String {
+    let id = snap.snapshot_id.get(..8).unwrap_or(&snap.snapshot_id);
+    if snap.bytes_added == 0 {
+        return format!("backup {id}: nessun dato nuovo");
+    }
+    let (mut v, mut unit) = (snap.bytes_added as f64, 0);
+    while v >= 1024.0 && unit < 4 {
+        v /= 1024.0;
+        unit += 1;
+    }
+    let size = if unit == 0 { format!("{v:.0} B") } else { format!("{v:.1} {}", ["B", "KB", "MB", "GB", "TB"][unit]) };
+    format!("backup {id}: {size} nuovi")
+}
+
 /// Backup di un sito con registrazione dell'esito e avviso se fallisce.
 pub async fn backup_site<H: Host>(c: &Ctx<H>, site_id: i64, log: &mut JobLog) -> Result<Snapshot> {
     if !c.backups {
@@ -1046,7 +1061,7 @@ pub async fn backup_site<H: Host>(c: &Ctx<H>, site_id: i64, log: &mut JobLog) ->
         Ok(snap) => {
             c.store.backup_finished(run, Ok(snap)).await?;
             c.store.resolve_alerts(site_id, "backup").await?;
-            log.push(format!("backup {} ({} byte nuovi)", snap.snapshot_id, snap.bytes_added));
+            log.push(backup_line(snap));
             // Lo snapshot è già salvo: una pulizia fallita (repository bloccato, rete) si riprova la notte dopo.
             if let Err(e) = c.host.prune(&site.slug, c.store.retention(site_id).await?).await {
                 tracing::warn!(site = %site.slug.as_str(), "pulizia dei backup: {e:#}");
@@ -1591,6 +1606,13 @@ mod tests {
         let alerts = c.store.open_alerts(None).await.unwrap();
         assert_eq!(alerts[0].kind, "backup");
         assert_eq!(c.store.backup_runs(site.id, 10).await.unwrap()[0].status, "failed");
+    }
+
+    #[test]
+    fn backup_log_line_is_short_and_readable() {
+        let snap = Snapshot { snapshot_id: "a54ec52a21d70f9d0404cda9c8330ee7838cd3c6dbb570c5735b5b80b912cf69".into(), bytes_added: 251_446, total_bytes: 0 };
+        assert_eq!(backup_line(&snap), "backup a54ec52a: 245.6 KB nuovi");
+        assert_eq!(backup_line(&Snapshot { bytes_added: 0, ..snap }), "backup a54ec52a: nessun dato nuovo");
     }
 
     #[tokio::test]

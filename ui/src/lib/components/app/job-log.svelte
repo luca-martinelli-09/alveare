@@ -27,5 +27,5 @@
 			<Badge variant="destructive">Fallito</Badge>
 		{/if}
 	</div>
-	<pre class="bg-muted max-h-72 overflow-auto rounded p-3 text-xs whitespace-pre-wrap">{(job?.log ?? []).join('\n') || error}</pre>
+	<pre class="bg-muted max-h-72 w-full min-w-0 overflow-auto rounded p-3 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">{(job?.log ?? []).join('\n') || error}</pre>
 </div>
