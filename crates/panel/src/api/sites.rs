@@ -7,6 +7,7 @@ use crate::store::DomainKind;
 pub(super) fn routes<H: Host>() -> Router<App<H>> {
     Router::new()
         .route("/api/sites/{id}", patch(update_site::<H>))
+        .route("/api/server", get(server::<H>))
         .route("/api/sites/{id}/clone", post(clone_site::<H>))
         .route("/api/sites/{id}/export", post(export_site::<H>))
         .route("/api/sites/{id}/template", post(save_template::<H>))
@@ -22,6 +23,10 @@ pub(super) fn staging_json(password: Option<String>) -> serde_json::Value {
 
 #[derive(Deserialize)]
 struct UpdateSite {
+    php: Option<crate::store::PhpSettingsRow>,
+    /// Conferma esplicita quando il budget di memoria supera il 150% della RAM.
+    #[serde(default)]
+    confirm_budget: bool,
     suspended: Option<bool>,
     staging: Option<bool>,
     log_retention_days: Option<u32>,
@@ -31,6 +36,21 @@ async fn update_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m:
     let user = caller(&app, &m, &h).await?;
     app.ctx.store.site(id).await?;
     require_site(&app, &user, id, Need::Manage).await?;
+    let mut warning = None;
+    let mut budget = None;
+    if let Some(php) = &r.php {
+        crate::budget::validate(php).map_err(ApiError::bad_request)?;
+        let b = flows::budget_with(&app.ctx, id, Some(php), app.ram_mb).await?;
+        if b.needs_confirmation() && !r.confirm_budget {
+            return Err(ApiError::new(StatusCode::CONFLICT, format!("i pool arriverebbero al {}% della RAM: conferma per applicare", b.percent)));
+        }
+        flows::set_php_settings(&app.ctx, id, php).await?;
+        if b.over_ram() {
+            warning = Some(format!("Attenzione: il massimo teorico dei pool è il {}% della RAM ({} MB su {} MB).", b.percent, b.total_mb, b.ram_mb));
+        }
+        app.auth.audit(Some(user.id), "site.php", Some(id), &format!("memoria {} MB, upload {} MB, tempo {} s, processi {}", php.memory_limit_mb, php.upload_max_mb, php.max_execution_time_s, php.max_children)).await?;
+        budget = Some(b);
+    }
     if let Some(suspended) = r.suspended {
         flows::set_suspended(&app.ctx, id, suspended).await.map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?;
         app.auth.audit(Some(user.id), if suspended { "site.suspend" } else { "site.resume" }, Some(id), "").await?;
@@ -48,7 +68,7 @@ async fn update_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m:
         app.auth.audit(Some(user.id), "site.log_retention", Some(id), &format!("{days} giorni")).await?;
     }
     let site = app.ctx.store.site(id).await?;
-    Ok(Json(json!({ "site": site, "staging": staging_json(flows::staging_password(&app.ctx, id).await?) })).into_response())
+    Ok(Json(json!({ "site": site, "staging": staging_json(flows::staging_password(&app.ctx, id).await?), "budget": budget, "warning": warning })).into_response())
 }
 
 /// Dominio nuovo per un sito: valido, non riservato, non già usato.
@@ -112,6 +132,19 @@ async fn save_template<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, 
         })
         .await?;
     Ok((StatusCode::ACCEPTED, Json(json!({ "job": job }))).into_response())
+}
+
+/// Pagina del server (admin): RAM e budget di memoria dei pool.
+async fn server<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    require_admin(&caller(&app, &m, &h).await?)?;
+    let budget = flows::budget_with(&app.ctx, 0, None, app.ram_mb).await?;
+    let mut sites = Vec::new();
+    for s in app.ctx.store.sites().await? {
+        let domain = app.ctx.store.domains(s.id).await?.into_iter().next().map(|(d, _)| d.as_str().to_string());
+        sites.push(json!({ "id": s.id, "slug": s.slug, "domain": domain, "status": s.status, "pool_mb": crate::budget::pool_mb(&s.settings), "settings": s.settings }));
+    }
+    sites.sort_by_key(|s| std::cmp::Reverse(s["pool_mb"].as_u64()));
+    Ok(Json(json!({ "budget": budget, "sites": sites })).into_response())
 }
 
 const EXPORT_DAYS: i64 = 7;
@@ -253,6 +286,47 @@ mod tests {
         assert_eq!(t.app.ctx.store.caddy_sites().await.unwrap()[0].log_days, 14);
         let (s, _, _) = call(&t, req("PATCH", &format!("/api/sites/{id}"), Some(&admin), Some(json!({"log_retention_days": 0})))).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn manager_changes_php_settings_within_the_memory_budget() {
+        let mut t = setup().await;
+        t.app.ram_mb = 4096;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let id = create_site(&t, &admin, "sona.it").await;
+        let manager = user_with_role(&t, "g@example.org", id, Role::Manager).await;
+        let url = format!("/api/sites/{id}");
+        let php = |mem: u32, children: u32| json!({"php": {"memory_limit_mb": mem, "upload_max_mb": 128, "max_execution_time_s": 120, "max_children": children}});
+        let (s, body, _) = call(&t, req("PATCH", &url, Some(&manager), Some(php(512, 4)))).await;
+        assert_eq!(s, StatusCode::OK, "{body}");
+        assert_eq!(body["site"]["settings"]["upload_max_mb"], 128);
+        assert_eq!(body["budget"]["total_mb"], 512 * 4 + crate::budget::RESERVED_MB);
+        assert!(body["warning"].is_null());
+        // Oltre la RAM: applicato, ma con avviso.
+        let (s, body, _) = call(&t, req("PATCH", &url, Some(&manager), Some(php(1024, 4)))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert!(body["warning"].as_str().unwrap().contains("RAM"), "{body}");
+        // Oltre il 150%: serve la conferma esplicita.
+        let (s, body, _) = call(&t, req("PATCH", &url, Some(&manager), Some(php(2048, 4)))).await;
+        assert_eq!(s, StatusCode::CONFLICT, "{body}");
+        assert_eq!(t.app.ctx.store.site(id).await.unwrap().settings.memory_limit_mb, 1024, "non applicato");
+        let mut confirmed = php(2048, 4);
+        confirmed["confirm_budget"] = json!(true);
+        let (s, _, _) = call(&t, req("PATCH", &url, Some(&manager), Some(confirmed))).await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _, _) = call(&t, req("PATCH", &url, Some(&manager), Some(php(16, 4)))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let (s, body, _) = call(&t, req("GET", "/api/server", Some(&admin), None)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(body["budget"]["ram_mb"], 4096);
+        assert_eq!(body["sites"][0]["pool_mb"], 2048 * 4);
+        let (s, _, _) = call(&t, req("GET", "/api/server", Some(&manager), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        // Un sito nuovo con i pool già al 200%: serve la conferma.
+        let (s, body, _) = call(&t, req("POST", "/api/sites", Some(&admin), Some(json!({"domain": "nuovo.it", "template": "wordpress", "title": "x"})))).await;
+        assert_eq!(s, StatusCode::CONFLICT, "{body}");
+        let (s, _, _) = call(&t, req("POST", "/api/sites", Some(&admin), Some(json!({"domain": "nuovo.it", "template": "wordpress", "title": "x", "confirm_budget": true})))).await;
+        assert_eq!(s, StatusCode::ACCEPTED);
     }
 
     #[tokio::test]

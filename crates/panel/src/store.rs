@@ -105,12 +105,20 @@ pub struct Site {
     pub settings: PhpSettingsRow,
 }
 
+/// Stessi default delle colonne di `sites` e di `PhpSettings`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PhpSettingsRow {
     pub memory_limit_mb: u32,
     pub upload_max_mb: u32,
     pub max_execution_time_s: u32,
     pub max_children: u32,
+}
+
+impl Default for PhpSettingsRow {
+    fn default() -> Self {
+        let d = PhpSettings::default();
+        Self { memory_limit_mb: d.memory_limit_mb, upload_max_mb: d.upload_max_mb, max_execution_time_s: d.max_execution_time_s, max_children: d.max_children }
+    }
 }
 
 impl From<&PhpSettingsRow> for PhpSettings {
@@ -263,6 +271,18 @@ impl Store {
             .bind(enc.is_some())
             .bind(enc)
             .bind(hash)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_php_settings(&self, id: i64, p: &PhpSettingsRow) -> Result<()> {
+        sqlx::query("UPDATE sites SET memory_limit_mb = ?, upload_max_mb = ?, max_execution_time_s = ?, max_children = ? WHERE id = ?")
+            .bind(p.memory_limit_mb)
+            .bind(p.upload_max_mb)
+            .bind(p.max_execution_time_s)
+            .bind(p.max_children)
             .bind(id)
             .execute(&self.pool)
             .await?;

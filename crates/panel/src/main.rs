@@ -2,6 +2,7 @@ mod api;
 mod archive;
 mod auth;
 mod backup;
+mod budget;
 mod config;
 mod database;
 mod files;

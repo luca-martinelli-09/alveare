@@ -213,6 +213,33 @@ pub async fn set_php_override<H: Host>(c: &Ctx<H>, site_id: i64, content: &str, 
     Ok(saved)
 }
 
+/// Impostazioni PHP dal form: se FPM rifiuta il pool, tornano quelle di prima.
+pub async fn set_php_settings<H: Host>(c: &Ctx<H>, site_id: i64, settings: &crate::store::PhpSettingsRow) -> Result<()> {
+    let site = c.store.site(site_id).await?;
+    crate::budget::validate(settings).map_err(Invalid)?;
+    c.store.set_php_settings(site_id, settings).await?;
+    if let Err(e) = check_own_pool(c, &site).await {
+        c.store.set_php_settings(site_id, &site.settings).await?;
+        c.sync_php().await?;
+        return Err(Invalid(format!("php-fpm ha rifiutato le impostazioni: {e:#}")).into());
+    }
+    Ok(())
+}
+
+/// Budget di memoria con le impostazioni di un sito sostituite da `proposed`.
+/// `site_id = 0` e `proposed` aggiungono un sito nuovo con quelle impostazioni.
+pub async fn budget_with<H>(c: &Ctx<H>, site_id: i64, proposed: Option<&crate::store::PhpSettingsRow>, ram_mb: u64) -> Result<crate::budget::Budget> {
+    let sites = c.store.sites().await?;
+    let new_site = (site_id == 0).then_some(proposed).flatten().cloned();
+    let rows: Vec<crate::store::PhpSettingsRow> = sites
+        .iter()
+        .filter(|s| !matches!(s.status, SiteStatus::Suspended | SiteStatus::Deleting))
+        .map(|s| if s.id == site_id { proposed.cloned().unwrap_or_else(|| s.settings.clone()) } else { s.settings.clone() })
+        .chain(new_site)
+        .collect();
+    Ok(crate::budget::compute(&rows, ram_mb))
+}
+
 /// Override globale di PHP: scritto in conf.d e attivato con il reload di FPM.
 pub async fn set_php_global<H: Host>(c: &Ctx<H>, content: &str, author: Option<i64>) -> Result<Override> {
     let lines = alveare_core::php::parse_global_ini(content).map_err(Invalid)?;

@@ -38,6 +38,8 @@ pub struct App<H> {
     pub recovery: Vec<(String, String)>,
     /// Hostname del pannello e di Adminer: nessun sito può usarli.
     pub reserved_hosts: Vec<Domain>,
+    /// RAM del server per il budget di memoria (letta da /proc/meminfo).
+    pub ram_mb: u64,
 }
 
 impl<H> Clone for App<H> {
@@ -54,6 +56,7 @@ impl<H> Clone for App<H> {
             adminer_host: self.adminer_host.clone(),
             recovery: self.recovery.clone(),
             reserved_hosts: self.reserved_hosts.clone(),
+            ram_mb: self.ram_mb,
         }
     }
 }
@@ -61,7 +64,7 @@ impl<H> Clone for App<H> {
 impl<H: Host> App<H> {
     pub fn new(ctx: Ctx<H>, auth: Auth, templates: PathBuf, secure_cookie: bool) -> Self {
         let jobs = Jobs::new(ctx.store.pool().clone());
-        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None, recovery: vec![], reserved_hosts: vec![] }
+        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None, recovery: vec![], reserved_hosts: vec![], ram_mb: crate::budget::ram_mb() }
     }
 
     pub fn with_recovery(self, recovery: Vec<(String, String)>) -> Self {
@@ -460,6 +463,9 @@ struct CreateSiteReq {
     template: String,
     title: String,
     admin_email: Option<String>,
+    /// Conferma esplicita se il budget di memoria supera il 150% della RAM.
+    #[serde(default)]
+    confirm_budget: bool,
 }
 
 async fn create_site<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap, Json(r): Json<CreateSiteReq>) -> ApiResult<Response> {
@@ -476,10 +482,17 @@ async fn create_site<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap
         admin_email: r.admin_email.unwrap_or_else(|| user.email.clone()),
         table_prefix: template.manifest.table_prefix.clone().unwrap_or_else(|| "wp_".into()),
     };
+    let budget = flows::budget_with(&app.ctx, 0, Some(&crate::store::PhpSettingsRow::default()), app.ram_mb).await?;
+    if budget.needs_confirmation() && !r.confirm_budget {
+        return Err(ApiError::new(StatusCode::CONFLICT, format!("con il nuovo sito i pool arriverebbero al {}% della RAM: conferma per creare", budget.percent)));
+    }
     let (ctx, auth, jobs, uid) = (app.ctx.clone(), app.auth.clone(), app.jobs.clone(), user.id);
     let job = app
         .jobs
         .spawn("site.create", None, Some(user.id), move |mut log| async move {
+            if budget.over_ram() {
+                log.push(format!("ATTENZIONE: il massimo teorico dei pool sarà il {}% della RAM", budget.percent));
+            }
             let site = flows::create_site(&ctx, &req, &mut log).await?;
             jobs.set_site(log.job_id, site.id).await?;
             auth.audit(Some(uid), "site.create", Some(site.id), req.domain.as_str()).await?;
