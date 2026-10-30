@@ -81,6 +81,13 @@ pub trait Host: Send + Sync + 'static {
     /// Crea `templates/<name>/` con i file del sito (senza `.env`), il dump in `db.sql` e il manifest.
     /// `sql_file` è nella cartella tmp del sito, dove l'ha scritto WP-CLI.
     fn store_template(&self, slug: &Slug, name: &Slug, manifest: &crate::template::Manifest, sql_file: &str) -> impl Future<Output = Result<()>> + Send;
+    /// Etichette degli account Cloudflare configurati (vuoto: hostname da aggiungere a mano).
+    fn cloudflare_accounts(&self) -> Vec<String>;
+    /// Hostname sul tunnel dell'account (ingress verso Caddy + CNAME proxato).
+    fn tunnel_add(&self, account: &str, host: &Domain) -> impl Future<Output = Result<()>> + Send;
+    fn tunnel_remove(&self, account: &str, host: &Domain) -> impl Future<Output = Result<()>> + Send;
+    /// Applica il modello di regole WAF e rate limit alla zona dell'hostname; quante regole.
+    fn cloudflare_rules(&self, account: &str, host: &Domain, template: &serde_json::Value) -> impl Future<Output = Result<usize>> + Send;
     /// Messaggio sul canale degli avvisi (Telegram); `Ok(false)` se il canale non è configurato.
     fn notify(&self, text: &str) -> impl Future<Output = Result<bool>> + Send;
     /// Byte occupati dalla cartella del sito.
@@ -195,6 +202,46 @@ impl<H: Host> Ctx<H> {
     async fn sync_redis(&self) -> Result<()> {
         self.host.sync_redis(&redis_users(&self.store, &self.key).await?).await
     }
+}
+
+/// Account Cloudflare del sito: quello scelto o il primo configurato.
+pub async fn cloudflare_account<H: Host>(c: &Ctx<H>, site_id: i64) -> Result<Option<String>> {
+    let accounts = c.host.cloudflare_accounts();
+    let chosen = c.store.cloudflare_account(site_id).await?;
+    Ok(chosen.filter(|a| accounts.contains(a)).or_else(|| accounts.first().cloned()))
+}
+
+/// Pubblica (o toglie) gli hostname sul tunnel Cloudflare. Un errore non ferma il flusso:
+/// finisce nel log e in un avviso, e l'hostname si sistema a mano o con "Sincronizza".
+pub async fn tunnel_hostnames<H: Host>(c: &Ctx<H>, site_id: i64, hosts: &[Domain], add: bool, log: &mut JobLog) -> Result<()> {
+    let Some(account) = cloudflare_account(c, site_id).await? else {
+        if add {
+            let list: Vec<&str> = hosts.iter().map(Domain::as_str).collect();
+            log.push(format!("aggiungi al tunnel Cloudflare verso {}: {}", crate::cloudflare::SERVICE, list.join(", ")));
+        }
+        return Ok(());
+    };
+    let mut failed = Vec::new();
+    for host in hosts {
+        let done = if add { c.host.tunnel_add(&account, host).await } else { c.host.tunnel_remove(&account, host).await };
+        match done {
+            Ok(()) => log.push(format!("Cloudflare ({account}): {} {}", host.as_str(), if add { "pubblicato sul tunnel" } else { "tolto dal tunnel" })),
+            Err(e) => {
+                log.push(format!("Cloudflare ({account}): {} non sistemato: {e:#}", host.as_str()));
+                failed.push(format!("{}: {e:#}", host.as_str()));
+            }
+        }
+    }
+    if failed.is_empty() {
+        c.store.resolve_alerts(site_id, "cloudflare").await?;
+    } else {
+        c.store.raise_alert(Some(site_id), "cloudflare", &format!("hostname da sistemare sul tunnel:\n{}", failed.join("\n"))).await?;
+    }
+    Ok(())
+}
+
+pub async fn site_hostnames<H>(c: &Ctx<H>, site_id: i64) -> Result<Vec<Domain>> {
+    Ok(c.store.domains(site_id).await?.into_iter().map(|(d, _)| d).collect())
 }
 
 /// Rigenera e ricarica il Caddyfile dallo stato.
@@ -455,8 +502,8 @@ async fn create_steps<H: Host>(c: &Ctx<H>, req: &CreateSite, site: &Site, undo: 
 
     c.store.set_status(site.id, SiteStatus::Active).await?;
     c.sync_caddy().await?;
-    log.push(format!("sito attivo: aggiungi {} al tunnel Cloudflare verso http://caddy:80", req.domain.as_str()));
-    Ok(())
+    log.push("sito attivo");
+    tunnel_hostnames(c, site.id, std::slice::from_ref(&req.domain), true, log).await
 }
 
 /// Copia un sito su un nuovo dominio: file, database e `wp search-replace` del dominio.
@@ -559,8 +606,8 @@ async fn import_steps<H: Host>(c: &Ctx<H>, req: &ImportSite, site: &Site, undo: 
     c.store.set_status(site.id, SiteStatus::Active).await?;
     c.sync_caddy().await?;
     flush_object_cache(c, site, log).await;
-    log.push(format!("sito importato: aggiungi {} al tunnel Cloudflare verso http://caddy:80", create.domain.as_str()));
-    Ok(())
+    log.push("sito importato");
+    tunnel_hostnames(c, site.id, std::slice::from_ref(&create.domain), true, log).await
 }
 
 /// Valori del .env che non devono uscire dal server.
@@ -679,8 +726,8 @@ async fn publish_copy<H: Host>(c: &Ctx<H>, site: &Site, src_domain: &Domain, dom
     c.store.set_staging(site.id, Some((&c.key.encrypt(&password), &bcrypt::hash(&password, bcrypt::DEFAULT_COST)?))).await?;
     c.store.set_status(site.id, SiteStatus::Active).await?;
     c.sync_caddy().await?;
-    log.push(format!("copia attiva e protetta (utente staging): aggiungi {} al tunnel Cloudflare", domain.as_str()));
-    Ok(())
+    log.push("copia attiva e protetta (utente staging)");
+    tunnel_hostnames(c, site.id, std::slice::from_ref(domain), true, log).await
 }
 
 /// Database e cartelle di un sito appena registrato, con i passi per annullarli.
@@ -949,6 +996,10 @@ pub async fn delete_site<H: Host>(c: &Ctx<H>, id: i64, mode: DeleteMode, log: &m
         log.push("ATTENZIONE: backup non configurati, nessun backup finale");
     }
     let db = c.store.db_creds(id).await.ok();
+    if mode == DeleteMode::Normal {
+        let hosts = site_hostnames(c, id).await?;
+        tunnel_hostnames(c, id, &hosts, false, log).await?;
+    }
     c.store.set_status(id, SiteStatus::Deleting).await?;
     c.sync_caddy().await?;
     c.sync_php().await?;
@@ -1535,6 +1586,29 @@ mod tests {
         dispatch_alerts(&c).await.unwrap();
         assert_eq!(c.host.calls().last().unwrap(), "notify ✅ sona.it · backup: risolto");
         assert_eq!(dispatch_alerts(&c).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn hostnames_follow_the_site_on_the_cloudflare_tunnel() {
+        let c = ctx(FakeHost { cf_accounts: vec!["banda".into(), "proloco".into()], ..Default::default() }).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        assert_eq!(c.host.calls().last().unwrap(), "tunnel_add banda sona.it", "il primo account per default");
+        c.store.add_domain(site.id, &Domain::parse("www.sona.it").unwrap(), crate::store::DomainKind::Redirect).await.unwrap();
+        c.store.set_cloudflare_account(site.id, Some("proloco")).await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        delete_site(&c, site.id, DeleteMode::Normal, &mut JobLog::default()).await.unwrap();
+        let calls = c.host.calls();
+        assert_eq!(calls[..2], ["tunnel_remove proloco sona.it", "tunnel_remove proloco www.sona.it"]);
+    }
+
+    #[tokio::test]
+    async fn tunnel_errors_do_not_stop_the_site_but_raise_an_alert() {
+        let c = ctx(FakeHost { cf_accounts: vec!["banda".into()], fail_on: Some("tunnel_add"), ..Default::default() }).await;
+        let mut log = JobLog::default();
+        let site = create_site(&c, &req("sona.it"), &mut log).await.unwrap();
+        assert_eq!(c.store.site(site.id).await.unwrap().status, SiteStatus::Active);
+        assert_eq!(c.store.open_alerts(None).await.unwrap()[0].kind, "cloudflare");
+        assert!(log.lines.iter().any(|l| l.contains("non sistemato")));
     }
 
     #[tokio::test]

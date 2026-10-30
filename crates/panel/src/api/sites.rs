@@ -32,6 +32,8 @@ struct UpdateSite {
     staging: Option<bool>,
     log_retention_days: Option<u32>,
     update_rule: Option<crate::store::UpdateRule>,
+    /// Account Cloudflare del sito (solo admin); stringa vuota = il primo configurato.
+    cloudflare_account: Option<String>,
 }
 
 async fn update_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(r): Json<UpdateSite>) -> ApiResult<Response> {
@@ -61,6 +63,17 @@ async fn update_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m:
     if let Some(on) = r.staging {
         flows::set_staging(&app.ctx, id, on).await?;
         app.auth.audit(Some(user.id), if on { "site.staging.on" } else { "site.staging.off" }, Some(id), "").await?;
+    }
+    if let Some(acc) = &r.cloudflare_account {
+        require_admin(&user)?;
+        let acc = Some(acc.trim()).filter(|a| !a.is_empty());
+        if let Some(a) = acc {
+            if !app.ctx.host.cloudflare_accounts().iter().any(|x| x == a) {
+                return Err(ApiError::bad_request(format!("account Cloudflare sconosciuto: {a}")));
+            }
+        }
+        app.ctx.store.set_cloudflare_account(id, acc).await?;
+        app.auth.audit(Some(user.id), "site.cloudflare_account", Some(id), acc.unwrap_or("predefinito")).await?;
     }
     if let Some(rule) = r.update_rule {
         let site = app.ctx.store.site(id).await?;
@@ -253,6 +266,8 @@ async fn add_domain<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: 
     app.check_not_reserved(&host)?;
     app.ctx.store.add_domain(id, &host, r.kind).await?;
     flows::sync_caddy(&app.ctx).await?;
+    let mut log = flows::JobLog::default();
+    flows::tunnel_hostnames(&app.ctx, id, std::slice::from_ref(&host), true, &mut log).await?;
     app.auth.audit(Some(user.id), "domain.add", Some(id), &format!("{} ({})", host.as_str(), r.kind.as_str())).await?;
     Ok((StatusCode::CREATED, Json(json!({}))).into_response())
 }
@@ -267,6 +282,8 @@ async fn remove_domain<H: Host>(State(app): State<App<H>>, Path((id, hostname)):
     }
     app.ctx.store.remove_domain(id, &host).await?;
     flows::sync_caddy(&app.ctx).await?;
+    let mut log = flows::JobLog::default();
+    flows::tunnel_hostnames(&app.ctx, id, std::slice::from_ref(&host), false, &mut log).await?;
     app.auth.audit(Some(user.id), "domain.remove", Some(id), host.as_str()).await?;
     Ok(Json(json!({})).into_response())
 }

@@ -28,6 +28,8 @@ pub struct Config {
     pub telegram: Option<(String, String)>,
     /// Soglia di spazio (file + database) per sito oltre la quale parte un avviso.
     pub disk_alert_mb: u64,
+    /// Account Cloudflare per tunnel e regole (`CLOUDFLARE_<ETICHETTA>_*`).
+    pub cloudflare: Vec<crate::cloudflare::Account>,
 }
 
 fn url_encode(s: &str) -> String {
@@ -93,6 +95,7 @@ impl Config {
             recovery,
             telegram,
             disk_alert_mb,
+            cloudflare: crate::cloudflare::accounts_from(&vars)?,
             site_env: vars.iter().filter_map(|(k, v)| Some((k.strip_prefix("SITE_ENV_")?.to_string(), v.clone()))).collect(),
         })
     }

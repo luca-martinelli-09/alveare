@@ -3,6 +3,7 @@ mod archive;
 mod auth;
 mod backup;
 mod budget;
+mod cloudflare;
 mod config;
 mod crons;
 mod database;
@@ -45,8 +46,6 @@ async fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("healthcheck") {
         return healthcheck().await;
     }
-    // TLS di reqwest (Telegram, Cloudflare) con ring: niente toolchain C extra per aws-lc.
-    let _ = rustls::crypto::ring::default_provider().install_default();
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())).init();
     let cfg = Config::from_env()?;
     // Crea cartelle e file di proprietà degli utenti dei siti: serve root.
@@ -72,7 +71,9 @@ async fn main() -> Result<()> {
         redis_admin_password: cfg.redis_admin_password.clone(),
         caddy_http: "caddy:80".into(),
         telegram: cfg.telegram.clone(),
-        http: reqwest::Client::builder().user_agent("alveare").build()?,
+        http: cloudflare::http_client(),
+        cloudflare: cfg.cloudflare.clone(),
+        cloudflare_api: cloudflare::API.into(),
     };
     let ctx = Ctx {
         store: store.clone(),

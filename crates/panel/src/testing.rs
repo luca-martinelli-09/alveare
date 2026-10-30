@@ -33,6 +33,8 @@ pub struct FakeHost {
     pub adapted: Mutex<Option<serde_json::Value>>,
     /// Override globale dell'ultimo `sync_caddy`.
     pub caddy_global: Mutex<Option<String>>,
+    /// Account Cloudflare configurati (default: nessuno, hostname a mano).
+    pub cf_accounts: Vec<String>,
 }
 
 impl FakeHost {
@@ -167,6 +169,19 @@ impl Host for FakeHost {
     async fn probe(&self, host: &alveare_core::site::Domain, auth: Option<(&str, &str)>) -> anyhow::Result<u16> {
         self.record("probe", format!("{} {}", host.as_str(), auth.map_or("-".to_string(), |(u, _)| format!("{u}:"))))?;
         Ok(self.probe_status.unwrap_or(200))
+    }
+    fn cloudflare_accounts(&self) -> Vec<String> {
+        self.cf_accounts.clone()
+    }
+    async fn tunnel_add(&self, account: &str, host: &alveare_core::site::Domain) -> anyhow::Result<()> {
+        self.record("tunnel_add", format!("{account} {}", host.as_str()))
+    }
+    async fn tunnel_remove(&self, account: &str, host: &alveare_core::site::Domain) -> anyhow::Result<()> {
+        self.record("tunnel_remove", format!("{account} {}", host.as_str()))
+    }
+    async fn cloudflare_rules(&self, account: &str, host: &alveare_core::site::Domain, _template: &serde_json::Value) -> anyhow::Result<usize> {
+        self.record("cloudflare_rules", format!("{account} {}", host.as_str()))?;
+        Ok(3)
     }
     async fn notify(&self, text: &str) -> anyhow::Result<bool> {
         self.record("notify", text.into())?;

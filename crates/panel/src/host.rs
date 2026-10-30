@@ -350,6 +350,19 @@ pub struct SystemHost {
     /// (token del bot, chat) per gli avvisi su Telegram.
     pub telegram: Option<(String, String)>,
     pub http: reqwest::Client,
+    pub cloudflare: Vec<crate::cloudflare::Account>,
+    /// Base dell'API di Cloudflare (sostituibile nei test).
+    pub cloudflare_api: String,
+}
+
+impl SystemHost {
+    fn cf_account(&self, label: &str) -> Result<&crate::cloudflare::Account> {
+        self.cloudflare.iter().find(|a| a.label == label).with_context(|| format!("account Cloudflare sconosciuto: {label}"))
+    }
+
+    fn cf(&self) -> crate::cloudflare::Client {
+        crate::cloudflare::Client::new(self.http.clone(), &self.cloudflare_api)
+    }
 }
 
 impl SystemHost {
@@ -732,6 +745,22 @@ impl Host for SystemHost {
 
     async fn probe(&self, host: &Domain, auth: Option<(&str, &str)>) -> Result<u16> {
         http_probe(&self.caddy_http, host, auth, Duration::from_secs(30)).await
+    }
+
+    fn cloudflare_accounts(&self) -> Vec<String> {
+        self.cloudflare.iter().map(|a| a.label.clone()).collect()
+    }
+
+    async fn tunnel_add(&self, account: &str, host: &Domain) -> Result<()> {
+        self.cf().add_hostname(self.cf_account(account)?, host).await
+    }
+
+    async fn tunnel_remove(&self, account: &str, host: &Domain) -> Result<()> {
+        self.cf().remove_hostname(self.cf_account(account)?, host).await
+    }
+
+    async fn cloudflare_rules(&self, account: &str, host: &Domain, template: &serde_json::Value) -> Result<usize> {
+        self.cf().apply_rules(self.cf_account(account)?, host, template).await
     }
 
     async fn notify(&self, text: &str) -> Result<bool> {

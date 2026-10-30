@@ -326,6 +326,15 @@ impl Store {
         Ok(())
     }
 
+    pub async fn cloudflare_account(&self, id: i64) -> Result<Option<String>> {
+        Ok(sqlx::query_scalar("SELECT cloudflare_account FROM sites WHERE id = ?").bind(id).fetch_optional(&self.pool).await?.flatten())
+    }
+
+    pub async fn set_cloudflare_account(&self, id: i64, account: Option<&str>) -> Result<()> {
+        sqlx::query("UPDATE sites SET cloudflare_account = ? WHERE id = ?").bind(account).bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
     pub async fn set_update_rule(&self, id: i64, rule: UpdateRule) -> Result<()> {
         sqlx::query("UPDATE sites SET update_rule = ? WHERE id = ?").bind(rule.as_str()).bind(id).execute(&self.pool).await?;
         Ok(())

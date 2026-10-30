@@ -278,6 +278,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .merge(blocks::routes::<H>())
         .merge(wordpress::routes::<H>())
         .merge(crons::routes::<H>())
+        .merge(cloudflare::routes::<H>())
         .with_state(app)
 }
 
@@ -915,6 +916,7 @@ async fn get_job<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Met
 }
 
 mod blocks;
+mod cloudflare;
 mod config;
 mod crons;
 mod imports;
