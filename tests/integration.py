@@ -212,7 +212,7 @@ def main():
         http.call("POST", "/api/auth/setup/totp", {"code": totp(setup["secret"])}, expect=200)
         _, me = http.call("GET", "/api/me", expect=200)
         assert me["stage"] == "full"
-        _, tok = http.call("POST", "/api/me/tokens", {"name": "integrazione", "days": 1}, expect=201)
+        _, tok = http.call("POST", "/api/me/tokens", {"name": "integrazione", "days": 1, "password": "una-password-molto-lunga"}, expect=201)
         http.token = tok["token"]
         # Per i test nel browser (ui/e2e) sullo stesso stack: E2E_CONFIG=<cartella>/e2e.json npm run e2e
         with open(os.path.join(work, "e2e.json"), "w") as f:
