@@ -1023,7 +1023,13 @@ pub async fn import_database<H: Host>(
     let db = c.db_creds(site_id).await?;
     save_dump(c, &db.name, safety).await.context("dump di sicurezza")?;
     log.push(format!("dump di sicurezza salvato in {}", safety.display()));
-    c.host.db_import(&db, sql).await?;
+    if let Err(e) = c.host.db_import(&db, sql).await {
+        // Fallito a metà: si rimette il dump di sicurezza, così il sito non resta con metà delle tabelle.
+        log.push(format!("import fallito, ripristino del dump di sicurezza: {e:#}"));
+        c.host.db_import(&db, open_sql(safety).await?).await.context("ripristino del dump di sicurezza dopo l'import fallito")?;
+        flush_object_cache(c, &site, log).await;
+        return Err(e.context("import fallito; il database è stato rimesso com'era"));
+    }
     log.push("dump importato");
     if let Some((from, to)) = search_replace {
         let args: Vec<String> = ["search-replace", &from, &to, "--all-tables", "--skip-columns=guid"].map(String::from).to_vec();
@@ -1367,6 +1373,19 @@ mod tests {
             ]
         );
         assert_eq!(c.store.site(site.id).await.unwrap().status, SiteStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn a_failed_import_puts_the_safety_dump_back() {
+        let c = ctx(FakeHost { bad_sql: Some("ROTTO"), ..Default::default() }).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let safety = tmp.path().join("prima.sql.gz");
+        let sql: Pin<Box<dyn AsyncRead + Send>> = Box::pin(std::io::Cursor::new(b"-- ROTTO".to_vec()));
+        let err = import_database(&c, site.id, sql, &safety, None, &mut JobLog::default()).await.unwrap_err();
+        assert!(format!("{err:#}").contains("rimesso com'era"), "{err:#}");
+        let imports: Vec<String> = c.host.calls().into_iter().filter(|x| x.starts_with("db_import")).collect();
+        assert_eq!(imports, ["db_import sona_it as sona_it -- ROTTO", "db_import sona_it as sona_it -- dump finto"], "dopo l'errore torna il dump di sicurezza");
     }
 
     #[tokio::test]

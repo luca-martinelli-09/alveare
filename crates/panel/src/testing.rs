@@ -18,6 +18,8 @@ use crate::template::Vars;
 pub struct FakeHost {
     pub calls: Mutex<Vec<String>>,
     pub fail_on: Option<&'static str>,
+    /// Un import che contiene questo testo fallisce (gli altri riescono): un dump rotto a metà.
+    pub bad_sql: Option<&'static str>,
     pub reject_pool: bool,
     pub env: Mutex<Vars>,
     pub snapshot_sql: Option<std::path::PathBuf>,
@@ -119,7 +121,11 @@ impl Host for FakeHost {
     async fn db_import(&self, db: &crate::flows::DbCreds, mut sql: Pin<Box<dyn AsyncRead + Send>>) -> anyhow::Result<()> {
         let mut text = String::new();
         tokio::io::AsyncReadExt::read_to_string(&mut sql, &mut text).await?;
-        self.record("db_import", format!("{} as {} {}", db.name, db.user, text.trim()))
+        self.record("db_import", format!("{} as {} {}", db.name, db.user, text.trim()))?;
+        if self.bad_sql.is_some_and(|bad| text.contains(bad)) {
+            anyhow::bail!("ERROR 1227 at line 28");
+        }
+        Ok(())
     }
     async fn backup(&self, slug: &Slug, db_name: &str) -> anyhow::Result<Snapshot> {
         self.record("backup", format!("{} {db_name}", slug.as_str()))?;

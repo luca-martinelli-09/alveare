@@ -325,6 +325,59 @@ fn wp_disk_full(args: &[String], output: &str) -> Option<String> {
         .then(|| format!("disco del server pieno durante wp {}: libera spazio o ingrandisci il disco, poi riprova", shown_args(args)))
 }
 
+/// `DEFINER=utente@host` tolto dalle righe che creano oggetti (funzioni, viste, trigger, procedure):
+/// così appartengono all'utente che importa. Le altre righe, dati compresi, restano intatte.
+fn strip_definer(line: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    let head = line.trim_ascii_start();
+    let creates = head.get(..6).is_some_and(|h| h.eq_ignore_ascii_case(b"create")) || head.starts_with(b"/*!");
+    if !creates || !line.windows(7).any(|w| w.eq_ignore_ascii_case(b"definer")) {
+        return std::borrow::Cow::Borrowed(line);
+    }
+    let mut out = Vec::with_capacity(line.len());
+    let mut i = 0;
+    while i < line.len() {
+        if let Some(end) = definer_clause(line, i) {
+            i = end + usize::from(line.get(end) == Some(&b' '));
+        } else {
+            out.push(line[i]);
+            i += 1;
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// Fine di `DEFINER = utente@host` se inizia in `i` (nomi tra ` ' " o nudi).
+fn definer_clause(l: &[u8], i: usize) -> Option<usize> {
+    let word_start = i == 0 || !(l[i - 1].is_ascii_alphanumeric() || l[i - 1] == b'_');
+    if !word_start || !l.get(i..i + 7)?.eq_ignore_ascii_case(b"definer") {
+        return None;
+    }
+    let skip = |mut j: usize| {
+        while l.get(j).is_some_and(|b| *b == b' ' || *b == b'\t') {
+            j += 1;
+        }
+        j
+    };
+    let token = |j: usize| -> Option<usize> {
+        match *l.get(j)? {
+            q @ (b'`' | b'\'' | b'"') => Some(j + 1 + l.get(j + 1..)?.iter().position(|b| *b == q)? + 1),
+            _ => {
+                let n = l[j..].iter().take_while(|b| !(b.is_ascii_whitespace() || b"@*;/".contains(b))).count();
+                (n > 0).then_some(j + n)
+            }
+        }
+    };
+    let j = skip(i + 7);
+    if l.get(j) != Some(&b'=') {
+        return None;
+    }
+    let user_end = token(skip(j + 1))?;
+    if l.get(user_end) != Some(&b'@') {
+        return None;
+    }
+    token(user_end + 1)
+}
+
 /// Argomenti di un comando da mostrare in un errore (e quindi nel log del job): le password diventano ***,
 /// sia `--admin_password=x` sia `--dbpass x`.
 pub(crate) fn shown_args(args: &[String]) -> String {
@@ -694,7 +747,18 @@ impl Host for SystemHost {
             .spawn()
             .context("avvio di mariadb")?;
         let mut stdin = child.stdin.take().context("stdin di mariadb")?;
-        let copied = tokio::io::copy(&mut sql, &mut stdin).await;
+        // Riga per riga: le clausole DEFINER di un altro server si tolgono (l'utente del sito non può
+        // creare oggetti a nome d'altri). Le righe dei dati passano così come sono.
+        let copied = async {
+            let mut reader = tokio::io::BufReader::new(&mut sql);
+            let mut line = Vec::new();
+            while reader.read_until(b'\n', &mut line).await? > 0 {
+                stdin.write_all(&strip_definer(&line)).await?;
+                line.clear();
+            }
+            stdin.flush().await
+        }
+        .await;
         drop(stdin);
         let out = child.wait_with_output().await?;
         if !out.status.success() {
@@ -1059,6 +1123,18 @@ impl Host for SystemHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn definers_from_another_server_are_dropped_only_where_objects_are_created() {
+        let s = |l: &str| String::from_utf8(strip_definer(l.as_bytes()).into_owned()).unwrap();
+        assert_eq!(s("CREATE DEFINER=`wordpress`@`%` FUNCTION `f` (`x` INT) RETURNS INT\n"), "CREATE FUNCTION `f` (`x` INT) RETURNS INT\n");
+        assert_eq!(s("/*!50013 DEFINER=`root`@`localhost` SQL SECURITY DEFINER */\n"), "/*!50013 SQL SECURITY DEFINER */\n", "SQL SECURITY DEFINER resta");
+        assert_eq!(s("/*!50003 CREATE*/ /*!50017 DEFINER=root@localhost*/ /*!50003 TRIGGER t BEFORE INSERT ON a FOR EACH ROW SET @x = 1 */;;\n"), "/*!50003 CREATE*/ /*!50017 */ /*!50003 TRIGGER t BEFORE INSERT ON a FOR EACH ROW SET @x = 1 */;;\n");
+        assert_eq!(s("create definer = 'web'@'10.0.0.1' view v as select 1;\n"), "create view v as select 1;\n");
+        let data = "INSERT INTO `wp_posts` VALUES (1,'scrivere DEFINER=`a`@`b` in un articolo');\n";
+        assert_eq!(s(data), data, "i dati non si toccano");
+        assert!(matches!(strip_definer(b"CREATE TABLE `a` (`id` int);\n"), std::borrow::Cow::Borrowed(_)), "righe senza DEFINER: nessuna copia");
+    }
 
     #[test]
     fn wp_success_with_a_full_disk_is_a_failure() {
