@@ -16,11 +16,29 @@ pub enum Command {
     FpmReopenLogs,
     CronRun { slug: Slug },
     Wp { slug: Slug, args: Vec<String> },
+    /// Uno script PHP del sito (anche `artisan`) con la CLI, l'utente del sito e open_basedir.
+    Php { slug: Slug, args: Vec<String>, timeout_s: u32 },
+}
+
+/// Il primo argomento è lo script, relativo alla cartella del sito: niente opzioni di php,
+/// percorsi assoluti o `..`.
+fn check_script(args: &[String]) -> Result<(), String> {
+    let script = args.first().ok_or("manca lo script")?;
+    let ok = !script.starts_with('-')
+        && !script.starts_with('/')
+        && std::path::Path::new(script).components().all(|c| matches!(c, std::path::Component::Normal(_)));
+    if ok { Ok(()) } else { Err(format!("script non ammesso: {script}")) }
 }
 
 impl Command {
     pub fn parse(line: &str) -> Result<Self, String> {
         let cmd: Self = serde_json::from_str(line).map_err(|e| e.to_string())?;
+        if let Self::Php { args, timeout_s, .. } = &cmd {
+            check_script(args)?;
+            if !(1..=3600).contains(timeout_s) {
+                return Err("timeout tra 1 e 3600 secondi".into());
+            }
+        }
         if let Self::Wp { args, .. } = &cmd {
             let bad = args.iter().find(|a| {
                 let name = a.split('=').next().unwrap_or_default().to_ascii_lowercase();
@@ -82,6 +100,18 @@ mod tests {
             let line = format!(r#"{{"cmd":"wp","slug":"sona_it","args":["plugin","list","{flag}"]}}"#);
             assert!(Command::parse(&line).is_err(), "accettato: {flag}");
         }
+    }
+
+    #[test]
+    fn php_runs_only_a_script_inside_the_site() {
+        let ok = Command::parse(r#"{"cmd":"php","slug":"sona_it","args":["artisan","schedule:run"],"timeout_s":600}"#).unwrap();
+        assert_eq!(ok, Command::Php { slug: Slug::parse("sona_it").unwrap(), args: vec!["artisan".into(), "schedule:run".into()], timeout_s: 600 });
+        for bad in [r#"["/etc/x.php"]"#, r#"["../altro/x.php"]"#, r#"["-d","x=1"]"#, r#"[]"#, r#"["public/../../x.php"]"#] {
+            let line = format!(r#"{{"cmd":"php","slug":"sona_it","args":{bad},"timeout_s":60}}"#);
+            assert!(Command::parse(&line).is_err(), "accettato: {bad}");
+        }
+        assert!(Command::parse(r#"{"cmd":"php","slug":"sona_it","args":["x.php"],"timeout_s":0}"#).is_err());
+        assert!(Command::parse(r#"{"cmd":"php","slug":"sona_it","args":["x.php"],"timeout_s":7200}"#).is_err());
     }
 
     #[test]

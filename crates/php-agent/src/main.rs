@@ -15,7 +15,7 @@ use std::{fs, thread};
 
 use alveare_core::agent::{Command, Response, AGENT_SOCKET};
 
-use crate::plan::{plan_cron, plan_wp, site_uid, Exec};
+use crate::plan::{plan_cron, plan_php, plan_wp, site_uid, Exec};
 
 const STAGING_DIR: &str = "/srv/php/staging";
 const ACTIVE_DIR: &str = "/srv/php/pools";
@@ -98,6 +98,7 @@ fn run(cmd: Command) -> Response {
         Command::FpmReopenLogs => signal_fpm(libc::SIGUSR1),
         Command::Wp { slug, args } => with_site_uid(&slug, |uid| exec(plan_wp(&slug, uid, &args))),
         Command::CronRun { slug } => with_site_uid(&slug, |uid| exec(plan_cron(&slug, uid))),
+        Command::Php { slug, args, timeout_s } => with_site_uid(&slug, |uid| exec(plan_php(&slug, uid, &args, timeout_s))),
     }
 }
 
