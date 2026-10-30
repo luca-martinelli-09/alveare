@@ -1,3 +1,5 @@
+<img src="docs/logo.svg" alt="" width="56" height="56">
+
 # Alveare
 
 Pannello self-hosted per ospitare molti siti WordPress e PHP su un solo server, **senza un container per sito**. Gira tutto in Docker, su ARM64 e AMD64. La specifica completa è in [docs/spec.md](docs/spec.md).
@@ -28,7 +30,7 @@ Poi:
 1. Nel tunnel Cloudflare, punta l'hostname di `ALVEARE_PANEL_HOST` (e di `ALVEARE_ADMINER_HOST`) a `http://caddy:80`, protetti da Cloudflare Access.
 2. Accedi con l'email dell'admin e la password temporanea: al primo accesso cambi la password e attivi il TOTP (salvo `ALVEARE_TOTP=false` nel `.env`). Dal profilo puoi aggiungere una passkey.
 3. **Scarica il kit di ripristino** (Account → Kit di ripristino) e conservalo fuori dal server.
-4. Crea un sito. Con un account Cloudflare configurato (`CLOUDFLARE_<ETICHETTA>_*`) l'hostname va da solo sul tunnel con il suo CNAME; senza, aggiungilo a mano verso `http://caddy:80`.
+4. Crea un sito. Con un account Cloudflare configurato (`CLOUDFLARE_<ETICHETTA>_*`) l'hostname va da solo sul tunnel con il suo CNAME e le regole della zona (se qualcosa fallisce resta un avviso e il pannello riprova ogni 5 minuti); senza, aggiungilo a mano verso `http://caddy:80`.
 
 Funzioni facoltative, tutte dal `.env` (vedi `.env.example`):
 
@@ -96,7 +98,7 @@ Il test di integrazione avvia il compose vero (con i profili `workers` e `php84`
 | `crates/cli` | CLI `alveare` sulla stessa API |
 | `ui` | SvelteKit + shadcn-svelte, incorporata nel binario del pannello |
 | `docker/` | Immagini del pannello e di PHP (8.5, WP-CLI, Adminer) |
-| `templates/` | Template dei siti (`wordpress`: ricetta; `laravel`: app da git; i template snapshot salvati dal pannello) |
+| `templates/` | Template dei siti (`wordpress`: ricetta; `laravel`: app da git; i template snapshot salvati dal pannello). Si creano, copiano, modificano (file e `template.toml`) ed eliminano dalla pagina Template |
 | `scripts/` | Aggiornamento e ritorno alla versione precedente |
 
 ## Stato rispetto alla roadmap

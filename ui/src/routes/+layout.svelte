@@ -4,13 +4,15 @@
 	import type { LayoutProps } from './$types';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from '$lib/components/ui/sonner';
-	import { Button } from '$lib/components/ui/button';
-	import { Separator } from '$lib/components/ui/separator';
+	import * as Sidebar from '$lib/components/ui/sidebar';
 	import { Spinner } from '$lib/components/ui/spinner';
+	import AppSidebar from '$lib/components/app/app-sidebar.svelte';
+	import Logo from '$lib/components/app/logo.svelte';
 	import { api } from '$lib/api';
 	import { session, loadSession } from '$lib/session.svelte';
-	import LogOutIcon from '@lucide/svelte/icons/log-out';
+	import { loadSites } from '$lib/sites.svelte';
 
 	let { children }: LayoutProps = $props();
 
@@ -25,55 +27,49 @@
 		}
 	});
 
+	// Stato dei siti nella barra laterale: al login e ogni minuto.
+	$effect(() => {
+		if (session.stage !== 'full') return;
+		loadSites();
+		const timer = setInterval(loadSites, 60_000);
+		return () => clearInterval(timer);
+	});
+
 	async function logout() {
 		await api.post('/api/auth/logout').catch(() => {});
 		session.user = null;
 		session.stage = null;
 		await goto('/login');
 	}
-
-	const links = $derived([
-		{ href: '/', label: 'Siti' },
-		...(session.user?.is_admin ? [{ href: '/users', label: 'Utenti' }, { href: '/server', label: 'Server' }] : []),
-		{ href: '/account', label: 'Account' }
-	]);
 </script>
 
 <svelte:head>
-	<link rel="icon" href={favicon} />
+	<link rel="icon" href={favicon} type="image/svg+xml" />
+	<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 	<title>Alveare</title>
 </svelte:head>
 
+<ModeWatcher />
 <Toaster />
 
 {#if isLogin}
 	{@render children()}
 {:else if session.stage === 'full'}
-	<div class="flex min-h-svh flex-col">
-		<header class="flex items-center gap-6 px-6 py-3">
-			<a href="/" class="font-semibold">Alveare</a>
-			<nav class="flex gap-1">
-				{#each links as link (link.href)}
-					<Button
-						href={link.href}
-						variant={page.url.pathname === link.href || (link.href === '/' && page.url.pathname.startsWith('/sites')) ? 'secondary' : 'ghost'}
-						size="sm">{link.label}</Button
-					>
-				{/each}
-			</nav>
-			<div class="ml-auto flex items-center gap-3">
-				<span class="text-muted-foreground text-sm">{session.user?.email}</span>
-				<Button variant="ghost" size="sm" onclick={logout}>
-					<LogOutIcon data-icon="inline-start" />
-					Esci
-				</Button>
-			</div>
-		</header>
-		<Separator />
-		<main class="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 p-6">
-			{@render children()}
-		</main>
-	</div>
+	<Sidebar.Provider>
+		<AppSidebar onlogout={logout} />
+		<Sidebar.Inset>
+			<header class="bg-background/90 sticky top-0 z-10 flex h-12 items-center gap-2 border-b px-3 backdrop-blur md:hidden">
+				<Sidebar.Trigger />
+				<a href="/" class="flex items-center gap-2">
+					<Logo class="size-6" />
+					<span class="font-semibold tracking-tight">Alveare</span>
+				</a>
+			</header>
+			<main class="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-6 md:px-8 md:py-8">
+				{@render children()}
+			</main>
+		</Sidebar.Inset>
+	</Sidebar.Provider>
 {:else}
 	<div class="flex min-h-svh items-center justify-center">
 		<Spinner />

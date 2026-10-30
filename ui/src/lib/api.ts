@@ -39,7 +39,25 @@ export const api = {
 
 export type Stage = 'setup' | 'totp' | 'full';
 export type User = { id: number; email: string; name: string; is_admin: boolean; status?: 'invited' | 'active' | 'blocked' };
-export type SiteRow = { id: number; slug: string; domain: string | null; kind: string; status: string; online: boolean | null; staging: boolean };
+export type Monitor = {
+	uptime: { ok?: boolean; status?: number; ms?: number; at?: number; error?: string | null } | null;
+	usage: { files_bytes?: number; db_bytes?: number; at?: number } | null;
+	traffic: { requests?: number; errors_5xx?: number; slow?: number } | null;
+};
+export type SiteRow = {
+	id: number;
+	slug: string;
+	domain: string | null;
+	kind: string;
+	status: string;
+	online: boolean | null;
+	staging: boolean;
+	monitor: Monitor;
+	last_backup: { started_at: string; status: string } | null;
+	/** Backup configurati sul server (RESTIC_REPOSITORY). */
+	backups: boolean;
+	url: string | null;
+};
 export type Job = { id: number; kind: string; site_id: number | null; status: 'running' | 'done' | 'failed'; log: string[] };
 export type Alert = { id: number; site_id: number | null; kind: string; message: string; created_at: string };
 

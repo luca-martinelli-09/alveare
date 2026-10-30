@@ -1,4 +1,5 @@
 <script lang="ts">
+	import PageHeader from '$lib/components/app/page-header.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Field from '$lib/components/ui/field';
 	import * as Alert from '$lib/components/ui/alert';
@@ -27,7 +28,7 @@
 	}
 </script>
 
-<h1 class="text-2xl font-semibold">Account</h1>
+<PageHeader title="Account" description="Password, secondo fattore, passkey, sessioni e token API." />
 <div class="grid gap-4 md:grid-cols-2">
 	<Card.Root>
 		<Card.Header>

@@ -289,7 +289,6 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/users/{id}/block", post(block_user::<H>))
         .route("/api/users/{id}/sites", get(user_sites::<H>))
         .route("/api/users/{id}/sites/{site}", put(assign_site::<H>).delete(unassign_site::<H>))
-        .route("/api/templates", get(list_templates::<H>))
         .route("/api/sites", get(list_sites::<H>).post(create_site::<H>))
         .route("/api/sites/{id}", get(get_site::<H>).delete(delete_site::<H>))
         .route("/api/sites/{id}/audit", get(site_audit::<H>))
@@ -322,6 +321,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .merge(cloudflare::routes::<H>())
         .merge(account::routes::<H>())
         .merge(passkeys::routes::<H>())
+        .merge(templates::routes::<H>())
         .merge(apps::routes::<H>())
         .with_state(app)
 }
@@ -591,30 +591,18 @@ fn load_template(dir: &std::path::Path, name: &str) -> ApiResult<Template> {
     Template::load(&dir.join(name.as_str())).map_err(|_| ApiError::bad_request(format!("template {} non trovato", name.as_str())))
 }
 
-async fn list_templates<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> ApiResult<Response> {
-    caller(&app, &m, &h).await?;
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(&app.templates).map_err(internal)?.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if let Ok(t) = load_template(&app.templates, &name) {
-            out.push(json!({ "id": name, "name": t.manifest.name, "kind": t.manifest.kind, "snapshot": t.manifest.sql.is_some() }));
-        }
-    }
-    out.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
-    Ok(Json(out).into_response())
-}
-
 async fn list_sites<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
     let visible = app.auth.visible_sites(&user).await?;
     let mut out = Vec::new();
     for site in app.ctx.store.sites().await? {
         if visible.as_ref().is_none_or(|v| v.contains(&site.id)) {
-            let primary = app.ctx.store.domains(site.id).await?.into_iter().next().map(|(d, _)| d.as_str().to_string());
+            let first = app.ctx.store.domains(site.id).await?.into_iter().next().map(|(d, _)| d);
+            let (primary, url) = (first.as_ref().map(|d| d.as_str().to_string()), first.as_ref().map(|d| app.ctx.url_of(d)));
             let monitor = sites::monitor_values(&app, site.id).await?;
             let online = monitor["uptime"]["ok"].as_bool();
             let last_backup = app.ctx.store.backup_runs(site.id, 1).await?.into_iter().next().map(|r| json!({ "started_at": r.started_at, "status": r.status }));
-            out.push(json!({ "id": site.id, "slug": site.slug, "domain": primary, "kind": site.kind, "status": site.status, "online": online, "staging": site.staging, "monitor": monitor, "last_backup": last_backup }));
+            out.push(json!({ "id": site.id, "slug": site.slug, "domain": primary, "kind": site.kind, "status": site.status, "online": online, "staging": site.staging, "monitor": monitor, "last_backup": last_backup, "backups": app.ctx.backups, "url": url }));
         }
     }
     Ok(Json(out).into_response())
@@ -671,7 +659,7 @@ async fn get_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Me
     app.ctx.store.site(id).await?;
     require_site(&app, &user, id, Need::Read).await?;
     let site = app.ctx.store.site(id).await?;
-    let domains: Vec<_> = app.ctx.store.domains(id).await?.into_iter().map(|(d, k)| json!({ "hostname": d.as_str(), "kind": k })).collect();
+    let domains: Vec<_> = app.ctx.store.domains(id).await?.into_iter().map(|(d, k)| json!({ "hostname": d.as_str(), "kind": k, "url": app.ctx.url_of(&d) })).collect();
     let can_manage = app.auth.can(&user, id, Need::Manage).await?;
     let staging = if can_manage { sites::staging_json(flows::staging_password(&app.ctx, id).await?) } else { serde_json::Value::Null };
     let wp_admin_pending = user.is_admin && app.ctx.store.setting(&format!("wp_admin:{id}")).await?.is_some();
@@ -708,6 +696,39 @@ async fn site_files<H: Host>(app: &App<H>, user: &User, id: i64) -> ApiResult<Si
     Ok(tokio::task::spawn_blocking(move || SiteFiles::open(&paths, &site.slug, uid)).await.map_err(internal)??)
 }
 
+/// Destinazione del file manager: un sito (`id`) o un template (`name`), più i parametri degli upload.
+#[derive(Deserialize)]
+struct FilesPath {
+    id: Option<i64>,
+    name: Option<String>,
+    upload: Option<String>,
+    n: Option<u64>,
+}
+
+impl FilesPath {
+    fn site(&self) -> Option<i64> {
+        self.id
+    }
+    fn detail(&self, d: &str) -> String {
+        match &self.name {
+            Some(n) => format!("template {n}: {d}"),
+            None => d.to_string(),
+        }
+    }
+    /// Il manifest e la cartella dei file di un template non si spostano né si cancellano.
+    fn is_template_core(&self, path: &str) -> bool {
+        self.name.is_some() && matches!(path.trim_matches('/').trim_start_matches("./"), "template.toml" | "files")
+    }
+}
+
+async fn files_for<H: Host>(app: &App<H>, user: &User, t: &FilesPath) -> ApiResult<SiteFiles> {
+    match (t.id, &t.name) {
+        (Some(id), _) => site_files(app, user, id).await,
+        (None, Some(name)) => templates::files(app, user, name).await,
+        _ => Err(ApiError::bad_request("destinazione non valida")),
+    }
+}
+
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, FileError> + Send + 'static) -> ApiResult<T> {
     Ok(tokio::task::spawn_blocking(f).await.map_err(internal)??)
 }
@@ -718,31 +739,35 @@ struct PathQuery {
     path: String,
 }
 
-async fn list_files<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, Query(q): Query<PathQuery>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+async fn list_files<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, Query(q): Query<PathQuery>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
-    let files = site_files(&app, &user, id).await?;
+    let files = files_for(&app, &user, &t).await?;
     Ok(Json(blocking(move || files.list(&q.path)).await?).into_response())
 }
 
-async fn read_file<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, Query(q): Query<PathQuery>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+async fn read_file<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, Query(q): Query<PathQuery>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
-    let files = site_files(&app, &user, id).await?;
+    let files = files_for(&app, &user, &t).await?;
     let content = blocking(move || files.read_text(&q.path)).await?;
     Ok(Json(json!({ "content": content })).into_response())
 }
 
-async fn write_file<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, Query(q): Query<PathQuery>, m: Method, h: HeaderMap, body: axum::body::Bytes) -> ApiResult<Response> {
+async fn write_file<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, Query(q): Query<PathQuery>, m: Method, h: HeaderMap, body: axum::body::Bytes) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
-    let files = site_files(&app, &user, id).await?;
+    let files = files_for(&app, &user, &t).await?;
+    if t.is_template_core(&q.path) {
+        let text = std::str::from_utf8(&body).map_err(|_| ApiError::bad_request("template.toml non è testo"))?;
+        toml::from_str::<crate::template::Manifest>(text).map_err(|e| ApiError::bad_request(format!("template.toml non valido: {}", e.message())))?;
+    }
     let path = q.path.clone();
     blocking(move || files.write(&path, &body)).await?;
-    app.auth.audit(Some(user.id), "file.write", Some(id), &q.path).await?;
+    app.auth.audit(Some(user.id), "file.write", t.site(), &t.detail(&q.path)).await?;
     Ok(Json(json!({})).into_response())
 }
 
-async fn download_file<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, Query(q): Query<PathQuery>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+async fn download_file<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, Query(q): Query<PathQuery>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
-    let files = site_files(&app, &user, id).await?;
+    let files = files_for(&app, &user, &t).await?;
     let path = q.path.clone();
     // Una cartella si scarica come zip generato al momento.
     let (file, zipped) = blocking(move || if files.is_dir(&path)? { files.zip_for_download(&path).map(|f| (f, true)) } else { files.open_read(&path).map(|f| (f, false)) })
@@ -750,7 +775,7 @@ async fn download_file<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, 
     let base = std::path::Path::new(&q.path).file_name().map(|n| n.to_string_lossy().replace('"', "")).unwrap_or_else(|| "sito".into());
     let name = if zipped { format!("{base}.zip") } else { base };
     if zipped {
-        app.auth.audit(Some(user.id), "file.download_zip", Some(id), &q.path).await?;
+        app.auth.audit(Some(user.id), "file.download_zip", t.site(), &t.detail(&q.path)).await?;
     }
     let stream = tokio_util::io::ReaderStream::new(tokio::fs::File::from_std(file));
     Ok((
@@ -773,9 +798,9 @@ enum FileOp {
     Compress { paths: Vec<String>, to: String },
 }
 
-async fn file_op<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(op): Json<FileOp>) -> ApiResult<Response> {
+async fn file_op<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, m: Method, h: HeaderMap, Json(op): Json<FileOp>) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
-    let files = site_files(&app, &user, id).await?;
+    let files = files_for(&app, &user, &t).await?;
     let (action, detail) = match &op {
         FileOp::Mkdir { path } => ("file.mkdir", path.clone()),
         FileOp::Rename { path, to } => ("file.rename", format!("{path} → {to}")),
@@ -784,6 +809,11 @@ async fn file_op<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Met
         FileOp::Extract { path, to } => ("file.extract", format!("{path} → {to}")),
         FileOp::Compress { paths, to } => ("file.compress", format!("{} → {to}", paths.join(", "))),
     };
+    if let FileOp::Delete { path } | FileOp::Rename { path, .. } = &op {
+        if t.is_template_core(path) {
+            return Err(ApiError::bad_request("template.toml e files/ non si spostano né si cancellano"));
+        }
+    }
     blocking(move || match op {
         FileOp::Mkdir { path } => files.mkdir(&path),
         FileOp::Rename { path, to } => files.rename(&path, &to),
@@ -793,7 +823,7 @@ async fn file_op<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Met
         FileOp::Compress { paths, to } => files.compress(&paths, &to),
     })
     .await?;
-    app.auth.audit(Some(user.id), action, Some(id), &detail).await?;
+    app.auth.audit(Some(user.id), action, t.site(), &t.detail(&detail)).await?;
     Ok(Json(json!({})).into_response())
 }
 
@@ -803,24 +833,26 @@ struct UploadReq {
     size: u64,
 }
 
-async fn upload_start<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(r): Json<UploadReq>) -> ApiResult<Response> {
+async fn upload_start<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, m: Method, h: HeaderMap, Json(r): Json<UploadReq>) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
-    let files = site_files(&app, &user, id).await?;
+    let files = files_for(&app, &user, &t).await?;
     let path = r.path.clone();
     let info = blocking(move || files.upload_start(&path, r.size)).await?;
-    app.auth.audit(Some(user.id), "file.upload", Some(id), &r.path).await?;
+    app.auth.audit(Some(user.id), "file.upload", t.site(), &t.detail(&r.path)).await?;
     Ok((StatusCode::CREATED, Json(info)).into_response())
 }
 
-async fn upload_status<H: Host>(State(app): State<App<H>>, Path((id, upload)): Path<(i64, String)>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+async fn upload_status<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
-    let files = site_files(&app, &user, id).await?;
+    let files = files_for(&app, &user, &t).await?;
+    let upload = t.upload.clone().unwrap_or_default();
     Ok(Json(blocking(move || files.upload_status(&upload)).await?).into_response())
 }
 
-async fn upload_chunk<H: Host>(State(app): State<App<H>>, Path((id, upload, n)): Path<(i64, String, u64)>, m: Method, h: HeaderMap, body: axum::body::Bytes) -> ApiResult<Response> {
+async fn upload_chunk<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, m: Method, h: HeaderMap, body: axum::body::Bytes) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
-    let files = site_files(&app, &user, id).await?;
+    let files = files_for(&app, &user, &t).await?;
+    let (upload, n) = (t.upload.clone().unwrap_or_default(), t.n.unwrap_or_default());
     // Un blocco alla volta: l'ultimo sposta il file, due "ultimi" in parallelo si pesterebbero.
     let _turn = app.uploads.lock().await;
     Ok(Json(blocking(move || files.upload_chunk(&upload, n, &body)).await?).into_response())
@@ -1104,6 +1136,7 @@ mod imports;
 mod logs;
 mod passkeys;
 mod sites;
+mod templates;
 mod wordpress;
 pub(crate) use wordpress::remember as remember_updates;
 
@@ -1137,6 +1170,7 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(body["site"]["status"], "active");
         assert_eq!(body["domains"][0]["hostname"], "sona.it");
+        assert_eq!(body["domains"][0]["url"], "https://sona.it", "link al sito secondo ALVEARE_SITE_URL");
         let (_, audit, _) = call(&t, req("GET", &format!("/api/sites/{id}/audit"), Some(&admin), None)).await;
         assert_eq!(audit[0]["action"], "site.create");
         assert_eq!(audit[0]["user_id"], admin_id);

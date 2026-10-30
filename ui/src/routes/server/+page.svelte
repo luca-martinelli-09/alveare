@@ -1,4 +1,5 @@
 <script lang="ts">
+	import PageHeader from '$lib/components/app/page-header.svelte';
 	// Pagina del server (admin): budget di memoria dei pool, override globali, IP bloccati.
 	import * as Card from '$lib/components/ui/card';
 	import * as Table from '$lib/components/ui/table';
@@ -38,10 +39,7 @@
 	const siteName = (id: number | null) => (id === null ? 'tutti i siti' : (server?.sites.find((s) => s.id === id)?.domain ?? `sito ${id}`));
 </script>
 
-<div class="flex items-baseline gap-3">
-	<h1 class="text-2xl font-semibold">Server</h1>
-	{#if server}<span class="text-muted-foreground text-sm">Alveare {server.version}</span>{/if}
-</div>
+<PageHeader title="Server" description={server ? `Alveare ${server.version} · memoria, PHP globale, Caddy, Cloudflare e import` : undefined} />
 
 {#if !server}
 	<Skeleton class="h-40 w-full" />

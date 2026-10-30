@@ -1,0 +1,491 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-30T11:13:01+00:00",
+  "title": "Design System: Alveare",
+  "extensions": {
+    "colorMeta": {
+      "background": {
+        "role": "neutral",
+        "displayName": "Bianco Pieno",
+        "canonical": "oklch(1 0 0)",
+        "dark": "oklch(0.16 0.005 275)",
+        "tonalRamp": [
+          "oklch(0.15 0.005 275)",
+          "oklch(0.27 0.005 275)",
+          "oklch(0.39 0.005 275)",
+          "oklch(0.51 0.005 275)",
+          "oklch(0.63 0.005 275)",
+          "oklch(0.75 0.005 275)",
+          "oklch(0.85 0.005 275)",
+          "oklch(0.95 0.005 275)"
+        ]
+      },
+      "foreground": {
+        "role": "neutral",
+        "displayName": "Inchiostro Grafite",
+        "canonical": "oklch(0.21 0.006 275)",
+        "dark": "oklch(0.96 0.002 275)",
+        "tonalRamp": [
+          "oklch(0.15 0.006 275)",
+          "oklch(0.27 0.006 275)",
+          "oklch(0.39 0.006 275)",
+          "oklch(0.51 0.006 275)",
+          "oklch(0.63 0.006 275)",
+          "oklch(0.75 0.006 275)",
+          "oklch(0.85 0.006 275)",
+          "oklch(0.95 0.006 275)"
+        ]
+      },
+      "primary": {
+        "role": "primary",
+        "displayName": "Inchiostro Grafite",
+        "canonical": "oklch(0.21 0.006 275)",
+        "dark": "oklch(0.96 0.002 275)",
+        "tonalRamp": [
+          "oklch(0.15 0.006 275)",
+          "oklch(0.27 0.006 275)",
+          "oklch(0.39 0.006 275)",
+          "oklch(0.51 0.006 275)",
+          "oklch(0.63 0.006 275)",
+          "oklch(0.75 0.006 275)",
+          "oklch(0.85 0.006 275)",
+          "oklch(0.95 0.006 275)"
+        ]
+      },
+      "primary-foreground": {
+        "role": "primary",
+        "displayName": "Bianco su Grafite",
+        "canonical": "oklch(0.985 0 0)",
+        "dark": "oklch(0.2 0.006 275)",
+        "tonalRamp": [
+          "oklch(0.15 0.006 275)",
+          "oklch(0.27 0.006 275)",
+          "oklch(0.39 0.006 275)",
+          "oklch(0.51 0.006 275)",
+          "oklch(0.63 0.006 275)",
+          "oklch(0.75 0.006 275)",
+          "oklch(0.85 0.006 275)",
+          "oklch(0.95 0.006 275)"
+        ]
+      },
+      "secondary": {
+        "role": "neutral",
+        "displayName": "Nebbia Fredda",
+        "canonical": "oklch(0.966 0.002 275)",
+        "dark": "oklch(0.24 0.006 275)",
+        "tonalRamp": [
+          "oklch(0.15 0.004 275)",
+          "oklch(0.27 0.004 275)",
+          "oklch(0.39 0.004 275)",
+          "oklch(0.51 0.004 275)",
+          "oklch(0.63 0.004 275)",
+          "oklch(0.75 0.004 275)",
+          "oklch(0.85 0.004 275)",
+          "oklch(0.95 0.004 275)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Nebbia Fredda",
+        "canonical": "oklch(0.972 0.002 275)",
+        "dark": "oklch(0.22 0.005 275)",
+        "tonalRamp": [
+          "oklch(0.15 0.004 275)",
+          "oklch(0.27 0.004 275)",
+          "oklch(0.39 0.004 275)",
+          "oklch(0.51 0.004 275)",
+          "oklch(0.63 0.004 275)",
+          "oklch(0.75 0.004 275)",
+          "oklch(0.85 0.004 275)",
+          "oklch(0.95 0.004 275)"
+        ]
+      },
+      "muted-foreground": {
+        "role": "neutral",
+        "displayName": "Grigio Didascalia",
+        "canonical": "oklch(0.5 0.01 275)",
+        "dark": "oklch(0.7 0.01 275)",
+        "tonalRamp": [
+          "oklch(0.15 0.01 275)",
+          "oklch(0.27 0.01 275)",
+          "oklch(0.39 0.01 275)",
+          "oklch(0.51 0.01 275)",
+          "oklch(0.63 0.01 275)",
+          "oklch(0.75 0.01 275)",
+          "oklch(0.85 0.01 275)",
+          "oklch(0.95 0.01 275)"
+        ]
+      },
+      "accent": {
+        "role": "neutral",
+        "displayName": "Nebbia Fredda",
+        "canonical": "oklch(0.958 0.003 275)",
+        "dark": "oklch(0.25 0.006 275)",
+        "tonalRamp": [
+          "oklch(0.15 0.004 275)",
+          "oklch(0.27 0.004 275)",
+          "oklch(0.39 0.004 275)",
+          "oklch(0.51 0.004 275)",
+          "oklch(0.63 0.004 275)",
+          "oklch(0.75 0.004 275)",
+          "oklch(0.85 0.004 275)",
+          "oklch(0.95 0.004 275)"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Filetto",
+        "canonical": "oklch(0.922 0.004 275)",
+        "dark": "oklch(1 0 0 / 9%)",
+        "tonalRamp": [
+          "oklch(0.15 0.004 275)",
+          "oklch(0.27 0.004 275)",
+          "oklch(0.39 0.004 275)",
+          "oklch(0.51 0.004 275)",
+          "oklch(0.63 0.004 275)",
+          "oklch(0.75 0.004 275)",
+          "oklch(0.85 0.004 275)",
+          "oklch(0.95 0.004 275)"
+        ]
+      },
+      "input": {
+        "role": "neutral",
+        "displayName": "Filetto Campo",
+        "canonical": "oklch(0.89 0.005 275)",
+        "dark": "oklch(1 0 0 / 14%)",
+        "tonalRamp": [
+          "oklch(0.15 0.005 275)",
+          "oklch(0.27 0.005 275)",
+          "oklch(0.39 0.005 275)",
+          "oklch(0.51 0.005 275)",
+          "oklch(0.63 0.005 275)",
+          "oklch(0.75 0.005 275)",
+          "oklch(0.85 0.005 275)",
+          "oklch(0.95 0.005 275)"
+        ]
+      },
+      "ring": {
+        "role": "neutral",
+        "displayName": "Blu Fuoco",
+        "canonical": "oklch(0.6 0.13 255)",
+        "dark": "oklch(0.68 0.13 255)",
+        "tonalRamp": [
+          "oklch(0.15 0.13 255)",
+          "oklch(0.27 0.13 255)",
+          "oklch(0.39 0.13 255)",
+          "oklch(0.51 0.13 255)",
+          "oklch(0.63 0.13 255)",
+          "oklch(0.75 0.13 255)",
+          "oklch(0.85 0.13 255)",
+          "oklch(0.95 0.13 255)"
+        ]
+      },
+      "sidebar": {
+        "role": "neutral",
+        "displayName": "Grigio Banco",
+        "canonical": "oklch(0.981 0.002 275)",
+        "dark": "oklch(0.145 0.005 275)",
+        "tonalRamp": [
+          "oklch(0.15 0.004 275)",
+          "oklch(0.27 0.004 275)",
+          "oklch(0.39 0.004 275)",
+          "oklch(0.51 0.004 275)",
+          "oklch(0.63 0.004 275)",
+          "oklch(0.75 0.004 275)",
+          "oklch(0.85 0.004 275)",
+          "oklch(0.95 0.004 275)"
+        ]
+      },
+      "sidebar-accent": {
+        "role": "neutral",
+        "displayName": "Grigio Selezione",
+        "canonical": "oklch(0.94 0.004 275)",
+        "dark": "oklch(0.23 0.006 275)",
+        "tonalRamp": [
+          "oklch(0.15 0.004 275)",
+          "oklch(0.27 0.004 275)",
+          "oklch(0.39 0.004 275)",
+          "oklch(0.51 0.004 275)",
+          "oklch(0.63 0.004 275)",
+          "oklch(0.75 0.004 275)",
+          "oklch(0.85 0.004 275)",
+          "oklch(0.95 0.004 275)"
+        ]
+      },
+      "destructive": {
+        "role": "status",
+        "displayName": "Rosso Giù",
+        "canonical": "oklch(0.57 0.21 25)",
+        "dark": "oklch(0.68 0.19 24)",
+        "tonalRamp": [
+          "oklch(0.15 0.19 25)",
+          "oklch(0.27 0.19 25)",
+          "oklch(0.39 0.19 25)",
+          "oklch(0.51 0.19 25)",
+          "oklch(0.63 0.19 25)",
+          "oklch(0.75 0.19 25)",
+          "oklch(0.85 0.19 25)",
+          "oklch(0.95 0.19 25)"
+        ]
+      },
+      "success": {
+        "role": "status",
+        "displayName": "Verde Online",
+        "canonical": "oklch(0.6 0.15 152)",
+        "dark": "oklch(0.72 0.16 152)",
+        "tonalRamp": [
+          "oklch(0.15 0.15 152)",
+          "oklch(0.27 0.15 152)",
+          "oklch(0.39 0.15 152)",
+          "oklch(0.51 0.15 152)",
+          "oklch(0.63 0.15 152)",
+          "oklch(0.75 0.15 152)",
+          "oklch(0.85 0.15 152)",
+          "oklch(0.95 0.15 152)"
+        ]
+      },
+      "warning": {
+        "role": "status",
+        "displayName": "Ambra Attenzione",
+        "canonical": "oklch(0.72 0.16 70)",
+        "dark": "oklch(0.8 0.15 75)",
+        "tonalRamp": [
+          "oklch(0.15 0.15 70)",
+          "oklch(0.27 0.15 70)",
+          "oklch(0.39 0.15 70)",
+          "oklch(0.51 0.15 70)",
+          "oklch(0.63 0.15 70)",
+          "oklch(0.75 0.15 70)",
+          "oklch(0.85 0.15 70)",
+          "oklch(0.95 0.15 70)"
+        ]
+      },
+      "info": {
+        "role": "status",
+        "displayName": "Blu In Corso",
+        "canonical": "oklch(0.58 0.16 255)",
+        "dark": "oklch(0.7 0.14 255)",
+        "tonalRamp": [
+          "oklch(0.15 0.14 255)",
+          "oklch(0.27 0.14 255)",
+          "oklch(0.39 0.14 255)",
+          "oklch(0.51 0.14 255)",
+          "oklch(0.63 0.14 255)",
+          "oklch(0.75 0.14 255)",
+          "oklch(0.85 0.14 255)",
+          "oklch(0.95 0.14 255)"
+        ]
+      },
+      "brand": {
+        "role": "brand",
+        "displayName": "Ambra Cella",
+        "canonical": "oklch(0.79 0.16 72)",
+        "dark": "oklch(0.79 0.16 72)",
+        "tonalRamp": [
+          "oklch(0.15 0.16 72)",
+          "oklch(0.27 0.16 72)",
+          "oklch(0.39 0.16 72)",
+          "oklch(0.51 0.16 72)",
+          "oklch(0.63 0.16 72)",
+          "oklch(0.75 0.16 72)",
+          "oklch(0.85 0.16 72)",
+          "oklch(0.95 0.16 72)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Titolo di pagina, uno per pagina."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Valori della striscia di stato, cifre tabulari."
+      },
+      "section": {
+        "displayName": "Section",
+        "purpose": "Titoli di sezione, nomi nelle righe, voce attiva."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Testo corrente e celle di tabella."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Etichette, date relative, sottorighe."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Misure, codici e identificatori."
+      }
+    },
+    "shadows": [
+      {
+        "name": "appoggio",
+        "value": "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+        "purpose": "Campi, bottoni outline, card (shadow-xs delle primitive vega)."
+      },
+      {
+        "name": "sospensione",
+        "value": "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)",
+        "purpose": "Menu, select e popover (shadow-md); i dialoghi usano un anello foreground al 10%."
+      }
+    ],
+    "motion": [
+      {
+        "name": "pulse-in-corso",
+        "value": "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+        "purpose": "Pallino blu dei siti in creazione o eliminazione, solo con motion-safe."
+      },
+      {
+        "name": "dialog-in",
+        "value": "fade + zoom 95%, 100ms",
+        "purpose": "Apertura e chiusura dei dialoghi."
+      },
+      {
+        "name": "press",
+        "value": "translateY(1px)",
+        "purpose": "Pressione dei bottoni."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px",
+        "purpose": "Striscia di stato da 2 a 4 colonne."
+      },
+      {
+        "name": "md",
+        "value": "768px",
+        "purpose": "Barra laterale fissa invece del foglio; tabella dei siti invece della lista."
+      }
+    ],
+    "darkMode": "Classe .dark su html, scelta dall'utente (Come il sistema, Chiaro, Scuro) via mode-watcher; i valori scuri stanno in colorMeta.<token>.dark."
+  },
+  "components": [
+    {
+      "name": "Bottone primario",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Azione principale della vista, con icona lucide a sinistra.",
+      "html": "<button class=\"ds-btn-primary\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M5 12h14\"/><path d=\"M12 5v14\"/></svg> Nuovo sito</button>",
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 10px;border-radius:0.4rem;border:1px solid transparent;font:500 0.875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;cursor:pointer;transition:all .15s;background:var(--primary);color:var(--primary-foreground)}.ds-btn-primary:hover{background:color-mix(in oklch, var(--primary) 80%, transparent)}.ds-btn-primary:active{transform:translateY(1px)}.ds-btn-primary:focus-visible{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);}"
+    },
+    {
+      "name": "Bottone outline",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Azione secondaria accanto al primario.",
+      "html": "<button class=\"ds-btn-outline\">Importa</button>",
+      "css": ".ds-btn-outline{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 10px;border-radius:0.4rem;border:1px solid transparent;font:500 0.875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;cursor:pointer;transition:all .15s;background:var(--background);color:var(--foreground);border-color:var(--border);box-shadow:0 1px 2px 0 rgb(0 0 0 / .05)}.ds-btn-outline:hover{background:var(--muted)}.ds-btn-outline:active{transform:translateY(1px)}.ds-btn-outline:focus-visible{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);}"
+    },
+    {
+      "name": "Bottone distruttivo",
+      "kind": "button",
+      "refersTo": "button-destructive",
+      "description": "Azione pericolosa: fondo rosso tinto, non pieno.",
+      "html": "<button class=\"ds-btn-destructive\">Elimina sito</button>",
+      "css": ".ds-btn-destructive{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 10px;border-radius:0.4rem;border:1px solid transparent;font:500 0.875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;cursor:pointer;transition:all .15s;background:color-mix(in oklch, var(--destructive) 10%, transparent);color:var(--destructive)}.ds-btn-destructive:hover{background:color-mix(in oklch, var(--destructive) 20%, transparent)}.ds-btn-destructive:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in oklch, var(--destructive) 20%, transparent)}"
+    },
+    {
+      "name": "Campo di testo",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Campo dei moduli nei dialoghi.",
+      "html": "<input class=\"ds-input\" placeholder=\"esempio.it\" aria-label=\"Dominio\">",
+      "css": ".ds-input{height:36px;padding:4px 10px;border:1px solid var(--input);border-radius:0.4rem;background:transparent;color:var(--foreground);font:400 0.875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;box-shadow:0 1px 2px 0 rgb(0 0 0 / .05);transition:color .15s,box-shadow .15s}.ds-input::placeholder{color:var(--muted-foreground)}.ds-input:focus-visible{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);}"
+    },
+    {
+      "name": "Voce della barra laterale",
+      "kind": "nav",
+      "refersTo": "sidebar-item",
+      "description": "Navigazione principale; le voci dei siti portano il pallino di stato.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item ds-active\" href=\"#\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"7\" height=\"7\" x=\"3\" y=\"3\" rx=\"1\"/><rect width=\"7\" height=\"7\" x=\"14\" y=\"3\" rx=\"1\"/><rect width=\"7\" height=\"7\" x=\"14\" y=\"14\" rx=\"1\"/><rect width=\"7\" height=\"7\" x=\"3\" y=\"14\" rx=\"1\"/></svg><span>Panoramica</span></a><a class=\"ds-nav-item ds-sm\" href=\"#\"><span class=\"ds-dot ds-dot-ok\"></span><span>esempio.it</span></a><a class=\"ds-nav-item ds-sm\" href=\"#\"><span class=\"ds-dot ds-dot-warn\"></span><span>negozio.it</span></a></nav>",
+      "css": ".ds-nav{display:flex;flex-direction:column;gap:4px;width:240px;padding:8px;background:var(--sidebar);border-right:1px solid var(--border)}.ds-nav-item{display:flex;align-items:center;gap:8px;padding:8px;border-radius:0.4rem;color:var(--foreground);text-decoration:none;font:400 0.875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif}.ds-nav-item.ds-sm{height:28px;padding:0 8px}.ds-nav-item .ds-dot{margin:0 4px}.ds-nav-item:hover,.ds-nav-item.ds-active{background:var(--sidebar-accent)}.ds-nav-item.ds-active{font-weight:500}.ds-nav-item:focus-visible{outline:none;box-shadow:0 0 0 2px var(--ring)}.ds-dot{display:inline-block;width:8px;height:8px;border-radius:9999px;flex-shrink:0}.ds-dot-ok{background:var(--success)}.ds-dot-warn{background:var(--warning)}.ds-dot-down{background:var(--destructive)}.ds-dot-busy{background:var(--info)}.ds-dot-off{background:color-mix(in oklch, var(--muted-foreground) 50%, transparent)}.ds-dot-unknown{box-shadow:inset 0 0 0 1px color-mix(in oklch, var(--muted-foreground) 60%, transparent)}"
+    },
+    {
+      "name": "Pallino di stato",
+      "kind": "custom",
+      "refersTo": "status-dot",
+      "description": "Il vocabolario di stato: online, attenzione, giù, in corso, spento, in attesa.",
+      "html": "<div class=\"ds-dots\"><span class=\"ds-dot ds-dot-ok\" title=\"Online\"></span><span class=\"ds-dot ds-dot-warn\" title=\"Da guardare\"></span><span class=\"ds-dot ds-dot-down\" title=\"Non risponde\"></span><span class=\"ds-dot ds-dot-busy\" title=\"In creazione\"></span><span class=\"ds-dot ds-dot-off\" title=\"Sospeso\"></span><span class=\"ds-dot ds-dot-unknown\" title=\"In attesa del primo controllo\"></span></div>",
+      "css": ".ds-dots{display:flex;gap:12px;align-items:center}.ds-dot{display:inline-block;width:8px;height:8px;border-radius:9999px;flex-shrink:0}.ds-dot-ok{background:var(--success)}.ds-dot-warn{background:var(--warning)}.ds-dot-down{background:var(--destructive)}.ds-dot-busy{background:var(--info)}.ds-dot-off{background:color-mix(in oklch, var(--muted-foreground) 50%, transparent)}.ds-dot-unknown{box-shadow:inset 0 0 0 1px color-mix(in oklch, var(--muted-foreground) 60%, transparent)}@media (prefers-reduced-motion:no-preference){.ds-dot-busy{animation:ds-pulse 2s cubic-bezier(.4,0,.6,1) infinite}}@keyframes ds-pulse{50%{opacity:.5}}"
+    },
+    {
+      "name": "Striscia di stato",
+      "kind": "card",
+      "refersTo": "stat-strip",
+      "description": "Quattro numeri in una riga bordata; il valore si colora solo se c'è un problema.",
+      "html": "<dl class=\"ds-strip\"><div><dt>Online</dt><dd class=\"ds-bad\">4/5</dd></div><div><dt>Da guardare</dt><dd>1</dd></div><div><dt>Backup nelle 36 h</dt><dd>5/5</dd></div><div><dt>Aggiornamenti</dt><dd>3</dd></div></dl>",
+      "css": ".ds-strip{display:grid;grid-template-columns:repeat(4,1fr);margin:0;border:1px solid var(--border);border-radius:0.5rem;overflow:hidden;font-family:'Geist Variable', ui-sans-serif, system-ui, sans-serif}.ds-strip>div{display:flex;flex-direction:column;gap:4px;padding:12px 16px}.ds-strip>div+div{border-left:1px solid var(--border)}.ds-strip dt{font-size:.75rem;line-height:1rem;color:var(--muted-foreground)}.ds-strip dd{margin:0;font-size:1.25rem;line-height:1.75rem;font-weight:600;font-variant-numeric:tabular-nums;color:var(--foreground)}.ds-strip dd.ds-bad{color:var(--destructive)}"
+    },
+    {
+      "name": "Lista a righe",
+      "kind": "card",
+      "refersTo": "row-list",
+      "description": "Avvisi aperti e lista dei siti su telefono: bordo, divisori, una riga per elemento.",
+      "html": "<ul class=\"ds-rows\"><li><span class=\"ds-ico\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"/><path d=\"M12 9v4\"/><path d=\"M12 17h.01\"/></svg></span><div><p><a href=\"#\">negozio.it</a><span class=\"ds-mut\"> · backup</span></p><p class=\"ds-mut\">Ultimo backup fallito</p></div><time>2 h fa</time></li><li><span class=\"ds-ico\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"/><path d=\"M12 9v4\"/><path d=\"M12 17h.01\"/></svg></span><div><p><a href=\"#\">esempio.it</a><span class=\"ds-mut\"> · uptime</span></p><p class=\"ds-mut\">Risposta 502</p></div><time>5 min fa</time></li></ul>",
+      "css": ".ds-rows{list-style:none;margin:0;padding:0;border:1px solid var(--border);border-radius:0.5rem;font:400 .875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;color:var(--foreground)}.ds-rows li{display:flex;align-items:flex-start;gap:12px;padding:12px 16px}.ds-rows li+li{border-top:1px solid var(--border)}.ds-rows div{flex:1;min-width:0}.ds-rows p{margin:0}.ds-rows a{color:inherit;font-weight:500;text-decoration:none;text-underline-offset:.2em}.ds-rows a:hover{text-decoration:underline}.ds-rows a:focus-visible{outline:2px solid var(--ring);outline-offset:2px}.ds-mut{color:var(--muted-foreground)}.ds-ico{color:var(--destructive);margin-top:2px;display:flex}.ds-rows time{font-size:.75rem;color:var(--muted-foreground);font-variant-numeric:tabular-nums;flex-shrink:0}"
+    }
+  ],
+  "narrative": {
+    "northStar": "La sala macchine in ordine",
+    "overview": "Alveare è un pannello operativo: chi lo apre vuole sapere in un colpo d'occhio quali siti stanno bene e quali no, poi agire con un clic. Il sistema esegue lo standard della categoria (dashboard di hosting) al livello di Vercel, Railway e della dashboard Cloudflare: neutri freddi quasi monocromi, una barra laterale grigio chiarissimo, filetti sottili al posto delle ombre, Geist Sans per il testo e Geist Mono per misure e identificatori. Il colore è informazione, non decorazione: compare quasi solo come pallino di stato.\n\nLa densità è da strumento: corpo a 14px, righe compatte, tabella su desktop e lista a una riga su telefono, con lo stesso ordine (prima i siti con problemi). L'identità sta in due punti soli: il marchio a celle con la cella in cima in ambra, e la disciplina del vocabolario di stato. Tema chiaro e scuro sono pari, scelti dall'utente (Come il sistema, Chiaro, Scuro).\n\nRifiuti confermati in PRODUCT.md: il tema api o miele come costume, la dashboard SaaS generica (gradienti, metriche finte), i clic o lo scroll in più per le azioni frequenti.",
+    "keyCharacteristics": [
+      "Neutri freddi (tinta 275) quasi acromatici; nessun accento di interfaccia oltre al nero/bianco del primario.",
+      "Ambra di marca confinata nel logo.",
+      "Quattro colori di stato a significato fisso, decisi da una sola regola in codice.",
+      "Profondità con filetti di 1px e lievi scarti tonali, quasi senza ombre.",
+      "Geist Sans e Geist Mono, cifre tabulari nei dati.",
+      "Base shadcn-svelte stile vega, icone lucide."
+    ],
+    "rules": [
+      {
+        "name": "The Ambra nel Logo Rule",
+        "body": "L'ambra di marca vive solo nel marchio. Mai su bottoni, link, superfici o grafici: lì l'ambra significa \"attenzione\".",
+        "section": "colors"
+      },
+      {
+        "name": "The Vocabolario di Stato Rule",
+        "body": "Verde online, ambra attenzione, rosso giù o fallito, blu in corso, grigio spento, anello vuoto in attesa. Lo stato si calcola in un solo punto (`ui/src/lib/health.ts`) e ogni superficie (barra laterale, panoramica, sito) lo legge da lì; nessuna pagina ricalcola o ridipinge lo stato a modo suo.",
+        "section": "colors"
+      },
+      {
+        "name": "The Stato Leggibile Rule",
+        "body": "Su fondo chiaro, i colori di stato con contrasto sotto 4.5:1 (warning, success, info) servono per pallini e icone, non per testo. Come testo in chiaro regge solo destructive; il messaggio sta nell'etichetta in foreground o muted-foreground accanto al pallino.",
+        "section": "colors"
+      },
+      {
+        "name": "The Cifre in Colonna Rule",
+        "body": "Celle di tabella, intestazioni, elementi `time` e la classe `.tabular` usano cifre tabulari, impostate globalmente: i numeri si allineano senza lavoro per pagina.",
+        "section": "typography"
+      },
+      {
+        "name": "The Mono per le Misure Rule",
+        "body": "Geist Mono solo per misure, codici e identificatori, mai per titoli o etichette.",
+        "section": "typography"
+      },
+      {
+        "name": "The Filetto Rule",
+        "body": "Un contenitore dell'app si separa con un bordo di 1px nel colore border e i divisori tra righe sono filetti, non ombre. L'ombra resta agli elementi che galleggiano.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** prendere lo stato di un sito da `health()` e mostrarlo con il pallino, sempre con la stessa mappa di colori.",
+      "**Do** ordinare i siti con i problemi in testa (giù, attenzione, in corso, in attesa, spento, online).",
+      "**Do** separare i contenitori con un bordo di 1px e raggio 8px, senza ombra.",
+      "**Do** usare Geist Mono per misure e identificatori e lasciare le cifre tabulari ai dati.",
+      "**Do** dare a ogni tabella una forma a lista per telefono, con le stesse informazioni essenziali.",
+      "**Do** tenere l'ambra di marca dentro il marchio."
+    ],
+    "donts": [
+      "**Don't** usare il tema api o miele come costume: niente favi, gocce di miele o api decorative nell'interfaccia; il marchio a celle è l'unico riferimento.",
+      "**Don't** usare gradienti o metriche finte da dashboard SaaS generica.",
+      "**Don't** usare warning, success o info come colore del testo su fondo chiaro: sotto 4.5:1.",
+      "**Don't** usare un colore di stato per decorare o per distinguere categorie che non sono stati.",
+      "**Don't** aggiungere ombre a liste, tabelle o strisce dell'app.",
+      "**Don't** aggiungere un clic o uno scroll a un'azione frequente per far posto a un elemento visivo."
+    ]
+  }
+}

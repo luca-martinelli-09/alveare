@@ -1,3 +1,7 @@
 /target
 /data
 .env
+templates/.tmp
+templates/.trash
+.impeccable/review/
+.impeccable/questions/

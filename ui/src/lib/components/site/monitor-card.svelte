@@ -28,17 +28,23 @@
 		<dl class="grid grid-cols-2 gap-2 text-sm">
 			<dt class="text-muted-foreground">Raggiungibile</dt>
 			<dd>
-				{#if m?.uptime?.ok === undefined}–
+				{#if m?.uptime?.ok === undefined}<span class="text-muted-foreground">nessun controllo ancora</span>
 				{:else if m.uptime.ok}<Badge variant="secondary">sì · {m.uptime.status} in {m.uptime.ms} ms</Badge>
 				{:else}<Badge variant="destructive">no · {m.uptime.error ?? m.uptime.status}</Badge>{/if}
 				<span class="text-muted-foreground text-xs">{ago(m?.uptime?.at)}</span>
 			</dd>
 			<dt class="text-muted-foreground">File</dt>
-			<dd>{formatBytes(m?.usage?.files_bytes)}</dd>
+			<dd>{#if m?.usage}{formatBytes(m.usage.files_bytes)}{:else}<span class="text-muted-foreground">misurato stanotte</span>{/if}</dd>
 			<dt class="text-muted-foreground">Database</dt>
-			<dd>{formatBytes(m?.usage?.db_bytes)} <span class="text-muted-foreground text-xs">(soglia {m?.disk_alert_mb} MB in tutto)</span></dd>
+			<dd>
+				{#if m?.usage}{formatBytes(m.usage.db_bytes)}{:else}<span class="text-muted-foreground">misurato stanotte</span>{/if}
+				{#if m}<span class="text-muted-foreground block text-xs">avviso oltre {formatBytes(m.disk_alert_mb * 1024 * 1024)} tra file e database</span>{/if}
+			</dd>
 			<dt class="text-muted-foreground">Ultima ora</dt>
-			<dd>{m?.traffic?.requests ?? '–'} richieste, {m?.traffic?.errors_5xx ?? '–'} errori 5xx, {m?.traffic?.slow ?? '–'} lente</dd>
+			<dd>
+				{#if m?.traffic}{m.traffic.requests ?? 0} richieste, {m.traffic.errors_5xx ?? 0} errori 5xx, {m.traffic.slow ?? 0} lente
+				{:else}<span class="text-muted-foreground">nessun dato ancora</span>{/if}
+			</dd>
 		</dl>
 	</Card.Content>
 </Card.Root>

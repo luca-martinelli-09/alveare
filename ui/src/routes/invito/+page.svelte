@@ -1,4 +1,5 @@
 <script lang="ts">
+	import AuthShell from '$lib/components/app/auth-shell.svelte';
 	// Link d'invito: apre la sessione di primo accesso (password e TOTP) nella pagina di login.
 	import { goto } from '$app/navigation';
 	import * as Card from '$lib/components/ui/card';
@@ -25,8 +26,8 @@
 	});
 </script>
 
-<div class="flex min-h-svh items-center justify-center p-6">
-	<Card.Root class="w-full max-w-sm">
+<AuthShell>
+	<Card.Root>
 		<Card.Header><Card.Title>Invito ad Alveare</Card.Title></Card.Header>
 		<Card.Content>
 			{#if error}
@@ -36,4 +37,4 @@
 			{/if}
 		</Card.Content>
 	</Card.Root>
-</div>
+</AuthShell>

@@ -413,6 +413,8 @@ mod tests {
         let (_, list, _) = call(&t, req("GET", "/api/sites", Some(&admin), None)).await;
         assert_eq!(list[0]["monitor"]["uptime"]["status"], 200);
         assert!(list[0]["last_backup"].is_null());
+        assert_eq!(list[0]["backups"], true, "senza backup configurati la panoramica non segnala \"nessun backup\"");
+        assert_eq!(list[0]["url"], "https://sona.it");
         let slug = t.app.ctx.store.site(id).await.unwrap().slug;
         t.app.ctx.store.backup_started(id, &slug).await.unwrap();
         let (_, list, _) = call(&t, req("GET", "/api/sites", Some(&admin), None)).await;

@@ -4,11 +4,7 @@ import { api } from './api';
 type UploadInfo = { id: string; chunk_size: number; chunks: number };
 type Status = { received: number[]; complete: boolean };
 
-export async function uploadFile(siteId: number, path: string, file: File, onProgress: (fraction: number) => void) {
-	return uploadTo(`/api/sites/${siteId}/files/uploads`, path, file, onProgress);
-}
-
-/** Stesso protocollo su un'altra area (es. `/api/imports/uploads`). */
+/** Upload su un'area: `/api/sites/<id>/files/uploads`, `/api/templates/<nome>/files/uploads`, `/api/imports/uploads`. */
 export async function uploadTo(base: string, path: string, file: File, onProgress: (fraction: number) => void) {
 	const info = await api.post<UploadInfo>(base, { path, size: file.size });
 	for (let n = 0; n < info.chunks; n++) {

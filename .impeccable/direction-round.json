@@ -1,0 +1,126 @@
+{
+  "title": "Scegli il mondo visivo di Alveare",
+  "question": "Il tiro ha assegnato il Registro d'ispezione. Tienilo, prendi un'alternativa o rilancia.",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "Registro d'ispezione",
+      "kicker": "THE ROLL",
+      "lineage": "il quaderno d'apiario: una riga per arnia, una colonna per controllo, la data della visita",
+      "thesis": "Il pannello come registro: ogni sito ispezionato di continuo, lo stato si legge in riga.",
+      "palette": ["#f6f7f4", "#18202e", "#c7d1ca", "#2e7a50", "#d2461e"],
+      "materials": ["carta rigata da registro", "inchiostro grafite", "timbro di controllo"],
+      "viewport": "Home = registro: una riga per sito, colonne Raggiungibile, Backup, Aggiornamenti, Spazio, Errori e ultima ispezione; i problemi salgono in testa.",
+      "risk": "Se il righello è timido torna una tabella qualsiasi; niente esagoni né miele, solo la struttura del registro.",
+      "raised": [
+        {"from": "challenger-orienteering", "raise": "Un solo inchiostro riservato a ciò che chiede attenzione: tutto il resto è grafite."},
+        {"from": "challenger-catalog", "raise": "Ogni sito ha la sua targhetta fissa: dominio, tipo, PHP, nato il, una riga di nota."},
+        {"from": "challenger-manual", "raise": "Vocabolario di stato fisso: in corso, sospeso, staging, errore come foglietto d'errata."},
+        {"from": "challenger-splitflap", "raise": "Le colonne non si muovono mai: cambiano solo i valori nelle celle."}
+      ],
+      "comp": ".impeccable/mocks/decision/assigned.webp"
+    },
+    {
+      "id": "model-pick",
+      "label": "Quadro elettrico",
+      "kicker": "IMPECCABLE’S PICK",
+      "lineage": "il quadro di distribuzione con interruttori e etichette Dymo",
+      "thesis": "Ogni sito è un circuito: interruttore, spia, etichetta; sospendere è abbassare la leva.",
+      "palette": ["#eceeee", "#1d2226", "#f2c400", "#27a35a", "#d9381e"],
+      "materials": ["lamiera verniciata", "etichetta Dymo in rilievo", "spie LED"],
+      "viewport": "Home = quadro: una fila di moduli, uno per sito, con spia, leva e etichetta; il server è l'interruttore generale in testa.",
+      "risk": "Il più vicino al mio gusto e a dove finiscono molti pannelli: rischio di scheumorfismo se le leve diventano decorazione.",
+      "comp": ".impeccable/mocks/decision/model-pick.webp"
+    },
+    {
+      "id": "challenger-gateboard",
+      "label": "Tabellone delle partenze",
+      "verdict": "competitive",
+      "lineage": "carta d'imbarco e tabellone del gate",
+      "thesis": "I siti ordinati per urgenza; un cambio di stato resta acceso finché qualcuno non l'ha visto.",
+      "palette": ["#ffffff", "#111418", "#e9ecef", "#f0a400"],
+      "materials": ["pannelli neutri ad alto contrasto", "cifre tabellari"],
+      "viewport": "Home = tabellone: righe per sito riordinate in base all'urgenza, il cambio resta evidenziato.",
+      "case": "Forte sulla chiarezza (stato e cambi), debole sull'identità: è il linguaggio di un aeroporto, non di chi ospita siti.",
+      "risk": "Righe che si riordinano da sole possono spaesare chi cerca il suo sito.",
+      "comp": ".impeccable/mocks/decision/challenger-gateboard.webp"
+    },
+    {
+      "id": "challenger-density",
+      "label": "Mosaico ad alta densità",
+      "verdict": "competitive",
+      "lineage": "i siti giapponesi a moduli fitti",
+      "thesis": "Tutto il server in una schermata: moduli rigati, testo piccolo, rosso di servizio.",
+      "palette": ["#ffffff", "#141414", "#d7d9dc", "#d0021b"],
+      "materials": ["filetti sottili", "moduli con linguetta"],
+      "viewport": "Home = mosaico di moduli: siti, server, avvisi, backup, tutti visibili senza scroll su desktop.",
+      "case": "Regge la chiarezza per gli admin, perde i gestori non tecnici e il telefono.",
+      "risk": "Su mobile diventa una lunga pila di riquadri minuscoli.",
+      "comp": ".impeccable/mocks/decision/challenger-density.webp"
+    },
+    {
+      "id": "challenger-orienteering",
+      "label": "Carta da orienteering",
+      "verdict": "declined",
+      "lineage": "mappe ISOM",
+      "thesis": "Il server come terreno, il percorso in viola sopra.",
+      "palette": ["#ffffff", "#8b5a2b", "#b0c46a", "#a3268c"],
+      "materials": ["curve di livello", "inchiostri ISOM"],
+      "viewport": "Siti come lanterne su una mappa.",
+      "case": "Nessuno ospita siti pensando a una mappa: perde su identità e chiarezza.",
+      "kept": "Un colore riservato solo a ciò che è attivo o chiede attenzione.",
+      "risk": "Metafora forzata."
+    },
+    {
+      "id": "challenger-catalog",
+      "label": "Catalogo di personaggi",
+      "verdict": "declined",
+      "lineage": "cataloghi di mascotte",
+      "thesis": "Ogni sito come personaggio con targhetta e compleanno.",
+      "palette": ["#fde2e4", "#cde7f0", "#fff1c1", "#222222"],
+      "materials": ["pastelli piatti", "contorno bianco"],
+      "viewport": "Griglia di siti come figurine.",
+      "case": "Troppo giocoso, contro il brief.",
+      "kept": "La targhetta fissa per ogni sito.",
+      "risk": "Giocoso."
+    },
+    {
+      "id": "challenger-manual",
+      "label": "Manuale a schede in acetato",
+      "verdict": "declined",
+      "lineage": "manuali software in scatola",
+      "thesis": "Sezioni come divisori colorati, contenuti su fogli d'acetato.",
+      "palette": ["#e8742c", "#f2c230", "#2f9e6a", "#2c3e9e"],
+      "materials": ["acetato", "cartoncino divisore"],
+      "viewport": "Il sito come manuale aperto a una scheda.",
+      "case": "Bello ma lento: più strati e più clic per le azioni frequenti.",
+      "kept": "Un vocabolario di stato fisso, errore come foglietto d'errata.",
+      "risk": "Peso visivo."
+    },
+    {
+      "id": "challenger-splitflap",
+      "label": "Tabellone a palette",
+      "verdict": "declined",
+      "lineage": "tabelloni ferroviari Solari",
+      "thesis": "Palette che girano a ogni cambio.",
+      "palette": ["#111111", "#f2f2f2", "#f5a623"],
+      "materials": ["palette nere", "telaio d'acciaio"],
+      "viewport": "Siti come righe di partenze.",
+      "case": "Animazione che è costume; scuro e poco leggibile al sole sul telefono.",
+      "kept": "Colonne fisse, cambiano solo le celle.",
+      "risk": "Effetto nostalgia."
+    }
+  ],
+  "reroll": { "registers": ["safer", "bolder"] },
+  "buildPath": { "value": "code", "toggle": false },
+  "canon": true,
+  "canonCard": {
+    "label": "Lo standard della categoria",
+    "thesis": "Una dashboard da hosting moderna (barra laterale, tabella di stato), fatta con cura.",
+    "palette": ["#ffffff", "#0f172a", "#e2e8f0", "#2563eb"],
+    "materials": ["griglia pulita", "barra laterale"],
+    "viewport": "Barra laterale con siti e server, tabella con stato e azioni.",
+    "risk": "Indistinguibile da Coolify, Ploi e simili per scelta."
+  },
+  "steer": true
+}

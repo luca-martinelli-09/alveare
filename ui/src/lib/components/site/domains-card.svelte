@@ -47,7 +47,7 @@
 	<Card.Content class="flex flex-col gap-2">
 		{#each detail.domains as d (d.hostname)}
 			<div class="flex items-center justify-between gap-2">
-				<a class="truncate underline-offset-4 hover:underline" href={`https://${d.hostname}`} target="_blank" rel="noreferrer">{d.hostname}</a>
+				<a class="truncate underline-offset-4 hover:underline" href={d.url} target="_blank" rel="noreferrer">{d.hostname}</a>
 				<div class="flex items-center gap-1">
 					<Badge variant="outline">{kinds[d.kind]}</Badge>
 					{#if session.user?.is_admin && d.kind !== 'primary'}

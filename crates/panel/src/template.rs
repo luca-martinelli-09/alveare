@@ -105,7 +105,7 @@ impl Template {
     }
 }
 
-fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+pub(crate) fn copy_tree(from: &Path, to: &Path) -> Result<()> {
     if !from.exists() {
         return Ok(());
     }

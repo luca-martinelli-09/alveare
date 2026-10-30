@@ -43,11 +43,11 @@
 				<Card.Title>Accesso a WordPress</Card.Title>
 				<Card.Description>La password dell'utente admin si mostra una volta sola, entro 24 ore dalla creazione. Poi c'è "Password dimenticata" di WordPress.</Card.Description>
 			</Card.Header>
-			<Card.Content>
-				{#if wpAdmin}
+			{#if wpAdmin}
+				<Card.Content>
 					<p class="text-sm">Utente <code>{wpAdmin.user}</code>, password <code class="select-all">{wpAdmin.password}</code></p>
-				{/if}
-			</Card.Content>
+				</Card.Content>
+			{/if}
 			{#if !wpAdmin}
 				<Card.Footer><Button variant="outline" onclick={revealWpAdmin}>Mostra la password (una volta)</Button></Card.Footer>
 			{/if}

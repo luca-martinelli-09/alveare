@@ -1,4 +1,5 @@
 <script lang="ts">
+	import AuthShell from '$lib/components/app/auth-shell.svelte';
 	import { goto } from '$app/navigation';
 	import QRCode from 'qrcode';
 	import * as Card from '$lib/components/ui/card';
@@ -88,10 +89,10 @@
 		});
 </script>
 
-<div class="flex min-h-svh items-center justify-center p-6">
-	<Card.Root class="w-full max-w-sm">
+<AuthShell>
+	<Card.Root>
 		<Card.Header>
-			<Card.Title>Alveare</Card.Title>
+			<Card.Title>Accedi</Card.Title>
 			<Card.Description>
 				{#if stage === 'setup' && !totp}
 					Primo accesso: scegli una nuova password.
@@ -175,4 +176,4 @@
 			{/if}
 		</Card.Content>
 	</Card.Root>
-</div>
+</AuthShell>

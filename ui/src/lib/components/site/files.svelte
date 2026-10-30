@@ -6,7 +6,7 @@
 	import { Spinner } from '$lib/components/ui/spinner';
 	import CodeEditor from '$lib/components/app/code-editor.svelte';
 	import { api, errorMessage, formatBytes } from '$lib/api';
-	import { uploadFile } from '$lib/upload';
+	import { uploadTo } from '$lib/upload';
 	import { toast } from 'svelte-sonner';
 	import FolderIcon from '@lucide/svelte/icons/folder';
 	import FileIcon from '@lucide/svelte/icons/file';
@@ -14,7 +14,8 @@
 	import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 
-	let { id }: { id: number } = $props();
+	// base: /api/sites/<id> o /api/templates/<nome>: stesso file manager.
+	let { base }: { base: string } = $props();
 	type Entry = { name: string; is_dir: boolean; size: number; modified: number; mode: number };
 
 	let path = $state('');
@@ -29,7 +30,7 @@
 
 	async function load() {
 		try {
-			entries = await api.get<Entry[]>(`/api/sites/${id}/files?path=${encodeURIComponent(path)}`);
+			entries = await api.get<Entry[]>(`${base}/files?path=${encodeURIComponent(path)}`);
 		} catch (e) {
 			toast.error(errorMessage(e));
 		}
@@ -46,7 +47,7 @@
 			return;
 		}
 		try {
-			const r = await api.get<{ content: string }>(`/api/sites/${id}/files/content?path=${encodeURIComponent(join(e.name))}`);
+			const r = await api.get<{ content: string }>(`${base}/files/content?path=${encodeURIComponent(join(e.name))}`);
 			editing = { path: join(e.name), content: r.content };
 		} catch (err) {
 			toast.error(errorMessage(err));
@@ -57,7 +58,7 @@
 		if (!editing) return;
 		saving = true;
 		try {
-			await api.put(`/api/sites/${id}/files/content?path=${encodeURIComponent(editing.path)}`, editing.content);
+			await api.put(`${base}/files/content?path=${encodeURIComponent(editing.path)}`, editing.content);
 			toast.success('Salvato');
 			editing = null;
 			await load();
@@ -70,7 +71,7 @@
 
 	async function op(body: Record<string, unknown>) {
 		try {
-			await api.post(`/api/sites/${id}/files/ops`, body);
+			await api.post(`${base}/files/ops`, body);
 			await load();
 		} catch (e) {
 			toast.error(errorMessage(e));
@@ -108,7 +109,7 @@
 		for (const file of files ?? []) {
 			try {
 				progress = 0;
-				await uploadFile(id, join(file.name), file, (f) => (progress = f));
+				await uploadTo(`${base}/files/uploads`, join(file.name), file, (f) => (progress = f));
 				toast.success(`${file.name} caricato`);
 			} catch (e) {
 				toast.error(`${file.name}: ${errorMessage(e)}`);
@@ -149,9 +150,9 @@
 		<Table.Header>
 			<Table.Row>
 				<Table.Head>Nome</Table.Head>
-				<Table.Head>Dimensione</Table.Head>
-				<Table.Head>Modificato</Table.Head>
-				<Table.Head>Permessi</Table.Head>
+				<Table.Head class="hidden sm:table-cell">Dimensione</Table.Head>
+				<Table.Head class="hidden md:table-cell">Modificato</Table.Head>
+				<Table.Head class="hidden sm:table-cell">Permessi</Table.Head>
 				<Table.Head></Table.Head>
 			</Table.Row>
 		</Table.Header>
@@ -164,9 +165,9 @@
 							{e.name}
 						</button>
 					</Table.Cell>
-					<Table.Cell>{e.is_dir ? '' : formatBytes(e.size)}</Table.Cell>
-					<Table.Cell class="whitespace-nowrap">{new Date(e.modified * 1000).toLocaleString('it-IT')}</Table.Cell>
-					<Table.Cell><code>{(e.mode & 0o777).toString(8)}</code></Table.Cell>
+					<Table.Cell class="hidden sm:table-cell">{e.is_dir ? '' : formatBytes(e.size)}</Table.Cell>
+					<Table.Cell class="hidden whitespace-nowrap md:table-cell">{new Date(e.modified * 1000).toLocaleString('it-IT')}</Table.Cell>
+					<Table.Cell class="hidden sm:table-cell"><code>{(e.mode & 0o777).toString(8)}</code></Table.Cell>
 					<Table.Cell class="text-right">
 						<DropdownMenu.Root>
 							<DropdownMenu.Trigger>
@@ -176,7 +177,7 @@
 							</DropdownMenu.Trigger>
 							<DropdownMenu.Content align="end">
 								<DropdownMenu.Group>
-									<DropdownMenu.Item onclick={() => (window.location.href = `/api/sites/${id}/files/download?path=${encodeURIComponent(join(e.name))}`)}>
+									<DropdownMenu.Item onclick={() => (window.location.href = `${base}/files/download?path=${encodeURIComponent(join(e.name))}`)}>
 										{e.is_dir ? 'Scarica come zip' : 'Scarica'}
 									</DropdownMenu.Item>
 									{#if !e.is_dir && isArchive(e.name)}

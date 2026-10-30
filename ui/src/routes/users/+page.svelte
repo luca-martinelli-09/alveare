@@ -1,4 +1,5 @@
 <script lang="ts">
+	import PageHeader from '$lib/components/app/page-header.svelte';
 	import * as Table from '$lib/components/ui/table';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Field from '$lib/components/ui/field';
@@ -79,8 +80,8 @@
 	const roles: Record<string, string> = { none: 'Nessun accesso', manager: 'Gestore', readonly: 'Sola lettura' };
 </script>
 
-<div class="flex items-center justify-between">
-	<h1 class="text-2xl font-semibold">Utenti</h1>
+<PageHeader title="Utenti" description="Gli admin vedono tutto; gli altri solo i siti assegnati, da gestore o in sola lettura.">
+	{#snippet actions()}
 	<Dialog.Root bind:open={() => creating, (o) => ((creating = o), o || (created = null))}>
 		<Dialog.Trigger>
 			{#snippet child({ props })}
@@ -132,8 +133,10 @@
 			{/if}
 		</Dialog.Content>
 	</Dialog.Root>
-</div>
+	{/snippet}
+</PageHeader>
 
+<div class="rounded-lg border">
 <Table.Root>
 	<Table.Header>
 		<Table.Row>
@@ -161,6 +164,7 @@
 		{/each}
 	</Table.Body>
 </Table.Root>
+</div>
 
 <Dialog.Root open={editing !== null} onOpenChange={(o) => !o && (editing = null)}>
 	<Dialog.Content>
