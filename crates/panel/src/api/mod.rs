@@ -814,6 +814,8 @@ async fn download_file<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPa
 #[serde(tag = "op", rename_all = "lowercase")]
 enum FileOp {
     Mkdir { path: String },
+    /// File vuoto, mai sopra uno esistente.
+    Newfile { path: String },
     Rename { path: String, to: String },
     Delete { path: String },
     Chmod { path: String, mode: u32 },
@@ -838,6 +840,7 @@ async fn file_op<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, m
     let files = files_for(&app, &user, &t).await?;
     let (action, detail) = match &op {
         FileOp::Mkdir { path } => ("file.mkdir", path.clone()),
+        FileOp::Newfile { path } => ("file.create", path.clone()),
         FileOp::Rename { path, to } => ("file.rename", format!("{path} → {to}")),
         FileOp::Delete { path } => ("file.delete", path.clone()),
         FileOp::Chmod { path, mode } => ("file.chmod", format!("{path} {mode:o}")),
@@ -854,6 +857,7 @@ async fn file_op<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, m
     // Solo il ripristino restituisce qualcosa: il percorso in cui è tornato il file.
     let restored = blocking(move || match op {
         FileOp::Mkdir { path } => files.mkdir(&path).map(|_| None),
+        FileOp::Newfile { path } => files.create_file(&path).map(|_| None),
         FileOp::Rename { path, to } => files.rename(&path, &to).map(|_| None),
         FileOp::Delete { path } => files.delete(&path, now()).map(|_| None),
         FileOp::Chmod { path, mode } => files.chmod(&path, mode).map(|_| None),
@@ -1297,6 +1301,13 @@ mod tests {
         assert_eq!((s, body["content"].as_str()), (StatusCode::OK, Some("<?php echo 1;")));
         let (_, list, _) = call(&t, req("GET", &format!("/api/sites/{id}/files?path=public"), Some(&admin), None)).await;
         assert_eq!(list[0]["name"], "index.php");
+        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/files/ops"), Some(&admin), Some(serde_json::json!({"op": "newfile", "path": "public/vuoto.txt"})))).await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/files/ops"), Some(&admin), Some(serde_json::json!({"op": "newfile", "path": "public/index.php"})))).await;
+        assert_eq!(s, StatusCode::CONFLICT, "non sovrascrive");
+        call(&t, req("POST", &format!("/api/sites/{id}/files/ops"), Some(&admin), Some(serde_json::json!({"op": "delete", "path": "public/vuoto.txt"})))).await;
+        let (_, trash, _) = call(&t, req("GET", &format!("/api/sites/{id}/files/trash"), Some(&admin), None)).await;
+        call(&t, req("POST", &format!("/api/sites/{id}/files/ops"), Some(&admin), Some(serde_json::json!({"op": "purge", "id": trash[0]["id"]})))).await;
         let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/files/ops"), Some(&admin), Some(serde_json::json!({"op": "rename", "path": "public/index.php", "to": "public/home.php"})))).await;
         assert_eq!(s, StatusCode::OK);
         let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/files/ops"), Some(&admin), Some(serde_json::json!({"op": "delete", "path": "public/home.php"})))).await;

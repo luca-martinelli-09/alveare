@@ -21,6 +21,8 @@
 	import FileIcon from '@lucide/svelte/icons/file';
 	import UploadIcon from '@lucide/svelte/icons/upload';
 	import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
+	import FilePlusIcon from '@lucide/svelte/icons/file-plus';
+	import PlusIcon from '@lucide/svelte/icons/plus';
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 
 	// base: /api/sites/<id> o /api/templates/<nome>: stesso file manager.
@@ -144,6 +146,12 @@
 		if (name) op({ op: 'mkdir', path: join(name) });
 	}
 
+	// File vuoto nella cartella corrente, poi subito nell'editor.
+	async function newFile() {
+		const name = await askText({ title: 'Nuovo file', description: path ? `Dentro ${path}` : 'Nella radice del sito', label: 'Nome del file', placeholder: 'index.php', mono: true, confirmLabel: 'Crea' });
+		if (name && (await op({ op: 'newfile', path: join(name) }))) editing = { path: join(name), content: '', original: '' };
+	}
+
 	const isArchive = (name: string) => /\.(zip|tar\.gz|tgz)$/i.test(name);
 
 	async function extract(e: Entry) {
@@ -208,10 +216,19 @@
 		</Breadcrumb.Root>
 		<div class="ml-auto flex gap-2">
 			<Button size="sm" variant="ghost" onclick={() => (trashOpen = true)}><Trash2Icon data-icon="inline-start" /> Cestino</Button>
-			<Button size="sm" onclick={mkdir}>
-				<FolderPlusIcon data-icon="inline-start" />
-				Nuova cartella
-			</Button>
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger>
+					{#snippet child({ props })}
+						<Button size="sm" {...props}><PlusIcon data-icon="inline-start" /> Nuovo</Button>
+					{/snippet}
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Content align="end">
+					<DropdownMenu.Group>
+						<DropdownMenu.Item onclick={newFile}><FilePlusIcon /> File</DropdownMenu.Item>
+						<DropdownMenu.Item onclick={mkdir}><FolderPlusIcon /> Cartella</DropdownMenu.Item>
+					</DropdownMenu.Group>
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
 			<DropdownMenu.Root>
 				<DropdownMenu.Trigger disabled={progress !== null}>
 					{#snippet child({ props })}

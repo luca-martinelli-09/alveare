@@ -288,6 +288,16 @@ impl SiteFiles {
         self.give_to_site(&f.into_std())
     }
 
+    /// File vuoto nuovo; se c'è già, errore (AlreadyExists) invece di svuotarlo.
+    pub fn create_file(&self, path: &str) -> Result<()> {
+        let p = rel(path)?;
+        if let Some(parent) = p.parent().filter(|x| !x.as_os_str().is_empty()) {
+            self.mkdirs(parent)?;
+        }
+        let f = self.root.open_with(&p, cap_std::fs::OpenOptions::new().write(true).create_new(true))?;
+        self.give_to_site(&f.into_std())
+    }
+
     pub fn mkdir(&self, path: &str) -> Result<()> {
         self.mkdirs(&rel(path)?)
     }
@@ -594,6 +604,18 @@ mod tests {
         let (_t, _p, f) = site();
         f.write("public/big.txt", &vec![b'a'; EDITOR_LIMIT as usize + 1]).unwrap();
         assert!(matches!(f.read_text("public/big.txt"), Err(FileError::TooLarge)));
+    }
+
+    #[test]
+    fn new_files_are_empty_and_never_replace_an_existing_one() {
+        let (_t, _p, f) = site();
+        f.create_file("public/css/nuovo.css").unwrap();
+        assert_eq!(f.read_text("public/css/nuovo.css").unwrap(), "");
+        f.write("public/index.php", b"<?php echo 1;").unwrap();
+        let err = f.create_file("public/index.php").unwrap_err();
+        assert!(matches!(err, FileError::Io(ref e) if e.kind() == std::io::ErrorKind::AlreadyExists), "{err:?}");
+        assert_eq!(f.read_text("public/index.php").unwrap(), "<?php echo 1;");
+        assert!(f.create_file(".env").is_err() && f.create_file("../fuori.php").is_err());
     }
 
     #[test]
