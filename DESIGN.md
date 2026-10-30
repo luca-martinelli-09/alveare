@@ -219,7 +219,7 @@ Il sistema è piatto: la profondità si legge da filetti di 1px e da scarti tona
 
 ## Shapes
 
-Raggio piccolo e coerente, derivato da una sola variabile (0.5rem). I contenitori di pagina (striscia, liste, tabella, schede bordate) usano 8px; bottoni, campi, voci di menu e iniziali utente 6.4px; card e dialoghi 11.2px; i badge sono pillole; il pallino di stato è un cerchio di 8px (10px accanto al titolo del sito). Il marchio è un quadrato arrotondato (raggio 7 su 32) con sei celle quadrate arrotondate disposte a piramide 1-2-3, la cella in cima in ambra.
+Raggio piccolo e coerente, derivato da una sola variabile (0.5rem). I contenitori di pagina (striscia, liste, tabella, schede bordate) usano 8px; bottoni, campi, voci di menu e iniziali utente 6.4px; card e dialoghi 11.2px; i badge sono pillole; il pallino di stato è un cerchio di 8px (10px accanto al titolo del sito). Il marchio è un quadrato arrotondato (raggio 7 su 32) con sei celle esagonali (punta in alto, angoli arrotondati) in impaccamento a nido d'ape, disposte a piramide 1-2-3 come una "A", la cella in cima in ambra.
 
 ## Components
 
@@ -272,7 +272,7 @@ Lista bordata con divisori, una riga per elemento: pallino o icona a sinistra, n
 - **Do** tenere l'ambra di marca dentro il marchio.
 
 ### Don't:
-- **Don't** usare il tema api o miele come costume: niente favi, gocce di miele o api decorative nell'interfaccia; il marchio a celle è l'unico riferimento.
+- **Don't** usare il tema api o miele come costume: niente favi, gocce di miele o api decorative nell'interfaccia; il marchio esagonale è l'unico riferimento, e gli esagoni restano nel marchio.
 - **Don't** usare gradienti o metriche finte da dashboard SaaS generica.
 - **Don't** usare warning, success o info come colore del testo su fondo chiaro: sotto 4.5:1. Per un'avvertenza in testo usa `text-warning-text`.
 - **Don't** usare un colore di stato per decorare o per distinguere categorie che non sono stati.
