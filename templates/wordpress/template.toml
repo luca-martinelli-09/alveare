@@ -6,8 +6,9 @@ post_create = [
     ["core", "download", "--locale=it_IT", "--skip-content"],
     ["core", "install", "--url={{SITE_URL}}", "--title={{TITLE}}", "--admin_user={{ADMIN_USER}}", "--admin_password={{ADMIN_PASSWORD}}", "--admin_email={{ADMIN_EMAIL}}", "--skip-email"],
     ["theme", "install", "twentytwentyfive", "--activate"],
-    # Installato ma spento. Per attivarlo: `wp plugin activate redis-cache` e copia di
-    # includes/object-cache.php in wp-content/. `wp redis enable` e `update-dropin` fanno FLUSHDB,
-    # che l'ACL nega perché svuoterebbe la cache di tutti i siti.
-    ["plugin", "install", "redis-cache"],
+    # Object cache su Redis, con l'utente ACL e il prefisso del sito (wp-config.php). Il drop-in si
+    # copia a mano: `wp redis enable` e `update-dropin` fanno FLUSHDB, che l'ACL nega perché
+    # svuoterebbe la cache di tutti i siti. Per spegnerla: togliere wp-content/object-cache.php.
+    ["plugin", "install", "redis-cache", "--activate"],
+    ["eval", "copy(WP_PLUGIN_DIR . '/redis-cache/includes/object-cache.php', WP_CONTENT_DIR . '/object-cache.php');"],
 ]
