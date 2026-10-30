@@ -64,6 +64,14 @@ alveare logs tail sona.it --kind php-error
 
 Per l'object cache di un sito WordPress: `wp plugin activate redis-cache`, poi copia `wp-content/plugins/redis-cache/includes/object-cache.php` in `wp-content/` (dal file manager o con `wp eval`). `wp redis enable` e `wp redis update-dropin` fanno un `FLUSHDB`, che l'ACL nega perché svuoterebbe la cache di tutti i siti.
 
+## Provarlo in locale
+
+```bash
+scripts/locale.sh up
+```
+
+Crea un `.env` di prova (se non c'è già quello vero), costruisce le immagini e avvia tutto senza Cloudflare: pannello su http://pannello.localhost:8080 (utente `admin@alveare.localhost`, password temporanea con `scripts/locale.sh pass`), siti su `http://<nome>.localhost:8080`, perché i browser risolvono da soli `*.localhost`. `PROFILI="workers php84" scripts/locale.sh up` accende anche worker e PHP 8.4; `down` ferma, `reset` cancella i dati.
+
 ## Sviluppo
 
 | Cosa | Comando |

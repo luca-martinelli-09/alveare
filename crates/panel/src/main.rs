@@ -92,6 +92,7 @@ async fn main() -> Result<()> {
         db_host: cfg.db_host.clone(),
         global_env: cfg.site_env.clone(),
         backups: cfg.restic_repository.is_some(),
+        site_url: cfg.site_url.clone(),
     };
     let app = App::new(ctx, auth, paths.templates.clone(), cfg.secure_cookie)
         .with_adminer(cfg.adminer_host.clone())

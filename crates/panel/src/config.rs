@@ -37,6 +37,8 @@ pub struct Config {
     pub metrics_token: Option<String>,
     /// Runtime PHP aggiuntivi (ALVEARE_PHP_RUNTIMES=8.4,canary), ognuno con il suo container.
     pub php_runtimes: Vec<String>,
+    /// URL dei siti (ALVEARE_SITE_URL, con {domain}); in locale http://{domain}:8080.
+    pub site_url: String,
 }
 
 fn url_encode(s: &str) -> String {
@@ -98,6 +100,10 @@ impl Config {
         if let Some(bad) = php_runtimes.iter().find(|r| !alveare_core::php::valid_runtime(r) || *r == alveare_core::php::DEFAULT_RUNTIME) {
             bail!("ALVEARE_PHP_RUNTIMES: runtime non valido {bad}");
         }
+        let site_url = get("ALVEARE_SITE_URL").unwrap_or_else(|| crate::flows::DEFAULT_SITE_URL.into());
+        if !site_url.contains("{domain}") || !(site_url.starts_with("https://") || site_url.starts_with("http://")) {
+            bail!("ALVEARE_SITE_URL deve essere http(s)://… con {{domain}}");
+        }
         let secure_cookie = match get("ALVEARE_INSECURE_COOKIE").as_deref() {
             None | Some("0") | Some("false") => true,
             Some("1") | Some("true") => false,
@@ -124,6 +130,7 @@ impl Config {
             panel_url,
             metrics_token: get("ALVEARE_METRICS_TOKEN"),
             php_runtimes,
+            site_url,
             site_env: vars.iter().filter_map(|(k, v)| Some((k.strip_prefix("SITE_ENV_")?.to_string(), v.clone()))).collect(),
         })
     }

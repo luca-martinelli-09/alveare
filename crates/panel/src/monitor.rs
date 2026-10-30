@@ -140,6 +140,7 @@ mod tests {
             db_host: "mariadb".into(),
             global_env: Default::default(),
             backups: false,
+            site_url: crate::flows::DEFAULT_SITE_URL.into(),
         };
         let req = CreateSite { domain: Domain::parse("sona.it").unwrap(), kind: SiteKind::Wordpress, template: "wordpress".into(), title: "S".into(), admin_email: "a@b.it".into(), table_prefix: "wp_".into() };
         let id = create_site(&c, &req, &mut JobLog::default()).await.unwrap().id;

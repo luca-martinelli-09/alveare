@@ -187,6 +187,16 @@ pub struct Ctx<H> {
     pub global_env: Vars,
     /// Repository restic configurato: senza, niente backup (e l'eliminazione lo dice nel log).
     pub backups: bool,
+    /// Formato dell'URL dei siti, con `{domain}`: https dietro Cloudflare, http e porta in locale.
+    pub site_url: String,
+}
+
+pub const DEFAULT_SITE_URL: &str = "https://{domain}";
+
+impl<H> Ctx<H> {
+    pub fn url_of(&self, domain: &Domain) -> String {
+        self.site_url.replace("{domain}", domain.as_str())
+    }
 }
 
 #[derive(Clone)]
@@ -553,7 +563,7 @@ fn random_salt() -> String {
 
 /// (variabili del template, contenuto del `.env`)
 fn site_vars<H>(c: &Ctx<H>, req: &CreateSite, site: &Site, db: &DbCreds, redis_password: &str) -> (Vars, Vars) {
-    let url = format!("https://{}", req.domain.as_str());
+    let url = c.url_of(&req.domain);
     let mut env = c.global_env.clone();
     env.extend([
         ("DB_NAME".into(), db.name.clone()),
@@ -1226,6 +1236,7 @@ mod tests {
             db_host: "mariadb".into(),
             global_env: Vars::from([("SMTP_HOST".into(), "email-smtp.eu-west-1.amazonaws.com".into())]),
             backups: false,
+            site_url: DEFAULT_SITE_URL.into(),
         }
     }
 
@@ -1455,6 +1466,15 @@ mod tests {
         assert_eq!(env["QUEUE_CONNECTION"], "redis");
         assert_eq!(env["REDIS_PREFIX"], "app_sona_it:");
         assert!(!env.contains_key("AUTH_KEY"), "niente salt di WordPress");
+    }
+
+    #[tokio::test]
+    async fn site_url_follows_the_configured_format() {
+        let c = Ctx { site_url: "http://{domain}:8080".into(), ..ctx(FakeHost::default()).await };
+        create_site(&c, &req("prova.localhost"), &mut JobLog::default()).await.unwrap();
+        let env = c.host.env.lock().unwrap().clone();
+        assert_eq!(env["WP_HOME"], "http://prova.localhost:8080");
+        assert_eq!(env["WP_SITEURL"], "http://prova.localhost:8080");
     }
 
     #[tokio::test]

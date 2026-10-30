@@ -1,0 +1,11 @@
+# Alveare in locale, senza Cloudflare: Caddy su http://*.localhost:8080 (i browser risolvono
+# da soli *.localhost su 127.0.0.1). Si usa con scripts/locale.sh, che prepara anche il .env.
+services:
+  caddy:
+    ports: ["127.0.0.1:${ALVEARE_LOCAL_PORT:-8080}:80"]
+
+networks:
+  # In locale non c'è cloudflared: la rete la crea il compose.
+  cloudflared:
+    external: false
+    name: alveare-locale-cloudflared
