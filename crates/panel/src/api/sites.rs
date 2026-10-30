@@ -9,6 +9,7 @@ pub(super) fn routes<H: Host>() -> Router<App<H>> {
         .route("/api/sites/{id}", patch(update_site::<H>))
         .route("/api/sites/{id}/clone", post(clone_site::<H>))
         .route("/api/sites/{id}/export", post(export_site::<H>))
+        .route("/api/sites/{id}/template", post(save_template::<H>))
         .route("/api/sites/{id}/exports", get(list_exports::<H>))
         .route("/api/exports/{token}", get(download_export::<H>))
         .route("/api/sites/{id}/domains", get(list_domains::<H>).post(add_domain::<H>))
@@ -68,6 +69,36 @@ async fn clone_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: 
             let site = flows::clone_site(&ctx, id, &domain, &mut log).await?;
             jobs.set_site(log.job_id, site.id).await?;
             auth.audit(Some(uid), "site.clone", Some(site.id), &format!("copia di {}", src.slug.as_str())).await?;
+            Ok(log)
+        })
+        .await?;
+    Ok((StatusCode::ACCEPTED, Json(json!({ "job": job }))).into_response())
+}
+
+#[derive(Deserialize)]
+struct TemplateReq {
+    name: String,
+    title: String,
+}
+
+async fn save_template<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(r): Json<TemplateReq>) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_admin(&user)?;
+    app.ctx.store.site(id).await?;
+    let name = Slug::parse(&r.name).map_err(|_| ApiError::bad_request("nome del template: solo minuscole, cifre e _"))?;
+    if app.templates.join(name.as_str()).exists() {
+        return Err(ApiError::new(StatusCode::CONFLICT, "esiste già un template con questo nome"));
+    }
+    let title = r.title.trim().to_string();
+    if title.is_empty() {
+        return Err(ApiError::bad_request("titolo obbligatorio"));
+    }
+    let (ctx, auth, uid) = (app.ctx.clone(), app.auth.clone(), user.id);
+    let job = app
+        .jobs
+        .spawn("site.template", Some(id), Some(user.id), move |mut log| async move {
+            flows::save_template(&ctx, id, &name, &title, now(), &mut log).await?;
+            auth.audit(Some(uid), "template.create", Some(id), name.as_str()).await?;
             Ok(log)
         })
         .await?;
@@ -333,6 +364,26 @@ mod tests {
         let (_, audit, _) = call(&t, req("GET", &format!("/api/sites/{id}/audit"), Some(&admin), None)).await;
         let actions: Vec<&str> = audit.as_array().unwrap().iter().map(|a| a["action"].as_str().unwrap()).collect();
         assert!(actions.contains(&"site.export") && actions.contains(&"site.export.download"), "{actions:?}");
+    }
+
+    #[tokio::test]
+    async fn admin_saves_a_site_as_template() {
+        let t = setup().await;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let id = create_site(&t, &admin, "sona.it").await;
+        let manager = user_with_role(&t, "g@example.org", id, Role::Manager).await;
+        let url = format!("/api/sites/{id}/template");
+        let (s, _, _) = call(&t, req("POST", &url, Some(&manager), Some(json!({"name": "negozio", "title": "Negozio"})))).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, _, _) = call(&t, req("POST", &url, Some(&admin), Some(json!({"name": "../x", "title": "x"})))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let (s, _, _) = call(&t, req("POST", &url, Some(&admin), Some(json!({"name": "wordpress", "title": "x"})))).await;
+        assert_eq!(s, StatusCode::CONFLICT, "nome già usato");
+        let (s, body, _) = call(&t, req("POST", &url, Some(&admin), Some(json!({"name": "negozio", "title": "Negozio"})))).await;
+        assert_eq!(s, StatusCode::ACCEPTED);
+        let job = wait_job(&t, body["job"].as_i64().unwrap()).await;
+        assert_eq!(job.status, "done", "{:?}", job.log);
+        assert!(t.app.ctx.host.calls().iter().any(|c| c.starts_with("store_template sona_it negozio ")));
     }
 
     #[tokio::test]

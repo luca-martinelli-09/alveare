@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 
 pub type Vars = BTreeMap<String, String>;
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub name: String,
@@ -230,6 +230,14 @@ post_create = [["option", "update", "home", "https://{{DOMAIN}}"]]
         assert_eq!(Template::load(template(MANIFEST).path()).unwrap().sql_path(), None);
         assert!(Template::load(template("name = \"x\"\nkind = \"wordpress\"\nsql = \"../db.sql\"\n").path()).is_err());
         assert!(Template::load(template("name = \"x\"\nkind = \"wordpress\"\ntable_prefix = \"x'; --\"\n").path()).is_err());
+    }
+
+    #[test]
+    fn saved_manifest_loads_back() {
+        let m = Manifest { name: "N".into(), kind: crate::store::SiteKind::Wordpress, render: vec![], post_create: vec![], sql: Some("db.sql".into()), sql_domain: "template.local".into(), table_prefix: None };
+        let t = template(&toml::to_string(&m).unwrap());
+        let tpl = Template::load(t.path()).unwrap();
+        assert_eq!(tpl.sql_path(), Some(t.path().join("db.sql")));
     }
 
     #[test]

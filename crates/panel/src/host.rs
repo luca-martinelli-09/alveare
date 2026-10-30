@@ -613,6 +613,32 @@ impl Host for SystemHost {
         result
     }
 
+    async fn store_template(&self, slug: &Slug, name: &Slug, manifest: &crate::template::Manifest, sql_file: &str) -> Result<()> {
+        let (site_dir, sql) = (self.paths.sites.join(slug.as_str()), self.paths.tmp.join(slug.as_str()).join(sql_file));
+        let dest = self.paths.templates.join(name.as_str());
+        let toml = toml::to_string(manifest)?;
+        tokio::task::spawn_blocking(move || {
+            if dest.exists() {
+                bail!("esiste già un template con questo nome");
+            }
+            let partial = dest.with_extension("partial");
+            let _ = fs::remove_dir_all(&partial);
+            let result = (|| {
+                copy_site_tree(&site_dir, &partial.join("files"), Path::new(""))?;
+                fs::copy(&sql, partial.join("db.sql")).context("dump del template")?;
+                fs::write(partial.join("template.toml"), &toml)?;
+                fs::rename(&partial, &dest)?;
+                Ok(())
+            })();
+            let _ = fs::remove_file(&sql);
+            if result.is_err() {
+                let _ = fs::remove_dir_all(&partial);
+            }
+            result
+        })
+        .await?
+    }
+
     async fn copy_site_files(&self, from: &Slug, to: &Slug, uid: u32) -> Result<()> {
         let (src, dest) = (self.paths.sites.join(from.as_str()), self.paths.sites.join(to.as_str()));
         tokio::task::spawn_blocking(move || {

@@ -26,6 +26,7 @@ pub struct FakeHost {
     pub wp_replies: Vec<(&'static str, &'static str)>,
     /// (.env.example, LEGGIMI.txt) dell'ultima esportazione.
     pub exported: Mutex<Option<(String, String)>>,
+    pub stored_manifest: Mutex<Option<crate::template::Manifest>>,
 }
 
 impl FakeHost {
@@ -140,6 +141,10 @@ impl Host for FakeHost {
         *self.exported.lock().unwrap() = Some((env_example.into(), readme.into()));
         self.record("export_site", format!("{} {db_name} {}", slug.as_str(), dest.display()))?;
         Ok(1234)
+    }
+    async fn store_template(&self, slug: &Slug, name: &Slug, manifest: &crate::template::Manifest, sql_file: &str) -> anyhow::Result<()> {
+        *self.stored_manifest.lock().unwrap() = Some(manifest.clone());
+        self.record("store_template", format!("{} {} {sql_file}", slug.as_str(), name.as_str()))
     }
     async fn copy_site_files(&self, from: &Slug, to: &Slug, _uid: u32) -> anyhow::Result<()> {
         self.record("copy_site_files", format!("{} {}", from.as_str(), to.as_str()))

@@ -430,7 +430,7 @@ async fn list_templates<H: Host>(State(app): State<App<H>>, m: Method, h: Header
     for entry in std::fs::read_dir(&app.templates).map_err(internal)?.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         if let Ok(t) = load_template(&app.templates, &name) {
-            out.push(json!({ "id": name, "name": t.manifest.name, "kind": t.manifest.kind }));
+            out.push(json!({ "id": name, "name": t.manifest.name, "kind": t.manifest.kind, "snapshot": t.manifest.sql.is_some() }));
         }
     }
     out.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));

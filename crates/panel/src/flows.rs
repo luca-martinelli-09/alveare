@@ -70,6 +70,9 @@ pub trait Host: Send + Sync + 'static {
     /// tar.gz con i file del sito (senza `.env`), `.env.example`, `database.sql` e `LEGGIMI.txt`;
     /// restituisce la dimensione.
     fn export_site(&self, slug: &Slug, db_name: &str, dest: &std::path::Path, env_example: &str, readme: &str) -> impl Future<Output = Result<u64>> + Send;
+    /// Crea `templates/<name>/` con i file del sito (senza `.env`), il dump in `db.sql` e il manifest.
+    /// `sql_file` è nella cartella tmp del sito, dove l'ha scritto WP-CLI.
+    fn store_template(&self, slug: &Slug, name: &Slug, manifest: &crate::template::Manifest, sql_file: &str) -> impl Future<Output = Result<()>> + Send;
     /// Riscrive una chiave del .env del sito.
     fn set_site_env(&self, slug: &Slug, uid: u32, key: &str, value: &str) -> impl Future<Output = Result<()>> + Send;
 }
@@ -450,6 +453,30 @@ pub async fn export_site<H: Host>(c: &Ctx<H>, id: i64, dir: &std::path::Path, no
     c.store.add_export(&export).await?;
     log.push(format!("esportazione pronta: {} ({} byte), scaricabile per 7 giorni", export.file, size));
     Ok(export)
+}
+
+/// Salva un sito come template snapshot: file e dump con il dominio portato su `template.local`
+/// da `wp search-replace --export`, che rispetta i dati serializzati e non tocca il database vivo.
+pub async fn save_template<H: Host>(c: &Ctx<H>, id: i64, name: &Slug, title: &str, now: i64, log: &mut JobLog) -> Result<()> {
+    let site = c.store.site(id).await?;
+    let domain = c.store.domains(id).await?.into_iter().next().map(|(d, _)| d).context("sito senza dominio")?;
+    let env = c.host.read_site_env(&site.slug).await?;
+    let sql_file = format!("template-{now}.sql");
+    let export = format!("--export={}/{}/{sql_file}", alveare_core::php::TMP_DIR, site.slug.as_str());
+    let manifest = crate::template::Manifest {
+        name: title.to_string(),
+        kind: site.kind,
+        render: vec![],
+        post_create: vec![],
+        sql: Some("db.sql".into()),
+        sql_domain: "template.local".into(),
+        table_prefix: env.get("TABLE_PREFIX").filter(|p| *p != "wp_").cloned(),
+    };
+    c.host.wp(&site.slug, &["search-replace", domain.as_str(), &manifest.sql_domain, "--all-tables", "--skip-columns=guid", &export].map(String::from)).await?;
+    log.push("dump esportato con il dominio template.local");
+    c.host.store_template(&site.slug, name, &manifest, &sql_file).await?;
+    log.push(format!("template {} salvato", name.as_str()));
+    Ok(())
 }
 
 /// Database e cartelle di un sito appena registrato, con i passi per annullarli.
@@ -870,6 +897,30 @@ mod tests {
         assert!(readme.contains("PHP 8.5") && readme.contains("database.sql") && readme.contains("sona.it"));
         let found = c.store.export_by_token(&export.token).await.unwrap().unwrap();
         assert_eq!((found.site_id, found.size), (site.id, 1234));
+    }
+
+    #[tokio::test]
+    async fn save_as_template_exports_a_serialization_safe_dump() {
+        let c = ctx(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        c.host.env.lock().unwrap().insert("TABLE_PREFIX".into(), "pl_".into());
+        c.host.calls.lock().unwrap().clear();
+        let name = Slug::parse("negozio").unwrap();
+        save_template(&c, site.id, &name, "Negozio pronto", 1_800_000_000, &mut JobLog::default()).await.unwrap();
+        assert_eq!(
+            c.host.calls(),
+            [
+                "read_site_env sona_it",
+                "wp sona_it search-replace sona.it template.local --all-tables --skip-columns=guid --export=/srv/tmp/sona_it/template-1800000000.sql",
+                "store_template sona_it negozio template-1800000000.sql",
+            ]
+        );
+        let manifest = c.host.stored_manifest.lock().unwrap().take().unwrap();
+        assert_eq!(manifest.name, "Negozio pronto");
+        assert_eq!(manifest.sql.as_deref(), Some(std::path::Path::new("db.sql")));
+        assert_eq!(manifest.sql_domain, "template.local");
+        assert_eq!(manifest.table_prefix.as_deref(), Some("pl_"));
+        assert!(manifest.post_create.is_empty());
     }
 
     #[tokio::test]
