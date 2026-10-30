@@ -98,6 +98,12 @@ mod tests {
         assert_eq!(job.log.first().map(String::as_str), Some("$ wp user update anna --user_pass=*** --skip-email"), "password mai nel log");
         let (_, audit, _) = call(&t, req("GET", &format!("/api/sites/{id}/audit"), Some(&admin), None)).await;
         assert!(!audit.to_string().contains("Segreta123"), "né nell'audit");
+        // Su più righe: dentro le virgolette l'a capo resta, fuori separa gli argomenti.
+        let multi = "eval \"echo 1;\necho 2;\"\n--skip-plugins";
+        let (s, body, _) = call(&t, req("POST", &url, Some(&manager), Some(json!({"kind": "wp", "command": multi})))).await;
+        assert_eq!(s, StatusCode::ACCEPTED, "{body}");
+        wait_job(&t, body["job"].as_i64().unwrap()).await;
+        assert!(t.app.ctx.host.calls().contains(&"wp sona_it eval echo 1;\necho 2; --skip-plugins".to_string()), "{:?}", t.app.ctx.host.calls());
         let (s, body, _) = call(&t, req("POST", &url, Some(&manager), Some(json!({"kind": "php", "command": "public/script.php --x"})))).await;
         assert_eq!(s, StatusCode::ACCEPTED);
         let job = wait_job(&t, body["job"].as_i64().unwrap()).await;

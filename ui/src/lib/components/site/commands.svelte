@@ -45,23 +45,33 @@
 <div class="flex flex-col gap-4 pt-6">
 	<div class="flex flex-col gap-1">
 		<h2 class="text-sm font-medium">Esegui un comando</h2>
-		<p class="text-muted-foreground text-xs">Gira con l'utente del sito, nella sua cartella, senza shell: niente pipe, redirect o comandi di sistema.</p>
+		<p class="text-muted-foreground text-xs">
+			Gira con l'utente del sito, nella sua cartella, senza shell: niente pipe, redirect o comandi di sistema. Invio esegue, Maiusc+Invio va a capo.
+		</p>
 	</div>
 	{#if kinds.length > 1}
 		<ToggleGroup.Root type="single" variant="outline" size="sm" value={kind} onValueChange={(v) => v && (kind = v as Kind)}>
 			{#each kinds as k (k.value)}<ToggleGroup.Item value={k.value}>{k.label}</ToggleGroup.Item>{/each}
 		</ToggleGroup.Root>
 	{/if}
-	<form onsubmit={run} class="flex flex-col gap-2 sm:flex-row">
+	<form onsubmit={run} class="flex flex-col gap-2 sm:flex-row sm:items-start">
 		<InputGroup.Root class="flex-1">
-			<InputGroup.Addon><InputGroup.Text class="font-mono">{current.prefix}</InputGroup.Text></InputGroup.Addon>
-			<InputGroup.Input
-				class="font-mono"
+			<InputGroup.Addon class="self-start pt-2"><InputGroup.Text class="font-mono">{current.prefix}</InputGroup.Text></InputGroup.Addon>
+			<!-- Invio esegue, Maiusc+Invio va a capo (script PHP per eval su più righe). -->
+			<InputGroup.Textarea
+				class="max-h-80 min-h-9 [field-sizing:content] resize-none font-mono text-sm"
+				rows={1}
 				aria-label="Comando"
 				placeholder={kind === 'php' ? 'public/script.php --opzione' : current.examples[0]}
 				bind:value={command}
 				autocomplete="off"
 				spellcheck={false}
+				onkeydown={(e) => {
+					if (e.key === 'Enter' && !e.shiftKey) {
+						e.preventDefault();
+						run();
+					}
+				}}
 			/>
 		</InputGroup.Root>
 		<Button type="submit" disabled={running || !command.trim()}>
@@ -72,7 +82,7 @@
 	{#if current.examples.length || history.length}
 		<div class="flex flex-wrap items-center gap-1.5">
 			{#each history.filter((h) => h.kind === kind) as h (h.command)}
-				<Button variant="ghost" size="xs" class="font-mono" onclick={() => (command = h.command)} title="Comando già usato">{h.command}</Button>
+				<Button variant="ghost" size="xs" class="block max-w-80 truncate font-mono" onclick={() => (command = h.command)} title={h.command}>{h.command.replace(/\s+/g, ' ')}</Button>
 			{/each}
 			{#each current.examples.filter((ex) => !history.some((h) => h.kind === kind && h.command === ex)) as ex (ex)}
 				<Button variant="outline" size="xs" class="font-mono" onclick={() => (command = ex)}>{ex}</Button>

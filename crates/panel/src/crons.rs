@@ -85,7 +85,9 @@ pub fn split_args(line: &str) -> Result<Vec<String>, String> {
 /// Il comando di un cron, per tipo; l'URL di un cron HTTP deve essere su un dominio del sito.
 pub fn prepare(kind: CronKind, command: &str, domains: &[Domain]) -> Result<Action, String> {
     let command = command.trim();
-    if command.is_empty() || command.len() > 2000 || command.contains(['\n', '\r', '\0']) {
+    // L'a capo è ammesso (script PHP per `wp eval` su più righe): fuori dalle virgolette separa
+    // gli argomenti, dentro resta. Niente shell, quindi non apre altri comandi.
+    if command.is_empty() || command.len() > 10_000 || command.contains(['\r', '\0']) {
         return Err("comando vuoto o non valido".into());
     }
     match kind {
