@@ -5,13 +5,18 @@ type UploadInfo = { id: string; chunk_size: number; chunks: number };
 type Status = { received: number[]; complete: boolean };
 
 export async function uploadFile(siteId: number, path: string, file: File, onProgress: (fraction: number) => void) {
-	const info = await api.post<UploadInfo>(`/api/sites/${siteId}/files/uploads`, { path, size: file.size });
+	return uploadTo(`/api/sites/${siteId}/files/uploads`, path, file, onProgress);
+}
+
+/** Stesso protocollo su un'altra area (es. `/api/imports/uploads`). */
+export async function uploadTo(base: string, path: string, file: File, onProgress: (fraction: number) => void) {
+	const info = await api.post<UploadInfo>(base, { path, size: file.size });
 	for (let n = 0; n < info.chunks; n++) {
 		const blob = file.slice(n * info.chunk_size, (n + 1) * info.chunk_size);
 		// Un blocco fallito si ritenta: il server accetta lo stesso blocco più volte.
 		for (let attempt = 1; ; attempt++) {
 			try {
-				await api.put<Status>(`/api/sites/${siteId}/files/uploads/${info.id}/${n}`, blob);
+				await api.put<Status>(`${base}/${info.id}/${n}`, blob);
 				break;
 			} catch (e) {
 				if (attempt >= 3) throw e;

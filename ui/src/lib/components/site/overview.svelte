@@ -10,6 +10,7 @@
 	import { toast } from 'svelte-sonner';
 	import DomainsCard from './domains-card.svelte';
 	import StateCard from './state-card.svelte';
+	import CopiesCard from './copies-card.svelte';
 	import type { SiteDetail } from './types';
 
 	let { detail, onchange }: { detail: SiteDetail; onchange: () => void } = $props();
@@ -28,6 +29,7 @@
 	<DomainsCard {detail} {onchange} />
 	{#if detail.can_manage}
 		<StateCard {detail} {onchange} />
+		<CopiesCard {detail} />
 	{/if}
 	<Card.Root>
 		<Card.Header>
