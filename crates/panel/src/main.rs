@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
     let paths = Paths::production();
     let panel_dir = std::path::Path::new("/srv/panel");
     std::fs::create_dir_all(panel_dir)?;
-    let upgraded = upgrade::before_migrations(panel_dir, upgrade::VERSION, chrono::Utc::now().timestamp())?;
+    let upgraded = upgrade::before_migrations(panel_dir, upgrade::VERSION, chrono::Utc::now().timestamp()).await?;
     if let Some(copy) = &upgraded {
         tracing::info!("nuova versione {}: copia di panel.db in {}", upgrade::VERSION, copy.display());
     }

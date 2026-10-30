@@ -1041,17 +1041,17 @@ pub async fn backup_site<H: Host>(c: &Ctx<H>, site_id: i64, log: &mut JobLog) ->
     let site = c.store.site(site_id).await?;
     let db = c.db_creds(site_id).await?;
     let run = c.store.backup_started(site_id, &site.slug).await?;
-    let result = async {
-        let snap = c.host.backup(&site.slug, &db.name).await?;
-        c.host.prune(&site.slug, c.store.retention(site_id).await?).await?;
-        Ok::<_, anyhow::Error>(snap)
-    }
-    .await;
+    let result = c.host.backup(&site.slug, &db.name).await;
     match &result {
         Ok(snap) => {
             c.store.backup_finished(run, Ok(snap)).await?;
             c.store.resolve_alerts(site_id, "backup").await?;
             log.push(format!("backup {} ({} byte nuovi)", snap.snapshot_id, snap.bytes_added));
+            // Lo snapshot è già salvo: una pulizia fallita (repository bloccato, rete) si riprova la notte dopo.
+            if let Err(e) = c.host.prune(&site.slug, c.store.retention(site_id).await?).await {
+                tracing::warn!(site = %site.slug.as_str(), "pulizia dei backup: {e:#}");
+                log.push(format!("attenzione: pulizia dei vecchi backup non riuscita ({e:#})"));
+            }
         }
         Err(e) => {
             c.store.backup_finished(run, Err(format!("{e:#}"))).await?;
@@ -1591,6 +1591,18 @@ mod tests {
         let alerts = c.store.open_alerts(None).await.unwrap();
         assert_eq!(alerts[0].kind, "backup");
         assert_eq!(c.store.backup_runs(site.id, 10).await.unwrap()[0].status, "failed");
+    }
+
+    #[tokio::test]
+    async fn a_failed_prune_keeps_the_backup_good_and_only_warns() {
+        let c = ctx_with_backups(FakeHost::failing("prune")).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        let mut log = JobLog::default();
+        let snap = backup_site(&c, site.id, &mut log).await.unwrap();
+        assert_eq!(snap.snapshot_id, "abcdef12");
+        assert_eq!(c.store.backup_runs(site.id, 10).await.unwrap()[0].status, "done");
+        assert!(c.store.open_alerts(None).await.unwrap().is_empty(), "lo snapshot c'è: niente allarme di backup fallito");
+        assert!(log.lines.iter().any(|l| l.contains("pulizia")), "{:?}", log.lines);
     }
 
     #[tokio::test]

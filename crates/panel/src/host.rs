@@ -459,7 +459,9 @@ impl SystemHost {
     }
 
     async fn restic(&self, args: &[String]) -> Result<String> {
+        // Con un altro restic in corso (backup notturno e manuale) aspetta il lock invece di fallire.
         let out = tokio::process::Command::new("restic")
+            .args(["--retry-lock", "30m"])
             .args(args)
             .env("RESTIC_CACHE_DIR", self.paths.backups.join("cache"))
             .stdin(std::process::Stdio::null())

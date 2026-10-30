@@ -4,6 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::{Connection, SqliteConnection};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Etichetta della build (dev-<commit> o il tag), messa dalla CI; solo da mostrare.
@@ -11,7 +13,7 @@ pub const BUILD: Option<&str> = option_env!("ALVEARE_BUILD");
 const KEEP: usize = 5;
 
 /// Se la versione registrata è diversa da `current`, copia il database e restituisce la copia.
-pub fn before_migrations(dir: &Path, current: &str, now: i64) -> Result<Option<PathBuf>> {
+pub async fn before_migrations(dir: &Path, current: &str, now: i64) -> Result<Option<PathBuf>> {
     let db = dir.join("panel.db");
     let previous = std::fs::read_to_string(dir.join("VERSION")).ok().map(|v| v.trim().to_string());
     let Some(previous) = previous.filter(|p| p != current) else { return Ok(None) };
@@ -19,7 +21,14 @@ pub fn before_migrations(dir: &Path, current: &str, now: i64) -> Result<Option<P
         return Ok(None);
     }
     let copy = dir.join(format!("panel-{previous}-{now}.db"));
-    std::fs::copy(&db, &copy).with_context(|| format!("copia di sicurezza in {}", copy.display()))?;
+    // VACUUM INTO legge anche le pagine ancora nel WAL, che una copia del solo file perderebbe.
+    let mut conn = SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&db)).await.context("apertura di panel.db")?;
+    sqlx::query("VACUUM INTO ?")
+        .bind(copy.to_string_lossy().into_owned())
+        .execute(&mut conn)
+        .await
+        .with_context(|| format!("copia di sicurezza in {}", copy.display()))?;
+    conn.close().await?;
     prune_copies(dir)?;
     Ok(Some(copy))
 }
@@ -50,25 +59,42 @@ fn prune_copies(dir: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn database_is_copied_only_when_the_version_changes() {
-        let t = tempfile::tempdir().unwrap();
-        std::fs::write(t.path().join("panel.db"), "dati").unwrap();
-        assert_eq!(before_migrations(t.path(), "0.2.0", 1).unwrap(), None, "primo avvio: niente da copiare");
-        mark_started(t.path(), "0.2.0").unwrap();
-        assert_eq!(before_migrations(t.path(), "0.2.0", 2).unwrap(), None);
-        let copy = before_migrations(t.path(), "0.3.0", 3).unwrap().unwrap();
-        assert_eq!(copy.file_name().unwrap(), "panel-0.2.0-3.db");
-        assert_eq!(std::fs::read_to_string(copy).unwrap(), "dati");
+    use sqlx::sqlite::SqliteJournalMode;
+
+    /// Database in WAL con una riga ancora non trascritta nel file principale; la connessione resta aperta.
+    async fn wal_db(dir: &Path, value: &str) -> SqliteConnection {
+        let opts = SqliteConnectOptions::new().filename(dir.join("panel.db")).create_if_missing(true).journal_mode(SqliteJournalMode::Wal);
+        let mut c = SqliteConnection::connect_with(&opts).await.unwrap();
+        sqlx::query("PRAGMA wal_autocheckpoint = 0").execute(&mut c).await.unwrap();
+        sqlx::query("CREATE TABLE t (v TEXT)").execute(&mut c).await.unwrap();
+        sqlx::query("INSERT INTO t VALUES (?)").bind(value).execute(&mut c).await.unwrap();
+        c
     }
 
-    #[test]
-    fn only_the_last_five_copies_are_kept() {
+    async fn read(db: &Path) -> String {
+        let mut c = SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(db)).await.unwrap();
+        sqlx::query_scalar("SELECT v FROM t").fetch_one(&mut c).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn database_is_copied_only_when_the_version_changes() {
         let t = tempfile::tempdir().unwrap();
-        std::fs::write(t.path().join("panel.db"), "x").unwrap();
+        let _open = wal_db(t.path(), "dati").await;
+        assert_eq!(before_migrations(t.path(), "0.2.0", 1).await.unwrap(), None, "primo avvio: niente da copiare");
+        mark_started(t.path(), "0.2.0").unwrap();
+        assert_eq!(before_migrations(t.path(), "0.2.0", 2).await.unwrap(), None);
+        let copy = before_migrations(t.path(), "0.3.0", 3).await.unwrap().unwrap();
+        assert_eq!(copy.file_name().unwrap(), "panel-0.2.0-3.db");
+        assert_eq!(read(&copy).await, "dati", "anche quello che è ancora nel WAL");
+    }
+
+    #[tokio::test]
+    async fn only_the_last_five_copies_are_kept() {
+        let t = tempfile::tempdir().unwrap();
+        let _open = wal_db(t.path(), "x").await;
         for i in 0..8 {
             std::fs::write(t.path().join("VERSION"), format!("0.{i}.0")).unwrap();
-            before_migrations(t.path(), "9.9.9", 100 + i).unwrap();
+            before_migrations(t.path(), "9.9.9", 100 + i).await.unwrap();
         }
         let mut left: Vec<String> = std::fs::read_dir(t.path()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with("panel-")).collect();
         left.sort();
