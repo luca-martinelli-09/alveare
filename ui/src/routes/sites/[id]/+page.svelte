@@ -20,6 +20,7 @@
 	import Updates from '$lib/components/site/updates.svelte';
 	import Crons from '$lib/components/site/crons.svelte';
 	import AppTab from '$lib/components/site/app.svelte';
+	import Commands from '$lib/components/site/commands.svelte';
 	import { api, ApiError } from '$lib/api';
 	import NotFound from '$lib/components/app/not-found.svelte';
 	import type { SiteDetail } from '$lib/components/site/types';
@@ -114,6 +115,7 @@
 			{/if}
 			{#if detail.can_manage}
 				<Tabs.Trigger value="cron">Cron</Tabs.Trigger>
+				<Tabs.Trigger value="commands">Comandi</Tabs.Trigger>
 			{/if}
 			{#if detail.can_manage && detail.site.kind !== 'wordpress'}
 				<Tabs.Trigger value="app">App</Tabs.Trigger>
@@ -132,6 +134,7 @@
 			<Tabs.Content value="database"><Database {id} /></Tabs.Content>
 			<Tabs.Content value="settings"><Settings {detail} onchange={load} /></Tabs.Content>
 			<Tabs.Content value="cron"><Crons {id} canManage={detail.can_manage} /></Tabs.Content>
+			<Tabs.Content value="commands"><Commands {id} siteKind={detail.site.kind} /></Tabs.Content>
 			<Tabs.Content value="activity"><Activity {id} /></Tabs.Content>
 		{/if}
 		<Tabs.Content value="logs"><Logs {id} canManage={detail.can_manage} /></Tabs.Content>

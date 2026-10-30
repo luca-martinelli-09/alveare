@@ -340,6 +340,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .merge(blocks::routes::<H>())
         .merge(wordpress::routes::<H>())
         .merge(crons::routes::<H>())
+        .merge(commands::routes::<H>())
         .merge(cloudflare::routes::<H>())
         .merge(account::routes::<H>())
         .merge(passkeys::routes::<H>())
@@ -1182,6 +1183,7 @@ mod account;
 mod apps;
 mod blocks;
 mod cloudflare;
+mod commands;
 mod config;
 mod crons;
 mod imports;
