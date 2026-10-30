@@ -115,6 +115,7 @@ async fn import_site<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap
             template: r.template.clone(),
             title: r.title.trim().to_string(),
             admin_email: user.email.clone(),
+            admin_user: crate::flows::DEFAULT_ADMIN_USER.into(),
             table_prefix: template.manifest.table_prefix.clone().unwrap_or_else(|| "wp_".into()),
         },
         archive,

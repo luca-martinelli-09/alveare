@@ -34,11 +34,18 @@
 
 	let alerts = $state<AlertT[]>([]);
 	let activity = $state<Activity[] | null>(null);
-	let templates = $state<{ id: string; name: string }[]>([]);
+	let templates = $state<{ id: string; name: string; kind: string }[]>([]);
 	let updates = $state<Record<number, number>>({});
 	let open = $state(false);
 	let domain = $state('');
 	let title = $state('');
+	// Amministratore di WordPress: proposti "admin" e la tua email, si cambiano sito per sito.
+	let adminUser = $state('admin');
+	let adminEmail = $state('');
+	$effect(() => {
+		if (!adminEmail) adminEmail = session.user?.email ?? '';
+	});
+	const isWordpress = $derived(templates.find((t) => t.id === template)?.kind === 'wordpress');
 	let template = $state('wordpress');
 	let error = $state('');
 	let job = $state<number | null>(null);
@@ -66,7 +73,7 @@
 		e.preventDefault();
 		error = '';
 		try {
-			const r = await api.post<{ job: number }>('/api/sites', { domain, title, template });
+			const r = await api.post<{ job: number }>('/api/sites', { domain, title, template, ...(isWordpress ? { admin_user: adminUser, admin_email: adminEmail } : {}) });
 			job = r.job;
 		} catch (err) {
 			error = errorMessage(err);
@@ -79,6 +86,8 @@
 			job = null;
 			domain = '';
 			title = '';
+			adminUser = 'admin';
+			adminEmail = session.user?.email ?? '';
 			load();
 		}
 	}
@@ -153,6 +162,19 @@
 										</Select.Content>
 									</Select.Root>
 								</Field.Field>
+								{#if isWordpress}
+									<div class="grid gap-4 sm:grid-cols-2">
+										<Field.Field>
+											<Field.FieldLabel for="admin-user">Utente amministratore</Field.FieldLabel>
+											<Input id="admin-user" bind:value={adminUser} autocomplete="off" spellcheck={false} required minlength={3} maxlength={60} pattern="[A-Za-z0-9._@\-]+" />
+										</Field.Field>
+										<Field.Field>
+											<Field.FieldLabel for="admin-email">Email amministratore</Field.FieldLabel>
+											<Input id="admin-email" type="email" bind:value={adminEmail} required />
+										</Field.Field>
+									</div>
+									<p class="text-muted-foreground -mt-2 text-xs">La password si genera da sola e si vede una volta nella panoramica del sito.</p>
+								{/if}
 								<Dialog.Footer>
 									<Button variant="primary" type="submit">Crea sito</Button>
 								</Dialog.Footer>

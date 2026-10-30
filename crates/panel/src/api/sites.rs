@@ -391,6 +391,29 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
+    async fn the_wordpress_admin_user_and_email_are_chosen_at_creation() {
+        let t = setup().await;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let new = |extra: serde_json::Value| {
+            let mut b = json!({"domain": "sona.it", "template": "wordpress", "title": "Sona"});
+            b.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            b
+        };
+        for bad in [json!({"admin_user": "a b"}), json!({"admin_user": "x"}), json!({"admin_email": "non-una-email"}), json!({"admin_email": "a@b.it\nBcc: x"})] {
+            let (s, _, _) = call(&t, req("POST", "/api/sites", Some(&admin), Some(new(bad.clone())))).await;
+            assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}");
+        }
+        let id = create_site(&t, &admin, "upupa.it").await;
+        let (_, creds, _) = call(&t, req("POST", &format!("/api/sites/{id}/wp-admin"), Some(&admin), None)).await;
+        assert_eq!(creds["user"], "admin", "predefinito");
+        let (s, body, _) = call(&t, req("POST", "/api/sites", Some(&admin), Some(new(json!({"admin_user": "mario.rossi", "admin_email": "mario@sona.it"}))))).await;
+        assert_eq!(s, StatusCode::ACCEPTED, "{body}");
+        let job = wait_job(&t, body["job"].as_i64().unwrap()).await;
+        let (_, creds, _) = call(&t, req("POST", &format!("/api/sites/{}/wp-admin", job.site_id.unwrap()), Some(&admin), None)).await;
+        assert_eq!(creds["user"], "mario.rossi");
+    }
+
+    #[tokio::test]
     async fn admins_make_an_alias_the_primary_domain() {
         let t = setup().await;
         let (_, admin) = token_for(&t, "admin@example.org", true).await;

@@ -252,7 +252,7 @@ mod tests {
             backups: true,
             site_url: crate::flows::DEFAULT_SITE_URL.into(),
         };
-        let req = CreateSite { domain: Domain::parse("sona.it").unwrap(), kind: SiteKind::Wordpress, template: "wordpress".into(), title: "S".into(), admin_email: "a@b.it".into(), table_prefix: "wp_".into() };
+        let req = CreateSite { domain: Domain::parse("sona.it").unwrap(), kind: SiteKind::Wordpress, template: "wordpress".into(), title: "S".into(), admin_email: "a@b.it".into(), admin_user: "admin".into(), table_prefix: "wp_".into() };
         let site = create_site(&c, &req, &mut JobLog::default()).await.unwrap();
         c.host.calls.lock().unwrap().clear();
         (c, site.id)

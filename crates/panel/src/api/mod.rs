@@ -640,6 +640,7 @@ struct CreateSiteReq {
     template: String,
     title: String,
     admin_email: Option<String>,
+    admin_user: Option<String>,
     /// Conferma esplicita se il budget di memoria supera il 150% della RAM.
     #[serde(default)]
     confirm_budget: bool,
@@ -651,12 +652,22 @@ async fn create_site<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap
     let domain = Domain::parse(&r.domain).map_err(|_| ApiError::bad_request("dominio non valido"))?;
     app.check_not_reserved(&domain)?;
     let template = load_template(&app.templates, &r.template)?;
+    // Finiscono come argomenti di `wp core install`: niente spazi, a capo o caratteri strani.
+    let admin_user = r.admin_user.as_deref().map(str::trim).filter(|u| !u.is_empty()).unwrap_or(flows::DEFAULT_ADMIN_USER).to_string();
+    if !(3..=60).contains(&admin_user.len()) || !admin_user.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-@".contains(&b)) {
+        return Err(ApiError::bad_request("utente amministratore: da 3 a 60 caratteri tra lettere, numeri e . _ - @"));
+    }
+    let admin_email = r.admin_email.as_deref().map(str::trim).filter(|e| !e.is_empty()).unwrap_or(&user.email).to_string();
+    if admin_email.len() > 254 || !admin_email.contains('@') || admin_email.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(ApiError::bad_request("email dell'amministratore non valida"));
+    }
     let req = CreateSite {
         domain,
         kind: template.manifest.kind,
         template: r.template.clone(),
         title: r.title.trim().to_string(),
-        admin_email: r.admin_email.unwrap_or_else(|| user.email.clone()),
+        admin_email,
+        admin_user,
         table_prefix: template.manifest.table_prefix.clone().unwrap_or_else(|| "wp_".into()),
     };
     let budget = flows::budget_with(&app.ctx, 0, Some(&crate::store::PhpSettingsRow::default()), app.ram_mb).await?;

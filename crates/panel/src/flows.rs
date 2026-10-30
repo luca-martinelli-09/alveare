@@ -193,6 +193,8 @@ pub struct Ctx<H> {
 }
 
 pub const DEFAULT_SITE_URL: &str = "https://{domain}";
+/// Utente amministratore proposto per un nuovo WordPress (si cambia nella creazione del sito).
+pub const DEFAULT_ADMIN_USER: &str = "admin";
 
 impl<H> Ctx<H> {
     pub fn url_of(&self, domain: &Domain) -> String {
@@ -207,6 +209,8 @@ pub struct CreateSite {
     pub template: String,
     pub title: String,
     pub admin_email: String,
+    /// Utente amministratore di WordPress creato all'installazione.
+    pub admin_user: String,
     pub table_prefix: String,
 }
 
@@ -627,7 +631,7 @@ fn site_vars<H>(c: &Ctx<H>, req: &CreateSite, site: &Site, db: &DbCreds, redis_p
         ("SITE_URL".into(), url),
         ("SLUG".into(), site.slug.as_str().to_string()),
         ("TITLE".into(), req.title.clone()),
-        ("ADMIN_USER".into(), "gestore".into()),
+        ("ADMIN_USER".into(), req.admin_user.clone()),
         ("ADMIN_EMAIL".into(), req.admin_email.clone()),
         ("ADMIN_PASSWORD".into(), random_password()),
     ]);
@@ -886,6 +890,7 @@ async fn configure_copy<H: Host>(c: &Ctx<H>, site: &Site, domain: &Domain, db: &
         template: site.template.clone(),
         title: src_env.get("SMTP_FROM_NAME").cloned().unwrap_or_else(|| domain.as_str().into()),
         admin_email: String::new(),
+        admin_user: String::new(),
         table_prefix: src_env.get("TABLE_PREFIX").cloned().unwrap_or_else(|| "wp_".into()),
     };
     let redis_password = random_password();
@@ -1339,6 +1344,7 @@ mod tests {
             template: "wordpress".into(),
             title: "Sona".into(),
             admin_email: "admin@sona.it".into(),
+            admin_user: "admin".into(),
             table_prefix: "wp_".into(),
         }
     }
@@ -1555,7 +1561,7 @@ mod tests {
         let mut log = JobLog::default();
         let site = create_site(&c, &req("sona.it"), &mut log).await.unwrap();
         let (user, password) = take_wp_admin(&c, site.id, chrono::Utc::now().timestamp()).await.unwrap().unwrap();
-        assert_eq!((user.as_str(), password.len()), ("gestore", 32));
+        assert_eq!((user.as_str(), password.len()), ("admin", 32));
         assert!(!log.lines.iter().any(|l| l.contains(&password)), "la password non va nel log");
         assert!(take_wp_admin(&c, site.id, chrono::Utc::now().timestamp()).await.unwrap().is_none(), "una volta sola");
         let other = create_site(&c, &req("upupa.it"), &mut JobLog::default()).await.unwrap();
