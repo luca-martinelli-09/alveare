@@ -191,6 +191,9 @@ async fn apply_when_ready(app: App<SystemHost>) {
         match (pools, caddy) {
             (Ok(_), Ok(())) => {
                 tracing::info!("stato applicato a PHP e Caddy");
+                if let Err(e) = flows::sync_workers(&app.ctx).await {
+                    tracing::warn!("worker non avviati: {e:#}");
+                }
                 return;
             }
             (p, c) if attempt % 6 == 0 => tracing::warn!("PHP o Caddy non ancora pronti: {:?} / {:?}", p.err(), c.err()),

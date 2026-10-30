@@ -8,6 +8,8 @@ pub const RESERVED_MB: u64 = 1024;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Budget {
     pub pools_mb: u64,
+    /// Worker long-running (processi × memoria).
+    pub workers_mb: u64,
     pub reserved_mb: u64,
     pub total_mb: u64,
     pub ram_mb: u64,
@@ -29,10 +31,10 @@ pub fn pool_mb(s: &PhpSettingsRow) -> u64 {
     u64::from(s.max_children) * u64::from(s.memory_limit_mb)
 }
 
-pub fn compute<'a>(pools: impl IntoIterator<Item = &'a PhpSettingsRow>, ram_mb: u64) -> Budget {
+pub fn compute<'a>(pools: impl IntoIterator<Item = &'a PhpSettingsRow>, workers_mb: u64, ram_mb: u64) -> Budget {
     let pools_mb: u64 = pools.into_iter().map(pool_mb).sum();
-    let total_mb = pools_mb + RESERVED_MB;
-    Budget { pools_mb, reserved_mb: RESERVED_MB, total_mb, ram_mb, percent: if ram_mb == 0 { 0 } else { total_mb * 100 / ram_mb } }
+    let total_mb = pools_mb + workers_mb + RESERVED_MB;
+    Budget { pools_mb, workers_mb, reserved_mb: RESERVED_MB, total_mb, ram_mb, percent: if ram_mb == 0 { 0 } else { total_mb * 100 / ram_mb } }
 }
 
 /// MemTotal da /proc/meminfo, in MB.
@@ -71,12 +73,13 @@ mod tests {
 
     #[test]
     fn budget_sums_pools_and_reserved() {
-        let b = compute(&[row(256, 5), row(128, 4)], 4096);
+        let b = compute(&[row(256, 5), row(128, 4)], 0, 4096);
         assert_eq!((b.pools_mb, b.total_mb, b.percent), (1792, 2816, 68));
+        assert_eq!(compute(&[row(256, 5)], 512, 4096).total_mb, 1280 + 512 + RESERVED_MB, "i worker contano");
         assert!(!b.over_ram() && !b.needs_confirmation());
-        let b = compute(&[row(512, 10)], 4096);
+        let b = compute(&[row(512, 10)], 0, 4096);
         assert!(b.over_ram() && !b.needs_confirmation(), "{b:?}");
-        let b = compute(&[row(1024, 10)], 4096);
+        let b = compute(&[row(1024, 10)], 0, 4096);
         assert!(b.needs_confirmation());
     }
 

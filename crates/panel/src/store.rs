@@ -92,6 +92,17 @@ pub struct CronRun {
 const CRON_OUTPUT_MAX: usize = 16 * 1024;
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub struct Worker {
+    pub id: i64,
+    pub site_id: i64,
+    pub name: String,
+    pub command: String,
+    pub processes: u32,
+    pub memory_mb: u32,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct IpBlock {
     pub id: i64,
     pub site_id: Option<i64>,
@@ -698,6 +709,65 @@ impl Store {
         rows.iter()
             .map(|r| Ok(CronRun { id: r.try_get("id")?, cron_id: r.try_get("cron_id")?, started_at: r.try_get("started_at")?, finished_at: r.try_get("finished_at")?, ok: r.try_get("ok")?, output: r.try_get("output")? }))
             .collect()
+    }
+
+    pub async fn add_worker(&self, site_id: i64, name: &str, command: &str, processes: u32, memory_mb: u32) -> Result<i64> {
+        sqlx::query_scalar("INSERT INTO workers (site_id, name, command, processes, memory_mb) VALUES (?, ?, ?, ?, ?) RETURNING id")
+            .bind(site_id)
+            .bind(name)
+            .bind(command)
+            .bind(processes)
+            .bind(memory_mb)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| match &e {
+                sqlx::Error::Database(d) if d.is_unique_violation() => StoreError::HostnameTaken(format!("worker {name}")),
+                _ => StoreError::Db(e),
+            })
+    }
+
+    /// Worker di un sito; `None`: tutti.
+    pub async fn workers(&self, site_id: Option<i64>) -> Result<Vec<Worker>> {
+        let q = "SELECT id, site_id, name, command, processes, memory_mb, active FROM workers";
+        let rows = match site_id {
+            Some(id) => sqlx::query(&format!("{q} WHERE site_id = ? ORDER BY name")).bind(id).fetch_all(&self.pool).await?,
+            None => sqlx::query(&format!("{q} ORDER BY site_id, name")).fetch_all(&self.pool).await?,
+        };
+        rows.iter()
+            .map(|r| {
+                Ok(Worker {
+                    id: r.try_get("id")?,
+                    site_id: r.try_get("site_id")?,
+                    name: r.try_get("name")?,
+                    command: r.try_get("command")?,
+                    processes: r.try_get("processes")?,
+                    memory_mb: r.try_get("memory_mb")?,
+                    active: r.try_get("active")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn set_worker_active(&self, id: i64, active: bool) -> Result<()> {
+        sqlx::query("UPDATE workers SET active = ? WHERE id = ?").bind(active).bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn delete_worker(&self, id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM workers WHERE id = ?").bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// (repository, branch) del deploy del sito.
+    pub async fn deploy_config(&self, id: i64) -> Result<Option<(String, String)>> {
+        let r = sqlx::query("SELECT deploy_repo, deploy_branch FROM sites WHERE id = ?").bind(id).fetch_one(&self.pool).await?;
+        let (repo, branch): (Option<String>, Option<String>) = (r.try_get("deploy_repo")?, r.try_get("deploy_branch")?);
+        Ok(repo.zip(branch))
+    }
+
+    pub async fn set_deploy_config(&self, id: i64, repo: &str, branch: &str) -> Result<()> {
+        sqlx::query("UPDATE sites SET deploy_repo = ?, deploy_branch = ? WHERE id = ?").bind(repo).bind(branch).bind(id).execute(&self.pool).await?;
+        Ok(())
     }
 
     pub async fn add_block(&self, site_id: Option<i64>, cidr: &str, expires_at: Option<i64>, by: Option<i64>, now: i64) -> Result<i64> {

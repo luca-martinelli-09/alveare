@@ -405,6 +405,10 @@ impl SystemHost {
         agent_call(&self.agent_path(&runtime), &cmd, timeout).await
     }
 
+    fn workers_socket(&self) -> PathBuf {
+        self.paths.agent.with_file_name("workers.sock")
+    }
+
     fn all_runtimes(&self) -> Vec<String> {
         std::iter::once(alveare_core::php::DEFAULT_RUNTIME.to_string()).chain(self.php_runtimes.iter().cloned()).collect()
     }
@@ -795,6 +799,45 @@ impl Host for SystemHost {
 
     async fn probe(&self, host: &Domain, auth: Option<(&str, &str)>) -> Result<u16> {
         http_probe(&self.caddy_http, host, auth, Duration::from_secs(30)).await
+    }
+
+    async fn sync_workers(&self, specs: &[alveare_core::agent::WorkerSpec]) -> Result<()> {
+        let path = self.paths.php_etc.parent().unwrap_or(&self.paths.php_etc).join("workers.json");
+        write_atomic(&path, &serde_json::to_string_pretty(specs)?)?;
+        match agent_call(&self.workers_socket(), &Command::WorkersApply, AGENT_TIMEOUT).await {
+            Ok(r) if r.ok => Ok(()),
+            Ok(r) => bail!("php-workers: {}", r.output),
+            // Senza worker il container può essere spento (profilo workers non attivo).
+            Err(_) if specs.is_empty() => Ok(()),
+            Err(e) => Err(e.context("container php-workers non raggiungibile: docker compose --profile workers up -d")),
+        }
+    }
+
+    async fn worker_restart(&self, slug: &Slug, name: &str) -> Result<()> {
+        let r = agent_call(&self.workers_socket(), &Command::WorkerRestart { slug: slug.clone(), name: name.into() }, AGENT_TIMEOUT).await?;
+        if !r.ok {
+            bail!("riavvio dei worker: {}", r.output);
+        }
+        Ok(())
+    }
+
+    async fn workers_status(&self) -> Result<serde_json::Value> {
+        let r = agent_call(&self.workers_socket(), &Command::WorkersStatus, Duration::from_secs(10)).await?;
+        Ok(serde_json::from_str(&r.output)?)
+    }
+
+    async fn deploy(&self, slug: &Slug, repo: &str, branch: &str) -> Result<(bool, String)> {
+        // Ogni passo ha il suo timeout nell'agente: il pannello aspetta il totale.
+        let r = self.agent_for(slug, Command::Deploy { slug: slug.clone(), repo: repo.into(), branch: branch.into() }, Duration::from_secs(3600)).await?;
+        Ok((r.ok, r.output))
+    }
+
+    async fn deploy_key(&self, slug: &Slug) -> Result<String> {
+        let r = self.agent_for(slug, Command::DeployKey { slug: slug.clone() }, Duration::from_secs(60)).await?;
+        if !r.ok {
+            bail!("chiave di deploy: {}", r.output);
+        }
+        Ok(r.output)
     }
 
     async fn caddy_metrics(&self) -> Result<String> {

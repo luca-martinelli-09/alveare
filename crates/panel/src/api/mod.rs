@@ -322,6 +322,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .merge(cloudflare::routes::<H>())
         .merge(account::routes::<H>())
         .merge(passkeys::routes::<H>())
+        .merge(apps::routes::<H>())
         .with_state(app)
 }
 
@@ -1088,6 +1089,7 @@ async fn get_job<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Met
 }
 
 mod account;
+mod apps;
 mod blocks;
 mod cloudflare;
 mod config;

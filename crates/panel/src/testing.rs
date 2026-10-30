@@ -170,6 +170,24 @@ impl Host for FakeHost {
         self.record("probe", format!("{} {}", host.as_str(), auth.map_or("-".to_string(), |(u, _)| format!("{u}:"))))?;
         Ok(self.probe_status.unwrap_or(200))
     }
+    async fn sync_workers(&self, specs: &[alveare_core::agent::WorkerSpec]) -> anyhow::Result<()> {
+        let list: Vec<String> = specs.iter().map(|w| format!("{}/{}:{} x{} {}MB", w.slug.as_str(), w.name, w.args.join(" "), w.processes, w.memory_mb)).collect();
+        self.record("sync_workers", list.join(","))
+    }
+    async fn worker_restart(&self, slug: &Slug, name: &str) -> anyhow::Result<()> {
+        self.record("worker_restart", format!("{} {name}", slug.as_str()))
+    }
+    async fn workers_status(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::json!([{ "slug": "sona_it", "name": "horizon", "index": 0, "pid": 42, "uptime_s": 10, "restarts": 0, "rss_mb": 80 }]))
+    }
+    async fn deploy(&self, slug: &Slug, repo: &str, branch: &str) -> anyhow::Result<(bool, String)> {
+        self.record("deploy", format!("{} {repo} {branch}", slug.as_str()))?;
+        Ok((true, "$ git fetch\nfatto".into()))
+    }
+    async fn deploy_key(&self, slug: &Slug) -> anyhow::Result<String> {
+        self.record("deploy_key", slug.as_str().into())?;
+        Ok("ssh-ed25519 AAAAC3 alveare-sona_it".into())
+    }
     async fn caddy_metrics(&self) -> anyhow::Result<String> {
         Ok("# TYPE caddy_http_requests_total counter\ncaddy_http_requests_total{host=\"sona.it\"} 7\n".into())
     }

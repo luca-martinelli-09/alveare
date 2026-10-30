@@ -107,6 +107,16 @@ pub trait Host: Send + Sync + 'static {
     /// Crea `templates/<name>/` con i file del sito (senza `.env`), il dump in `db.sql` e il manifest.
     /// `sql_file` è nella cartella tmp del sito, dove l'ha scritto WP-CLI.
     fn store_template(&self, slug: &Slug, name: &Slug, manifest: &crate::template::Manifest, sql_file: &str) -> impl Future<Output = Result<()>> + Send;
+    /// Scrive i worker voluti e li fa allineare al container php-workers.
+    fn sync_workers(&self, specs: &[alveare_core::agent::WorkerSpec]) -> impl Future<Output = Result<()>> + Send;
+    /// Riavvia i worker di un sito (`name` vuoto: tutti).
+    fn worker_restart(&self, slug: &Slug, name: &str) -> impl Future<Output = Result<()>> + Send;
+    /// Processi in esecuzione (JSON del supervisore).
+    fn workers_status(&self) -> impl Future<Output = Result<serde_json::Value>> + Send;
+    /// Deploy git/composer/artisan con l'utente del sito: (riuscito, output).
+    fn deploy(&self, slug: &Slug, repo: &str, branch: &str) -> impl Future<Output = Result<(bool, String)>> + Send;
+    /// Chiave SSH pubblica di deploy del sito (creata se manca).
+    fn deploy_key(&self, slug: &Slug) -> impl Future<Output = Result<String>> + Send;
     /// Metriche Prometheus di Caddy, dall'Admin API.
     fn caddy_metrics(&self) -> impl Future<Output = Result<String>> + Send;
     /// Etichette degli account Cloudflare configurati (vuoto: hostname da aggiungere a mano).
@@ -325,6 +335,49 @@ pub async fn dispatch_alerts<H: Host>(c: &Ctx<H>) -> Result<usize> {
     Ok(sent)
 }
 
+/// "php artisan horizon" → ["artisan", "horizon"]: argomenti di php, lo script per primo.
+pub fn worker_args(command: &str) -> std::result::Result<Vec<String>, String> {
+    let line = command.trim();
+    crate::crons::split_args(line.strip_prefix("php ").unwrap_or(line))
+}
+
+/// Worker voluti: quelli attivi dei siti attivi, con il comando già controllato.
+pub async fn sync_workers<H: Host>(c: &Ctx<H>) -> Result<()> {
+    let mut specs = Vec::new();
+    for w in c.store.workers(None).await?.into_iter().filter(|w| w.active) {
+        let site = c.store.site(w.site_id).await?;
+        if site.status != SiteStatus::Active {
+            continue;
+        }
+        let args = worker_args(&w.command).map_err(Invalid)?;
+        specs.push(alveare_core::agent::WorkerSpec { slug: site.slug.clone(), uid: site.uid(), name: w.name, args, processes: w.processes, memory_mb: w.memory_mb });
+    }
+    if let Some(e) = specs.iter().find_map(|s| s.validate().err()) {
+        return Err(Invalid(e).into());
+    }
+    c.host.sync_workers(&specs).await
+}
+
+/// Deploy di un'app: git, composer, migrate e cache; poi i worker del sito ripartono.
+pub async fn deploy_site<H: Host>(c: &Ctx<H>, site_id: i64, log: &mut JobLog) -> Result<()> {
+    let site = c.store.site(site_id).await?;
+    let (repo, branch) = c.store.deploy_config(site_id).await?.ok_or_else(|| Invalid("imposta prima repository e branch del deploy".into()))?;
+    let (ok, out) = c.host.deploy(&site.slug, &repo, &branch).await?;
+    for line in out.lines() {
+        log.push(line);
+    }
+    if !ok {
+        bail!("deploy non riuscito");
+    }
+    if c.store.workers(Some(site_id)).await?.iter().any(|w| w.active) {
+        c.host.worker_restart(&site.slug, "").await?;
+        log.push("worker riavviati");
+    }
+    flush_object_cache(c, &site, log).await;
+    log.push(format!("deploy di {branch} completato"));
+    Ok(())
+}
+
 /// Una modifica rifiutata dalla validazione: la UI la mostra così com'è (400).
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -392,7 +445,8 @@ pub async fn budget_with<H>(c: &Ctx<H>, site_id: i64, proposed: Option<&crate::s
         .map(|s| if s.id == site_id { proposed.cloned().unwrap_or_else(|| s.settings.clone()) } else { s.settings.clone() })
         .chain(new_site)
         .collect();
-    Ok(crate::budget::compute(&rows, ram_mb))
+    let workers_mb: u64 = c.store.workers(None).await?.iter().filter(|w| w.active).map(|w| u64::from(w.processes) * u64::from(w.memory_mb)).sum();
+    Ok(crate::budget::compute(&rows, workers_mb, ram_mb))
 }
 
 /// Avviso globale "budget" quando il massimo teorico dei pool supera la RAM.
@@ -465,6 +519,34 @@ pub async fn redis_users(store: &Store, key: &SecretKey) -> Result<Vec<RedisUser
     Ok(users)
 }
 
+/// Il .env di un'app Laravel: stesse credenziali, nomi di Laravel; cache, sessioni e code su
+/// Redis con l'utente e il prefisso del sito.
+fn laravel_env(req: &CreateSite, site: &Site, db: &DbCreds, url: &str) -> Vec<(String, String)> {
+    use base64::Engine;
+    let mut key = [0u8; 32];
+    rand::fill(&mut key);
+    [
+        ("APP_NAME", req.title.replace('\'', "’")),
+        ("APP_ENV", "production".into()),
+        ("APP_KEY", format!("base64:{}", base64::engine::general_purpose::STANDARD.encode(key))),
+        ("APP_DEBUG", "false".into()),
+        ("APP_URL", url.into()),
+        ("DB_CONNECTION", "mysql".into()),
+        ("DB_PORT", "3306".into()),
+        ("DB_DATABASE", db.name.clone()),
+        ("DB_USERNAME", db.user.clone()),
+        ("REDIS_CLIENT", "phpredis".into()),
+        ("CACHE_STORE", "redis".into()),
+        ("SESSION_DRIVER", "redis".into()),
+        ("QUEUE_CONNECTION", "redis".into()),
+        ("CACHE_PREFIX", format!("{}:cache:", site.slug.as_str())),
+        ("MAIL_MAILER", "smtp".into()),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect()
+}
+
 fn random_salt() -> String {
     Alphanumeric.sample_string(&mut rand::rng(), 64)
 }
@@ -492,7 +574,11 @@ fn site_vars<H>(c: &Ctx<H>, req: &CreateSite, site: &Site, db: &DbCreds, redis_p
         // Il .env usa apici singoli: "Pro Loco d'Arco" diventa "Pro Loco d’Arco".
         ("SMTP_FROM_NAME".into(), req.title.replace('\'', "’").replace(['\n', '\r'], " ")),
     ]);
-    env.extend(WP_SALT_KEYS.map(|k| (k.to_string(), random_salt())));
+    if req.kind == SiteKind::Laravel {
+        env.extend(laravel_env(req, site, db, &url));
+    } else {
+        env.extend(WP_SALT_KEYS.map(|k| (k.to_string(), random_salt())));
+    }
     let mut vars = env.clone();
     vars.extend([
         ("DOMAIN".into(), req.domain.as_str().to_string()),
@@ -963,6 +1049,10 @@ pub async fn set_suspended<H: Host>(c: &Ctx<H>, id: i64, suspended: bool) -> Res
         c.sync_php().await?;
         c.sync_caddy().await?;
     }
+    // I worker seguono il sito; se il container dei worker è spento lo si dice e basta.
+    if let Err(e) = sync_workers(c).await {
+        tracing::warn!("worker dopo la sospensione di {}: {e:#}", site.slug.as_str());
+    }
     Ok(())
 }
 
@@ -1073,6 +1163,9 @@ pub async fn delete_site<H: Host>(c: &Ctx<H>, id: i64, mode: DeleteMode, log: &m
     c.store.delete_site(id).await?;
     c.sync_php().await?;
     c.sync_redis().await?;
+    if let Err(e) = sync_workers(c).await {
+        log.push(format!("worker: {e:#}"));
+    }
     log.push(format!("sito {} eliminato", site.slug.as_str()));
     Ok(())
 }
@@ -1352,6 +1445,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn laravel_sites_get_a_laravel_env_and_no_wordpress_install() {
+        let c = ctx(FakeHost::default()).await;
+        let r = CreateSite { kind: SiteKind::Laravel, template: "laravel".into(), ..req("app.sona.it") };
+        create_site(&c, &r, &mut JobLog::default()).await.unwrap();
+        let env = c.host.env.lock().unwrap().clone();
+        assert!(env["APP_KEY"].starts_with("base64:") && env["APP_KEY"].len() == 51, "{}", env["APP_KEY"]);
+        assert_eq!((env["DB_DATABASE"].as_str(), env["DB_USERNAME"].as_str()), ("app_sona_it", "app_sona_it"));
+        assert_eq!(env["QUEUE_CONNECTION"], "redis");
+        assert_eq!(env["REDIS_PREFIX"], "app_sona_it:");
+        assert!(!env.contains_key("AUTH_KEY"), "niente salt di WordPress");
+    }
+
+    #[tokio::test]
     async fn db_password_is_stored_encrypted_and_written_to_env() {
         let c = ctx(FakeHost::default()).await;
         let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
@@ -1454,13 +1560,13 @@ mod tests {
         let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
         c.host.calls.lock().unwrap().clear();
         set_suspended(&c, site.id, true).await.unwrap();
-        assert_eq!(c.host.calls(), ["sync_caddy sona_it", "sync_php users=sona_it pools="]);
+        assert_eq!(c.host.calls(), ["sync_caddy sona_it", "sync_php users=sona_it pools=", "sync_workers"]);
         assert_eq!(c.store.site(site.id).await.unwrap().status, SiteStatus::Suspended);
         assert!(c.store.caddy_sites().await.unwrap()[0].suspended);
         c.host.calls.lock().unwrap().clear();
         set_suspended(&c, site.id, false).await.unwrap();
         // Prima il pool, poi la route: alla riattivazione PHP deve già rispondere.
-        assert_eq!(c.host.calls(), ["sync_php users=sona_it pools=sona_it", "sync_caddy sona_it"]);
+        assert_eq!(c.host.calls(), ["sync_php users=sona_it pools=sona_it", "sync_caddy sona_it", "sync_workers"]);
         assert_eq!(c.store.site(site.id).await.unwrap().status, SiteStatus::Active);
     }
 
@@ -1701,6 +1807,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workers_of_active_sites_reach_the_supervisor() {
+        let c = ctx(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        c.store.add_worker(site.id, "horizon", "php artisan horizon", 1, 256).await.unwrap();
+        let paused = c.store.add_worker(site.id, "coda", "php artisan queue:work --sleep=3", 2, 128).await.unwrap();
+        c.store.set_worker_active(paused, false).await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        sync_workers(&c).await.unwrap();
+        assert_eq!(c.host.calls(), ["sync_workers sona_it/horizon:artisan horizon x1 256MB"]);
+        set_suspended(&c, site.id, true).await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        sync_workers(&c).await.unwrap();
+        assert_eq!(c.host.calls(), ["sync_workers"], "un sito sospeso non ha worker");
+    }
+
+    #[tokio::test]
+    async fn deploy_runs_the_steps_then_restarts_workers() {
+        let c = ctx(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        assert!(deploy_site(&c, site.id, &mut JobLog::default()).await.unwrap_err().downcast_ref::<Invalid>().is_some(), "senza repository");
+        c.store.set_deploy_config(site.id, "git@github.com:a/b.git", "main").await.unwrap();
+        c.store.add_worker(site.id, "horizon", "php artisan horizon", 1, 256).await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        let mut log = JobLog::default();
+        deploy_site(&c, site.id, &mut log).await.unwrap();
+        assert_eq!(c.host.calls()[..2], ["deploy sona_it git@github.com:a/b.git main", "worker_restart sona_it "]);
+        assert!(log.lines.iter().any(|l| l.contains("deploy di main completato")));
+    }
+
+    #[tokio::test]
     async fn delete_site_removes_route_and_pool_before_files_and_database() {
         let c = ctx(FakeHost::default()).await;
         let keep = create_site(&c, &req("upupa.it"), &mut JobLog::default()).await.unwrap();
@@ -1716,6 +1852,7 @@ mod tests {
                 "drop_database sona_it",
                 "sync_php users=upupa_it pools=upupa_it",
                 "sync_redis upupa_it",
+                "sync_workers",
             ]
         );
         assert!(c.store.site(site.id).await.is_err());
