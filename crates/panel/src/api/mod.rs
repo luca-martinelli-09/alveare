@@ -42,6 +42,9 @@ pub struct App<H> {
     pub ram_mb: u64,
     /// Soglia di spazio per sito (MB) del monitoraggio.
     pub disk_alert_mb: u64,
+    /// Email del pannello (inviti, reset) e URL pubblico per i link.
+    pub mailer: crate::mailer::Mailer,
+    pub panel_url: Option<String>,
 }
 
 impl<H> Clone for App<H> {
@@ -60,6 +63,8 @@ impl<H> Clone for App<H> {
             reserved_hosts: self.reserved_hosts.clone(),
             ram_mb: self.ram_mb,
             disk_alert_mb: self.disk_alert_mb,
+            mailer: self.mailer.clone(),
+            panel_url: self.panel_url.clone(),
         }
     }
 }
@@ -67,7 +72,7 @@ impl<H> Clone for App<H> {
 impl<H: Host> App<H> {
     pub fn new(ctx: Ctx<H>, auth: Auth, templates: PathBuf, secure_cookie: bool) -> Self {
         let jobs = Jobs::new(ctx.store.pool().clone());
-        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None, recovery: vec![], reserved_hosts: vec![], ram_mb: crate::budget::ram_mb(), disk_alert_mb: 10 * 1024 }
+        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None, recovery: vec![], reserved_hosts: vec![], ram_mb: crate::budget::ram_mb(), disk_alert_mb: 10 * 1024, mailer: crate::mailer::Mailer::None, panel_url: None }
     }
 
     pub fn with_recovery(self, recovery: Vec<(String, String)>) -> Self {
@@ -77,6 +82,15 @@ impl<H: Host> App<H> {
     pub fn recovery_kit(&self) -> String {
         let pairs: Vec<(&str, &str)> = self.recovery.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         crate::backup::recovery_kit(&pairs)
+    }
+
+    pub fn with_mailer(self, mailer: crate::mailer::Mailer, panel_url: Option<String>) -> Self {
+        Self { mailer, panel_url, ..self }
+    }
+
+    /// Inviti e reset via email: servono SMTP e l'URL pubblico del pannello.
+    fn email_links(&self) -> Option<&str> {
+        self.panel_url.as_deref().filter(|_| self.mailer.enabled())
     }
 
     pub fn with_disk_alert(self, disk_alert_mb: u64) -> Self {
@@ -243,6 +257,11 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/auth/setup/totp", post(confirm_totp::<H>))
         .route("/api/auth/totp", post(verify_totp::<H>))
         .route("/api/auth/logout", post(logout::<H>))
+        .route("/api/auth/options", get(auth_options::<H>))
+        .route("/api/auth/invite", post(accept_invite::<H>))
+        .route("/api/auth/reset", post(request_reset::<H>))
+        .route("/api/auth/reset/confirm", post(confirm_reset::<H>))
+        .route("/api/users/{id}/invite", post(resend_invite::<H>))
         .route("/api/me", get(me::<H>))
         .route("/api/me/tokens", post(create_token::<H>))
         .route("/api/users", get(list_users::<H>).post(create_user::<H>))
@@ -377,6 +396,9 @@ struct NewUserReq {
     name: String,
     #[serde(default)]
     is_admin: bool,
+    /// Invito via email invece della password temporanea.
+    #[serde(default)]
+    invite: bool,
 }
 
 async fn create_user<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap, Json(r): Json<NewUserReq>) -> ApiResult<Response> {
@@ -386,12 +408,96 @@ async fn create_user<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap
     if !email.contains('@') || email.len() > 254 || r.name.trim().is_empty() {
         return Err(ApiError::bad_request("email o nome non validi"));
     }
-    let (id, temp) = app.auth.create_user(email, r.name.trim(), r.is_admin).await.map_err(|e| match e {
+    let dup = |e: AuthError| match e {
         AuthError::Db(sqlx::Error::Database(d)) if d.is_unique_violation() => ApiError::new(StatusCode::CONFLICT, "email già registrata"),
         e => e.into(),
-    })?;
+    };
+    if r.invite {
+        let base = app.email_links().ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "inviti via email non configurati (SMTP del pannello e ALVEARE_PANEL_HOST)"))?;
+        let (id, token) = app.auth.create_invited_user(email, r.name.trim(), r.is_admin, now()).await.map_err(dup)?;
+        if let Err(e) = send_invite(&app, base, email, &token).await {
+            app.auth.delete_user(id).await?;
+            return Err(e);
+        }
+        app.auth.audit(Some(admin.id), "user.invite", None, email).await?;
+        return Ok((StatusCode::CREATED, Json(json!({ "id": id, "invited": true }))).into_response());
+    }
+    let (id, temp) = app.auth.create_user(email, r.name.trim(), r.is_admin).await.map_err(dup)?;
     app.auth.audit(Some(admin.id), "user.create", None, email).await?;
     Ok((StatusCode::CREATED, Json(json!({ "id": id, "temporary_password": temp }))).into_response())
+}
+
+async fn send_invite<H>(app: &App<H>, base: &str, email: &str, token: &str) -> ApiResult<()> {
+    let body = format!(
+        "Ciao,\n\nsei stato invitato nel pannello Alveare. Apri questo link entro 72 ore per scegliere la password e attivare il secondo fattore (TOTP):\n\n{base}/invito#{token}\n\nSe non aspettavi questo invito, ignora l'email.\n"
+    );
+    app.mailer.send(email, "Invito al pannello Alveare", &body).await.map_err(|e| {
+        tracing::error!("invio dell'invito a {email}: {e:#}");
+        ApiError::new(StatusCode::BAD_GATEWAY, "invio dell'email non riuscito")
+    })
+}
+
+async fn resend_invite<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let admin = caller(&app, &m, &h).await?;
+    require_admin(&admin)?;
+    let base = app.email_links().ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "inviti via email non configurati"))?.to_string();
+    let (email, token) = app.auth.reinvite(id, now()).await.map_err(|e| match e {
+        AuthError::WrongStage => ApiError::new(StatusCode::CONFLICT, "l'utente ha già accettato l'invito"),
+        e => e.into(),
+    })?;
+    send_invite(&app, &base, &email, &token).await?;
+    app.auth.audit(Some(admin.id), "user.reinvite", None, &email).await?;
+    Ok(Json(json!({})).into_response())
+}
+
+#[derive(Deserialize)]
+struct TokenOnly {
+    token: String,
+}
+
+/// Link d'invito: sessione di primo accesso, poi i soliti passi (password e TOTP).
+async fn accept_invite<H: Host>(State(app): State<App<H>>, h: HeaderMap, Json(r): Json<TokenOnly>) -> ApiResult<Response> {
+    let ua = h.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let token = app.auth.accept_invite(&r.token, &client_ip(&h), ua, now()).await.map_err(|_| ApiError::new(StatusCode::GONE, "invito non valido o scaduto"))?;
+    Ok(([(header::SET_COOKIE, session_cookie(&token, app.secure_cookie))], Json(json!({ "stage": Stage::Setup }))).into_response())
+}
+
+#[derive(Deserialize)]
+struct ResetReq {
+    email: String,
+}
+
+/// Risponde sempre allo stesso modo: non dice se l'email esiste.
+async fn request_reset<H: Host>(State(app): State<App<H>>, Json(r): Json<ResetReq>) -> ApiResult<Response> {
+    let base = app.email_links().ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "reset via email non configurato: chiedi a un admin"))?.to_string();
+    if let Some((email, token)) = app.auth.reset_link(&r.email, now()).await? {
+        let body = format!(
+            "Ciao,\n\nper scegliere una nuova password del pannello Alveare apri questo link entro un'ora. Ti servirà anche il codice dell'app TOTP.\n\n{base}/reset#{token}\n\nSe non hai chiesto tu il reset, ignora l'email: la password resta quella di prima.\n"
+        );
+        if let Err(e) = app.mailer.send(&email, "Nuova password del pannello Alveare", &body).await {
+            tracing::error!("invio del reset a {email}: {e:#}");
+        }
+        app.auth.audit(None, "user.reset_requested", None, &email).await?;
+    }
+    Ok(Json(json!({ "sent": true })).into_response())
+}
+
+#[derive(Deserialize)]
+struct ResetConfirm {
+    token: String,
+    password: String,
+    #[serde(default)]
+    code: String,
+}
+
+async fn confirm_reset<H: Host>(State(app): State<App<H>>, h: HeaderMap, Json(r): Json<ResetConfirm>) -> ApiResult<Response> {
+    let ua = h.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let (token, stage) = app.auth.reset_password(&r.token, &r.password, &r.code, &client_ip(&h), ua, now()).await?;
+    Ok(([(header::SET_COOKIE, session_cookie(&token, app.secure_cookie))], Json(json!({ "stage": stage }))).into_response())
+}
+
+async fn auth_options<H: Host>(State(app): State<App<H>>) -> ApiResult<Response> {
+    Ok(Json(json!({ "email": app.email_links().is_some() })).into_response())
 }
 
 #[derive(Deserialize)]
@@ -525,7 +631,8 @@ async fn get_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Me
     let domains: Vec<_> = app.ctx.store.domains(id).await?.into_iter().map(|(d, k)| json!({ "hostname": d.as_str(), "kind": k })).collect();
     let can_manage = app.auth.can(&user, id, Need::Manage).await?;
     let staging = if can_manage { sites::staging_json(flows::staging_password(&app.ctx, id).await?) } else { serde_json::Value::Null };
-    Ok(Json(json!({ "site": site, "domains": domains, "can_manage": can_manage, "staging": staging })).into_response())
+    let wp_admin_pending = user.is_admin && app.ctx.store.setting(&format!("wp_admin:{id}")).await?.is_some();
+    Ok(Json(json!({ "site": site, "domains": domains, "can_manage": can_manage, "staging": staging, "wp_admin_pending": wp_admin_pending })).into_response())
 }
 
 async fn delete_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {

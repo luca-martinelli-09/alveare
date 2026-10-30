@@ -17,6 +17,32 @@ use crate::secrets::{random_password, SecretKey};
 use crate::store::{NewSite, Override, OverrideKind, Site, SiteKind, SiteStatus, Store};
 use crate::template::Vars;
 
+/// Per quanto la password admin di un sito nuovo resta leggibile (una volta) nel pannello.
+pub const WP_ADMIN_SECS: i64 = 24 * 3600;
+
+/// (utente, password) dell'admin WordPress di un sito appena creato; dopo la lettura sparisce.
+pub async fn take_wp_admin<H>(c: &Ctx<H>, site_id: i64, now: i64) -> Result<Option<(String, String)>> {
+    let key = format!("wp_admin:{site_id}");
+    let Some(raw) = c.store.setting(&key).await? else { return Ok(None) };
+    c.store.delete_setting(&key).await?;
+    let v: serde_json::Value = serde_json::from_str(&raw)?;
+    if v["expires"].as_i64().unwrap_or(0) <= now {
+        return Ok(None);
+    }
+    let enc = hex::decode(v["password_enc"].as_str().unwrap_or_default())?;
+    Ok(Some((v["user"].as_str().unwrap_or_default().to_string(), c.key.decrypt(&enc)?)))
+}
+
+/// Toglie la password admin non letta solo se è scaduta.
+pub async fn expire_wp_admin<H>(c: &Ctx<H>, site_id: i64, now: i64) -> Result<()> {
+    let key = format!("wp_admin:{site_id}");
+    let expired = c.store.setting(&key).await?.and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok()).is_some_and(|v| v["expires"].as_i64().unwrap_or(0) <= now);
+    if expired {
+        c.store.delete_setting(&key).await?;
+    }
+    Ok(())
+}
+
 const WP_SALT_KEYS: [&str; 8] =
     ["AUTH_KEY", "SECURE_AUTH_KEY", "LOGGED_IN_KEY", "NONCE_KEY", "AUTH_SALT", "SECURE_AUTH_SALT", "LOGGED_IN_SALT", "NONCE_SALT"];
 
@@ -496,8 +522,10 @@ async fn create_steps<H: Host>(c: &Ctx<H>, req: &CreateSite, site: &Site, undo: 
         c.host.wp(slug, args).await.with_context(|| format!("wp {}", args.first().map_or("", String::as_str)))?;
     }
     if !commands.is_empty() {
-        // shortcut: la password admin finisce nel log del job, visibile solo agli admin; da sostituire con l'invito via email (fase 3).
-        log.push(format!("WordPress installato: utente {}, password {}", vars["ADMIN_USER"], vars["ADMIN_PASSWORD"]));
+        // La password non va nel log: resta cifrata e si mostra una volta, entro 24 ore.
+        let secret = serde_json::json!({ "user": vars["ADMIN_USER"], "password_enc": hex::encode(c.key.encrypt(&vars["ADMIN_PASSWORD"])), "expires": chrono::Utc::now().timestamp() + WP_ADMIN_SECS });
+        c.store.set_setting(&format!("wp_admin:{}", site.id), &secret.to_string()).await?;
+        log.push(format!("WordPress installato: utente {}; la password si legge una volta nella Panoramica del sito (24 ore)", vars["ADMIN_USER"]));
     }
 
     c.store.set_status(site.id, SiteStatus::Active).await?;
@@ -1277,6 +1305,23 @@ mod tests {
         assert_eq!(manifest.sql_domain, "template.local");
         assert_eq!(manifest.table_prefix.as_deref(), Some("pl_"));
         assert!(manifest.post_create.is_empty());
+    }
+
+    #[tokio::test]
+    async fn wordpress_admin_password_is_readable_once_and_never_logged() {
+        let c = ctx(FakeHost::default()).await;
+        let mut log = JobLog::default();
+        let site = create_site(&c, &req("sona.it"), &mut log).await.unwrap();
+        let (user, password) = take_wp_admin(&c, site.id, chrono::Utc::now().timestamp()).await.unwrap().unwrap();
+        assert_eq!((user.as_str(), password.len()), ("gestore", 32));
+        assert!(!log.lines.iter().any(|l| l.contains(&password)), "la password non va nel log");
+        assert!(take_wp_admin(&c, site.id, chrono::Utc::now().timestamp()).await.unwrap().is_none(), "una volta sola");
+        let other = create_site(&c, &req("upupa.it"), &mut JobLog::default()).await.unwrap();
+        let now = chrono::Utc::now().timestamp();
+        expire_wp_admin(&c, other.id, now).await.unwrap();
+        assert!(c.store.setting(&format!("wp_admin:{}", other.id)).await.unwrap().is_some(), "non ancora scaduta: resta");
+        expire_wp_admin(&c, other.id, now + WP_ADMIN_SECS + 1).await.unwrap();
+        assert!(c.store.setting(&format!("wp_admin:{}", other.id)).await.unwrap().is_none());
     }
 
     #[tokio::test]

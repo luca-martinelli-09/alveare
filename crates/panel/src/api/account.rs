@@ -68,4 +68,31 @@ mod tests {
         let (s, _, _) = call(&t, req("GET", "/api/me/tokens", Some(&alice), None)).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED, "il token revocato non vale più");
     }
+
+    #[tokio::test]
+    async fn invite_by_email_then_first_access_from_the_link() {
+        let mut t = setup().await;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let body = serde_json::json!({"email": "nuovo@example.org", "name": "Nuovo", "invite": true});
+        let (s, _, _) = call(&t, req("POST", "/api/users", Some(&admin), Some(body.clone()))).await;
+        assert_eq!(s, StatusCode::CONFLICT, "senza SMTP niente inviti");
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        t.app = t.app.clone().with_mailer(crate::mailer::Mailer::Memory(sent.clone()), Some("https://pannello.example.org".into()));
+        let (_, opts, _) = call(&t, req("GET", "/api/auth/options", None, None)).await;
+        assert_eq!(opts["email"], true);
+        let (s, out, _) = call(&t, req("POST", "/api/users", Some(&admin), Some(body))).await;
+        assert_eq!(s, StatusCode::CREATED, "{out}");
+        assert!(out.get("temporary_password").is_none());
+        let (to, _, text) = sent.lock().unwrap()[0].clone();
+        assert_eq!(to, "nuovo@example.org");
+        let token = text.split("/invito#").nth(1).unwrap().split_whitespace().next().unwrap().to_string();
+        let (s, body, h) = call(&t, req("POST", "/api/auth/invite", None, Some(serde_json::json!({"token": token})))).await;
+        assert_eq!((s, body["stage"].as_str()), (StatusCode::OK, Some("setup")));
+        assert!(h["set-cookie"].to_str().unwrap().starts_with("alveare_session="));
+        let (s, _, _) = call(&t, req("POST", "/api/auth/invite", None, Some(serde_json::json!({"token": token})))).await;
+        assert_eq!(s, StatusCode::GONE, "monouso");
+        let (s, out, _) = call(&t, req("POST", "/api/auth/reset", None, Some(serde_json::json!({"email": "nessuno@example.org"})))).await;
+        assert_eq!((s, out["sent"].as_bool()), (StatusCode::OK, Some(true)), "stessa risposta anche se l'email non esiste");
+        assert_eq!(sent.lock().unwrap().len(), 1);
+    }
 }

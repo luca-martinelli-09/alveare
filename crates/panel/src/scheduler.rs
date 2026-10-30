@@ -327,6 +327,8 @@ async fn cleanup<H: Host>(app: &App<H>) -> anyhow::Result<()> {
     app.ctx.store.expire_exports(now - week).await?;
     removed += purge_stale_uploads(&app.paths.imports.join("tmp/uploads"), 86400)?;
     for site in app.ctx.store.sites().await? {
+        // Password admin WordPress mai lette: scadute, si tolgono.
+        flows::expire_wp_admin(&app.ctx, site.id, now).await?;
         let logs = app.paths.logs.join(site.slug.as_str());
         if logs.exists() {
             removed += crate::logs::purge_old_logs(&logs, site.log_retention_days, std::time::SystemTime::now())?;

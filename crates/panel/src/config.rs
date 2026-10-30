@@ -30,6 +30,8 @@ pub struct Config {
     pub disk_alert_mb: u64,
     /// Account Cloudflare per tunnel e regole (`CLOUDFLARE_<ETICHETTA>_*`).
     pub cloudflare: Vec<crate::cloudflare::Account>,
+    /// SMTP del pannello per inviti e reset (PANEL_SMTP_*); di default le credenziali SES dei siti.
+    pub smtp: Option<crate::mailer::Smtp>,
 }
 
 fn url_encode(s: &str) -> String {
@@ -74,6 +76,18 @@ impl Config {
             Some(v) => v.parse().context("ALVEARE_DISK_ALERT_MB: un numero di MB")?,
             None => 10 * 1024,
         };
+        // Le credenziali SES dei siti (SITE_ENV_SMTP_*) valgono anche per il pannello, salvo override.
+        let smtp_get = |k: &str| get(&format!("PANEL_SMTP_{k}")).or_else(|| get(&format!("SITE_ENV_SMTP_{k}")));
+        let smtp = match (smtp_get("HOST"), smtp_get("USER"), smtp_get("PASSWORD"), get("PANEL_SMTP_FROM")) {
+            (Some(host), Some(user), Some(password), Some(from)) => Some(crate::mailer::Smtp {
+                host,
+                port: smtp_get("PORT").map(|p| p.parse()).transpose().context("PANEL_SMTP_PORT non valida")?.unwrap_or(587),
+                user,
+                password,
+                from,
+            }),
+            _ => None,
+        };
         let secure_cookie = match get("ALVEARE_INSECURE_COOKIE").as_deref() {
             None | Some("0") | Some("false") => true,
             Some("1") | Some("true") => false,
@@ -96,6 +110,7 @@ impl Config {
             telegram,
             disk_alert_mb,
             cloudflare: crate::cloudflare::accounts_from(&vars)?,
+            smtp,
             site_env: vars.iter().filter_map(|(k, v)| Some((k.strip_prefix("SITE_ENV_")?.to_string(), v.clone()))).collect(),
         })
     }
@@ -147,6 +162,16 @@ mod tests {
         assert!(Config::from_vars(vars(&[("TELEGRAM_BOT_TOKEN", "123:abc")])).is_err());
         assert_eq!(Config::from_vars(vars(&[])).unwrap().disk_alert_mb, 10240);
         assert!(Config::from_vars(vars(&[("ALVEARE_DISK_ALERT_MB", "tanti")])).is_err());
+    }
+
+    #[test]
+    fn panel_smtp_reuses_site_credentials_and_needs_a_sender() {
+        let ses = [("SITE_ENV_SMTP_HOST", "email-smtp.eu-west-1.amazonaws.com"), ("SITE_ENV_SMTP_USER", "u"), ("SITE_ENV_SMTP_PASSWORD", "p")];
+        assert!(Config::from_vars(vars(&ses)).unwrap().smtp.is_none(), "senza mittente niente email");
+        let mut with_from = ses.to_vec();
+        with_from.push(("PANEL_SMTP_FROM", "Alveare <pannello@esempio.it>"));
+        let smtp = Config::from_vars(vars(&with_from)).unwrap().smtp.unwrap();
+        assert_eq!((smtp.host.as_str(), smtp.port, smtp.user.as_str()), ("email-smtp.eu-west-1.amazonaws.com", 587, "u"));
     }
 
     #[test]

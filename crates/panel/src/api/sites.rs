@@ -9,6 +9,7 @@ pub(super) fn routes<H: Host>() -> Router<App<H>> {
         .route("/api/sites/{id}", patch(update_site::<H>))
         .route("/api/server", get(server::<H>))
         .route("/api/sites/{id}/monitor", get(monitor::<H>))
+        .route("/api/sites/{id}/wp-admin", post(wp_admin::<H>))
         .route("/api/sites/{id}/clone", post(clone_site::<H>))
         .route("/api/sites/{id}/export", post(export_site::<H>))
         .route("/api/sites/{id}/template", post(save_template::<H>))
@@ -154,6 +155,15 @@ async fn save_template<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, 
         })
         .await?;
     Ok((StatusCode::ACCEPTED, Json(json!({ "job": job }))).into_response())
+}
+
+/// Password admin di un WordPress appena creato: una lettura sola, solo admin, nell'audit.
+async fn wp_admin<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_admin(&user)?;
+    let (wp_user, password) = flows::take_wp_admin(&app.ctx, id, now()).await?.ok_or_else(|| ApiError::new(StatusCode::GONE, "password già letta o scaduta: usa \"Password dimenticata\" di WordPress"))?;
+    app.auth.audit(Some(user.id), "wordpress.admin_password", Some(id), "letta").await?;
+    Ok(Json(json!({ "user": wp_user, "password": password })).into_response())
 }
 
 /// Ultimi valori del monitoraggio: raggiungibilità, spazio, traffico dell'ultima ora.

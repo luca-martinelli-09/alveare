@@ -13,6 +13,7 @@ mod host;
 mod importer;
 mod jobs;
 mod logs;
+mod mailer;
 mod monitor;
 mod scheduler;
 mod secrets;
@@ -92,6 +93,10 @@ async fn main() -> Result<()> {
     let app = App::new(ctx, auth, paths.templates.clone(), cfg.secure_cookie)
         .with_adminer(cfg.adminer_host.clone())
         .with_disk_alert(cfg.disk_alert_mb)
+        .with_mailer(
+            cfg.smtp.clone().map_or(mailer::Mailer::None, mailer::Mailer::Smtp),
+            cfg.panel_host.as_ref().map(|h| format!("https://{}", h.as_str())),
+        )
         .with_reserved_hosts(cfg.panel_host.iter().chain(&cfg.adminer_host).cloned().collect())
         .with_recovery(cfg.recovery.clone());
     remind_recovery_kit(&app).await?;

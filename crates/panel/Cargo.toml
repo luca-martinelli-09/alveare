@@ -20,6 +20,7 @@ croner = "4.0.2"
 flate2 = "1.1.10"
 futures-util = "0.3.34"
 hex = "0.4.3"
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "rustls-platform-verifier", "ring"] }
 libc = "0.2.191"
 rand = "0.10.3"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }

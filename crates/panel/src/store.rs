@@ -768,6 +768,11 @@ impl Store {
         Ok(sqlx::query_scalar("SELECT value FROM settings WHERE key = ?").bind(key).fetch_optional(&self.pool).await?)
     }
 
+    pub async fn delete_setting(&self, key: &str) -> Result<()> {
+        sqlx::query("DELETE FROM settings WHERE key = ?").bind(key).execute(&self.pool).await?;
+        Ok(())
+    }
+
     pub async fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
             .bind(key)
