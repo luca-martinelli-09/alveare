@@ -13,8 +13,8 @@
 	const tone: Record<Level, string> = {
 		ok: 'bg-success-soft text-success-text',
 		warn: 'bg-warning-soft text-warning-text',
-		down: 'bg-destructive-soft text-destructive',
-		busy: 'bg-muted text-info',
+		down: 'bg-destructive-soft text-destructive-text',
+		busy: 'bg-muted text-info-text',
 		off: 'bg-muted text-muted-foreground',
 		unknown: 'bg-muted text-muted-foreground'
 	};

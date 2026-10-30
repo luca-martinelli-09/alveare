@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-30T11:13:01+00:00",
+  "generatedAt": "2026-10-30T11:55:36+00:00",
   "title": "Design System: Alveare",
   "extensions": {
     "colorMeta": {
@@ -8,224 +8,320 @@
         "role": "neutral",
         "displayName": "Bianco Pieno",
         "canonical": "oklch(1 0 0)",
-        "dark": "oklch(0.16 0.005 275)",
+        "dark": "oklch(0.17 0.006 56)",
         "tonalRamp": [
-          "oklch(0.15 0.005 275)",
-          "oklch(0.27 0.005 275)",
-          "oklch(0.39 0.005 275)",
-          "oklch(0.51 0.005 275)",
-          "oklch(0.63 0.005 275)",
-          "oklch(0.75 0.005 275)",
-          "oklch(0.85 0.005 275)",
-          "oklch(0.95 0.005 275)"
+          "oklch(0.15 0.006 56)",
+          "oklch(0.27 0.006 56)",
+          "oklch(0.39 0.006 56)",
+          "oklch(0.51 0.006 56)",
+          "oklch(0.63 0.006 56)",
+          "oklch(0.75 0.006 56)",
+          "oklch(0.85 0.006 56)",
+          "oklch(0.95 0.006 56)"
         ]
       },
       "foreground": {
         "role": "neutral",
-        "displayName": "Inchiostro Grafite",
-        "canonical": "oklch(0.21 0.006 275)",
-        "dark": "oklch(0.96 0.002 275)",
+        "displayName": "Inchiostro Pietra",
+        "canonical": "oklch(0.216 0.006 56)",
+        "dark": "oklch(0.96 0.006 80)",
         "tonalRamp": [
-          "oklch(0.15 0.006 275)",
-          "oklch(0.27 0.006 275)",
-          "oklch(0.39 0.006 275)",
-          "oklch(0.51 0.006 275)",
-          "oklch(0.63 0.006 275)",
-          "oklch(0.75 0.006 275)",
-          "oklch(0.85 0.006 275)",
-          "oklch(0.95 0.006 275)"
+          "oklch(0.15 0.006 56)",
+          "oklch(0.27 0.006 56)",
+          "oklch(0.39 0.006 56)",
+          "oklch(0.51 0.006 56)",
+          "oklch(0.63 0.006 56)",
+          "oklch(0.75 0.006 56)",
+          "oklch(0.85 0.006 56)",
+          "oklch(0.95 0.006 56)"
         ]
       },
       "primary": {
         "role": "primary",
-        "displayName": "Inchiostro Grafite",
-        "canonical": "oklch(0.21 0.006 275)",
-        "dark": "oklch(0.96 0.002 275)",
+        "displayName": "Miele Ambra",
+        "canonical": "oklch(0.77 0.16 70)",
+        "dark": "oklch(0.8 0.15 75)",
         "tonalRamp": [
-          "oklch(0.15 0.006 275)",
-          "oklch(0.27 0.006 275)",
-          "oklch(0.39 0.006 275)",
-          "oklch(0.51 0.006 275)",
-          "oklch(0.63 0.006 275)",
-          "oklch(0.75 0.006 275)",
-          "oklch(0.85 0.006 275)",
-          "oklch(0.95 0.006 275)"
+          "oklch(0.15 0.16 70)",
+          "oklch(0.27 0.16 70)",
+          "oklch(0.39 0.16 70)",
+          "oklch(0.51 0.16 70)",
+          "oklch(0.63 0.16 70)",
+          "oklch(0.75 0.16 70)",
+          "oklch(0.85 0.16 70)",
+          "oklch(0.95 0.16 70)"
         ]
       },
       "primary-foreground": {
         "role": "primary",
-        "displayName": "Bianco su Grafite",
-        "canonical": "oklch(0.985 0 0)",
-        "dark": "oklch(0.2 0.006 275)",
+        "displayName": "Inchiostro Pietra",
+        "canonical": "oklch(0.216 0.006 56)",
+        "dark": "oklch(0.2 0.006 56)",
         "tonalRamp": [
-          "oklch(0.15 0.006 275)",
-          "oklch(0.27 0.006 275)",
-          "oklch(0.39 0.006 275)",
-          "oklch(0.51 0.006 275)",
-          "oklch(0.63 0.006 275)",
-          "oklch(0.75 0.006 275)",
-          "oklch(0.85 0.006 275)",
-          "oklch(0.95 0.006 275)"
+          "oklch(0.15 0.006 56)",
+          "oklch(0.27 0.006 56)",
+          "oklch(0.39 0.006 56)",
+          "oklch(0.51 0.006 56)",
+          "oklch(0.63 0.006 56)",
+          "oklch(0.75 0.006 56)",
+          "oklch(0.85 0.006 56)",
+          "oklch(0.95 0.006 56)"
         ]
       },
       "secondary": {
         "role": "neutral",
-        "displayName": "Nebbia Fredda",
-        "canonical": "oklch(0.966 0.002 275)",
-        "dark": "oklch(0.24 0.006 275)",
+        "displayName": "Crema",
+        "canonical": "oklch(0.97 0.025 85)",
+        "dark": "oklch(0.26 0.012 60)",
         "tonalRamp": [
-          "oklch(0.15 0.004 275)",
-          "oklch(0.27 0.004 275)",
-          "oklch(0.39 0.004 275)",
-          "oklch(0.51 0.004 275)",
-          "oklch(0.63 0.004 275)",
-          "oklch(0.75 0.004 275)",
-          "oklch(0.85 0.004 275)",
-          "oklch(0.95 0.004 275)"
+          "oklch(0.15 0.025 85)",
+          "oklch(0.27 0.025 85)",
+          "oklch(0.39 0.025 85)",
+          "oklch(0.51 0.025 85)",
+          "oklch(0.63 0.025 85)",
+          "oklch(0.75 0.025 85)",
+          "oklch(0.85 0.025 85)",
+          "oklch(0.95 0.025 85)"
         ]
       },
       "muted": {
         "role": "neutral",
-        "displayName": "Nebbia Fredda",
-        "canonical": "oklch(0.972 0.002 275)",
-        "dark": "oklch(0.22 0.005 275)",
+        "displayName": "Nebbia Calda",
+        "canonical": "oklch(0.977 0.008 80)",
+        "dark": "oklch(0.23 0.008 56)",
         "tonalRamp": [
-          "oklch(0.15 0.004 275)",
-          "oklch(0.27 0.004 275)",
-          "oklch(0.39 0.004 275)",
-          "oklch(0.51 0.004 275)",
-          "oklch(0.63 0.004 275)",
-          "oklch(0.75 0.004 275)",
-          "oklch(0.85 0.004 275)",
-          "oklch(0.95 0.004 275)"
+          "oklch(0.15 0.008 80)",
+          "oklch(0.27 0.008 80)",
+          "oklch(0.39 0.008 80)",
+          "oklch(0.51 0.008 80)",
+          "oklch(0.63 0.008 80)",
+          "oklch(0.75 0.008 80)",
+          "oklch(0.85 0.008 80)",
+          "oklch(0.95 0.008 80)"
         ]
       },
       "muted-foreground": {
         "role": "neutral",
-        "displayName": "Grigio Didascalia",
-        "canonical": "oklch(0.5 0.01 275)",
-        "dark": "oklch(0.7 0.01 275)",
+        "displayName": "Grigio Pietra",
+        "canonical": "oklch(0.52 0.014 58)",
+        "dark": "oklch(0.72 0.014 70)",
         "tonalRamp": [
-          "oklch(0.15 0.01 275)",
-          "oklch(0.27 0.01 275)",
-          "oklch(0.39 0.01 275)",
-          "oklch(0.51 0.01 275)",
-          "oklch(0.63 0.01 275)",
-          "oklch(0.75 0.01 275)",
-          "oklch(0.85 0.01 275)",
-          "oklch(0.95 0.01 275)"
+          "oklch(0.15 0.014 58)",
+          "oklch(0.27 0.014 58)",
+          "oklch(0.39 0.014 58)",
+          "oklch(0.51 0.014 58)",
+          "oklch(0.63 0.014 58)",
+          "oklch(0.75 0.014 58)",
+          "oklch(0.85 0.014 58)",
+          "oklch(0.95 0.014 58)"
         ]
       },
       "accent": {
         "role": "neutral",
-        "displayName": "Nebbia Fredda",
-        "canonical": "oklch(0.958 0.003 275)",
-        "dark": "oklch(0.25 0.006 275)",
+        "displayName": "Crema Miele",
+        "canonical": "oklch(0.96 0.035 88)",
+        "dark": "oklch(0.28 0.025 70)",
         "tonalRamp": [
-          "oklch(0.15 0.004 275)",
-          "oklch(0.27 0.004 275)",
-          "oklch(0.39 0.004 275)",
-          "oklch(0.51 0.004 275)",
-          "oklch(0.63 0.004 275)",
-          "oklch(0.75 0.004 275)",
-          "oklch(0.85 0.004 275)",
-          "oklch(0.95 0.004 275)"
+          "oklch(0.15 0.035 88)",
+          "oklch(0.27 0.035 88)",
+          "oklch(0.39 0.035 88)",
+          "oklch(0.51 0.035 88)",
+          "oklch(0.63 0.035 88)",
+          "oklch(0.75 0.035 88)",
+          "oklch(0.85 0.035 88)",
+          "oklch(0.95 0.035 88)"
         ]
       },
       "border": {
         "role": "neutral",
         "displayName": "Filetto",
-        "canonical": "oklch(0.922 0.004 275)",
+        "canonical": "oklch(0.93 0.014 80)",
         "dark": "oklch(1 0 0 / 9%)",
         "tonalRamp": [
-          "oklch(0.15 0.004 275)",
-          "oklch(0.27 0.004 275)",
-          "oklch(0.39 0.004 275)",
-          "oklch(0.51 0.004 275)",
-          "oklch(0.63 0.004 275)",
-          "oklch(0.75 0.004 275)",
-          "oklch(0.85 0.004 275)",
-          "oklch(0.95 0.004 275)"
+          "oklch(0.15 0.014 80)",
+          "oklch(0.27 0.014 80)",
+          "oklch(0.39 0.014 80)",
+          "oklch(0.51 0.014 80)",
+          "oklch(0.63 0.014 80)",
+          "oklch(0.75 0.014 80)",
+          "oklch(0.85 0.014 80)",
+          "oklch(0.95 0.014 80)"
         ]
       },
       "input": {
         "role": "neutral",
         "displayName": "Filetto Campo",
-        "canonical": "oklch(0.89 0.005 275)",
+        "canonical": "oklch(0.89 0.018 78)",
         "dark": "oklch(1 0 0 / 14%)",
         "tonalRamp": [
-          "oklch(0.15 0.005 275)",
-          "oklch(0.27 0.005 275)",
-          "oklch(0.39 0.005 275)",
-          "oklch(0.51 0.005 275)",
-          "oklch(0.63 0.005 275)",
-          "oklch(0.75 0.005 275)",
-          "oklch(0.85 0.005 275)",
-          "oklch(0.95 0.005 275)"
+          "oklch(0.15 0.018 78)",
+          "oklch(0.27 0.018 78)",
+          "oklch(0.39 0.018 78)",
+          "oklch(0.51 0.018 78)",
+          "oklch(0.63 0.018 78)",
+          "oklch(0.75 0.018 78)",
+          "oklch(0.85 0.018 78)",
+          "oklch(0.95 0.018 78)"
         ]
       },
       "ring": {
-        "role": "neutral",
-        "displayName": "Blu Fuoco",
-        "canonical": "oklch(0.6 0.13 255)",
-        "dark": "oklch(0.68 0.13 255)",
+        "role": "primary",
+        "displayName": "Miele Ambra",
+        "canonical": "oklch(0.77 0.16 70)",
+        "dark": "oklch(0.8 0.15 75)",
         "tonalRamp": [
-          "oklch(0.15 0.13 255)",
-          "oklch(0.27 0.13 255)",
-          "oklch(0.39 0.13 255)",
-          "oklch(0.51 0.13 255)",
-          "oklch(0.63 0.13 255)",
-          "oklch(0.75 0.13 255)",
-          "oklch(0.85 0.13 255)",
-          "oklch(0.95 0.13 255)"
+          "oklch(0.15 0.16 70)",
+          "oklch(0.27 0.16 70)",
+          "oklch(0.39 0.16 70)",
+          "oklch(0.51 0.16 70)",
+          "oklch(0.63 0.16 70)",
+          "oklch(0.75 0.16 70)",
+          "oklch(0.85 0.16 70)",
+          "oklch(0.95 0.16 70)"
         ]
       },
       "sidebar": {
         "role": "neutral",
-        "displayName": "Grigio Banco",
-        "canonical": "oklch(0.981 0.002 275)",
-        "dark": "oklch(0.145 0.005 275)",
+        "displayName": "Cera",
+        "canonical": "oklch(0.988 0.012 85)",
+        "dark": "oklch(0.15 0.006 56)",
         "tonalRamp": [
-          "oklch(0.15 0.004 275)",
-          "oklch(0.27 0.004 275)",
-          "oklch(0.39 0.004 275)",
-          "oklch(0.51 0.004 275)",
-          "oklch(0.63 0.004 275)",
-          "oklch(0.75 0.004 275)",
-          "oklch(0.85 0.004 275)",
-          "oklch(0.95 0.004 275)"
+          "oklch(0.15 0.012 85)",
+          "oklch(0.27 0.012 85)",
+          "oklch(0.39 0.012 85)",
+          "oklch(0.51 0.012 85)",
+          "oklch(0.63 0.012 85)",
+          "oklch(0.75 0.012 85)",
+          "oklch(0.85 0.012 85)",
+          "oklch(0.95 0.012 85)"
         ]
       },
       "sidebar-accent": {
         "role": "neutral",
-        "displayName": "Grigio Selezione",
-        "canonical": "oklch(0.94 0.004 275)",
-        "dark": "oklch(0.23 0.006 275)",
+        "displayName": "Crema Miele",
+        "canonical": "oklch(0.96 0.035 88)",
+        "dark": "oklch(0.25 0.02 70)",
         "tonalRamp": [
-          "oklch(0.15 0.004 275)",
-          "oklch(0.27 0.004 275)",
-          "oklch(0.39 0.004 275)",
-          "oklch(0.51 0.004 275)",
-          "oklch(0.63 0.004 275)",
-          "oklch(0.75 0.004 275)",
-          "oklch(0.85 0.004 275)",
-          "oklch(0.95 0.004 275)"
+          "oklch(0.15 0.035 88)",
+          "oklch(0.27 0.035 88)",
+          "oklch(0.39 0.035 88)",
+          "oklch(0.51 0.035 88)",
+          "oklch(0.63 0.035 88)",
+          "oklch(0.75 0.035 88)",
+          "oklch(0.85 0.035 88)",
+          "oklch(0.95 0.035 88)"
         ]
       },
-      "destructive": {
-        "role": "status",
-        "displayName": "Rosso Giù",
-        "canonical": "oklch(0.57 0.21 25)",
-        "dark": "oklch(0.68 0.19 24)",
+      "honey-1": {
+        "role": "primary",
+        "displayName": "Miele Chiaro",
+        "canonical": "oklch(0.87 0.15 92)",
+        "dark": "oklch(0.87 0.15 92)",
         "tonalRamp": [
-          "oklch(0.15 0.19 25)",
-          "oklch(0.27 0.19 25)",
-          "oklch(0.39 0.19 25)",
-          "oklch(0.51 0.19 25)",
-          "oklch(0.63 0.19 25)",
-          "oklch(0.75 0.19 25)",
-          "oklch(0.85 0.19 25)",
-          "oklch(0.95 0.19 25)"
+          "oklch(0.15 0.15 92)",
+          "oklch(0.27 0.15 92)",
+          "oklch(0.39 0.15 92)",
+          "oklch(0.51 0.15 92)",
+          "oklch(0.63 0.15 92)",
+          "oklch(0.75 0.15 92)",
+          "oklch(0.85 0.15 92)",
+          "oklch(0.95 0.15 92)"
+        ]
+      },
+      "honey-2": {
+        "role": "primary",
+        "displayName": "Miele Ambra",
+        "canonical": "oklch(0.77 0.16 70)",
+        "dark": "oklch(0.77 0.16 70)",
+        "tonalRamp": [
+          "oklch(0.15 0.16 70)",
+          "oklch(0.27 0.16 70)",
+          "oklch(0.39 0.16 70)",
+          "oklch(0.51 0.16 70)",
+          "oklch(0.63 0.16 70)",
+          "oklch(0.75 0.16 70)",
+          "oklch(0.85 0.16 70)",
+          "oklch(0.95 0.16 70)"
+        ]
+      },
+      "honey-3": {
+        "role": "primary",
+        "displayName": "Miele Bruciato",
+        "canonical": "oklch(0.7 0.19 48)",
+        "dark": "oklch(0.7 0.19 48)",
+        "tonalRamp": [
+          "oklch(0.15 0.19 48)",
+          "oklch(0.27 0.19 48)",
+          "oklch(0.39 0.19 48)",
+          "oklch(0.51 0.19 48)",
+          "oklch(0.63 0.19 48)",
+          "oklch(0.75 0.19 48)",
+          "oklch(0.85 0.19 48)",
+          "oklch(0.95 0.19 48)"
+        ]
+      },
+      "honey-soft-1": {
+        "role": "secondary",
+        "displayName": "Polline",
+        "canonical": "oklch(0.92 0.11 95)",
+        "dark": "oklch(0.36 0.07 72)",
+        "tonalRamp": [
+          "oklch(0.15 0.11 95)",
+          "oklch(0.27 0.11 95)",
+          "oklch(0.39 0.11 95)",
+          "oklch(0.51 0.11 95)",
+          "oklch(0.63 0.11 95)",
+          "oklch(0.75 0.11 95)",
+          "oklch(0.85 0.11 95)",
+          "oklch(0.95 0.11 95)"
+        ]
+      },
+      "honey-soft-2": {
+        "role": "secondary",
+        "displayName": "Panna",
+        "canonical": "oklch(0.985 0.025 90)",
+        "dark": "oklch(0.22 0.02 70)",
+        "tonalRamp": [
+          "oklch(0.15 0.025 90)",
+          "oklch(0.27 0.025 90)",
+          "oklch(0.39 0.025 90)",
+          "oklch(0.51 0.025 90)",
+          "oklch(0.63 0.025 90)",
+          "oklch(0.75 0.025 90)",
+          "oklch(0.85 0.025 90)",
+          "oklch(0.95 0.025 90)"
+        ]
+      },
+      "honey-wash": {
+        "role": "secondary",
+        "displayName": "Velatura",
+        "canonical": "oklch(0.97 0.04 88)",
+        "dark": "oklch(0.23 0.035 70)",
+        "tonalRamp": [
+          "oklch(0.15 0.04 88)",
+          "oklch(0.27 0.04 88)",
+          "oklch(0.39 0.04 88)",
+          "oklch(0.51 0.04 88)",
+          "oklch(0.63 0.04 88)",
+          "oklch(0.75 0.04 88)",
+          "oklch(0.85 0.04 88)",
+          "oklch(0.95 0.04 88)"
+        ]
+      },
+      "brand": {
+        "role": "brand",
+        "displayName": "Ambra Cella",
+        "canonical": "oklch(0.79 0.16 72)",
+        "dark": "oklch(0.79 0.16 72)",
+        "tonalRamp": [
+          "oklch(0.15 0.16 72)",
+          "oklch(0.27 0.16 72)",
+          "oklch(0.39 0.16 72)",
+          "oklch(0.51 0.16 72)",
+          "oklch(0.63 0.16 72)",
+          "oklch(0.75 0.16 72)",
+          "oklch(0.85 0.16 72)",
+          "oklch(0.95 0.16 72)"
         ]
       },
       "success": {
@@ -244,20 +340,116 @@
           "oklch(0.95 0.15 152)"
         ]
       },
+      "success-soft": {
+        "role": "status",
+        "displayName": "Verde Online, fondo",
+        "canonical": "oklch(0.96 0.03 155)",
+        "dark": "oklch(0.3 0.06 152)",
+        "tonalRamp": [
+          "oklch(0.15 0.03 155)",
+          "oklch(0.27 0.03 155)",
+          "oklch(0.39 0.03 155)",
+          "oklch(0.51 0.03 155)",
+          "oklch(0.63 0.03 155)",
+          "oklch(0.75 0.03 155)",
+          "oklch(0.85 0.03 155)",
+          "oklch(0.95 0.03 155)"
+        ]
+      },
+      "success-text": {
+        "role": "status",
+        "displayName": "Verde Online, testo",
+        "canonical": "oklch(0.45 0.12 152)",
+        "dark": "oklch(0.82 0.13 152)",
+        "tonalRamp": [
+          "oklch(0.15 0.12 152)",
+          "oklch(0.27 0.12 152)",
+          "oklch(0.39 0.12 152)",
+          "oklch(0.51 0.12 152)",
+          "oklch(0.63 0.12 152)",
+          "oklch(0.75 0.12 152)",
+          "oklch(0.85 0.12 152)",
+          "oklch(0.95 0.12 152)"
+        ]
+      },
       "warning": {
         "role": "status",
-        "displayName": "Ambra Attenzione",
-        "canonical": "oklch(0.72 0.16 70)",
-        "dark": "oklch(0.8 0.15 75)",
+        "displayName": "Arancio Attenzione",
+        "canonical": "oklch(0.65 0.21 42)",
+        "dark": "oklch(0.72 0.18 48)",
         "tonalRamp": [
-          "oklch(0.15 0.15 70)",
-          "oklch(0.27 0.15 70)",
-          "oklch(0.39 0.15 70)",
-          "oklch(0.51 0.15 70)",
-          "oklch(0.63 0.15 70)",
-          "oklch(0.75 0.15 70)",
-          "oklch(0.85 0.15 70)",
-          "oklch(0.95 0.15 70)"
+          "oklch(0.15 0.21 42)",
+          "oklch(0.27 0.21 42)",
+          "oklch(0.39 0.21 42)",
+          "oklch(0.51 0.21 42)",
+          "oklch(0.63 0.21 42)",
+          "oklch(0.75 0.21 42)",
+          "oklch(0.85 0.21 42)",
+          "oklch(0.95 0.21 42)"
+        ]
+      },
+      "warning-soft": {
+        "role": "status",
+        "displayName": "Arancio Attenzione, fondo",
+        "canonical": "oklch(0.95 0.04 65)",
+        "dark": "oklch(0.32 0.07 50)",
+        "tonalRamp": [
+          "oklch(0.15 0.04 65)",
+          "oklch(0.27 0.04 65)",
+          "oklch(0.39 0.04 65)",
+          "oklch(0.51 0.04 65)",
+          "oklch(0.63 0.04 65)",
+          "oklch(0.75 0.04 65)",
+          "oklch(0.85 0.04 65)",
+          "oklch(0.95 0.04 65)"
+        ]
+      },
+      "warning-text": {
+        "role": "status",
+        "displayName": "Arancio Attenzione, testo",
+        "canonical": "oklch(0.47 0.15 40)",
+        "dark": "oklch(0.82 0.13 60)",
+        "tonalRamp": [
+          "oklch(0.15 0.15 40)",
+          "oklch(0.27 0.15 40)",
+          "oklch(0.39 0.15 40)",
+          "oklch(0.51 0.15 40)",
+          "oklch(0.63 0.15 40)",
+          "oklch(0.75 0.15 40)",
+          "oklch(0.85 0.15 40)",
+          "oklch(0.95 0.15 40)"
+        ]
+      },
+      "destructive": {
+        "role": "status",
+        "displayName": "Rosso Giù",
+        "canonical": "oklch(0.57 0.21 25)",
+        "dark": "oklch(0.68 0.19 24)",
+        "tonalRamp": [
+          "oklch(0.15 0.21 25)",
+          "oklch(0.27 0.21 25)",
+          "oklch(0.39 0.21 25)",
+          "oklch(0.51 0.21 25)",
+          "oklch(0.63 0.21 25)",
+          "oklch(0.75 0.21 25)",
+          "oklch(0.85 0.21 25)",
+          "oklch(0.95 0.21 25)"
+        ]
+      },
+      "destructive-soft": {
+        "role": "status",
+        "displayName": "Rosso Giù, fondo",
+        "canonical": "oklch(0.95 0.025 20)",
+        "dark": "oklch(0.3 0.08 22)",
+        "tonalRamp": [
+          "oklch(0.15 0.025 20)",
+          "oklch(0.27 0.025 20)",
+          "oklch(0.39 0.025 20)",
+          "oklch(0.51 0.025 20)",
+          "oklch(0.63 0.025 20)",
+          "oklch(0.75 0.025 20)",
+          "oklch(0.85 0.025 20)",
+          "oklch(0.95 0.025 20)"
         ]
       },
       "info": {
@@ -266,33 +458,39 @@
         "canonical": "oklch(0.58 0.16 255)",
         "dark": "oklch(0.7 0.14 255)",
         "tonalRamp": [
-          "oklch(0.15 0.14 255)",
-          "oklch(0.27 0.14 255)",
-          "oklch(0.39 0.14 255)",
-          "oklch(0.51 0.14 255)",
-          "oklch(0.63 0.14 255)",
-          "oklch(0.75 0.14 255)",
-          "oklch(0.85 0.14 255)",
-          "oklch(0.95 0.14 255)"
-        ]
-      },
-      "brand": {
-        "role": "brand",
-        "displayName": "Ambra Cella",
-        "canonical": "oklch(0.79 0.16 72)",
-        "dark": "oklch(0.79 0.16 72)",
-        "tonalRamp": [
-          "oklch(0.15 0.16 72)",
-          "oklch(0.27 0.16 72)",
-          "oklch(0.39 0.16 72)",
-          "oklch(0.51 0.16 72)",
-          "oklch(0.63 0.16 72)",
-          "oklch(0.75 0.16 72)",
-          "oklch(0.85 0.16 72)",
-          "oklch(0.95 0.16 72)"
+          "oklch(0.15 0.16 255)",
+          "oklch(0.27 0.16 255)",
+          "oklch(0.39 0.16 255)",
+          "oklch(0.51 0.16 255)",
+          "oklch(0.63 0.16 255)",
+          "oklch(0.75 0.16 255)",
+          "oklch(0.85 0.16 255)",
+          "oklch(0.95 0.16 255)"
         ]
       }
     },
+    "gradients": [
+      {
+        "name": "bg-honey",
+        "value": "linear-gradient(135deg, var(--honey-1), var(--honey-2) 55%, var(--honey-3))",
+        "purpose": "Bottone primario, riempimento della barra dello spazio."
+      },
+      {
+        "name": "bg-honey-soft",
+        "value": "linear-gradient(90deg, var(--honey-soft-1), var(--honey-soft-2))",
+        "purpose": "Voce attiva della barra laterale, tessere icona della striscia."
+      },
+      {
+        "name": "bg-honey-wash",
+        "value": "linear-gradient(180deg, var(--honey-wash) 0, transparent 320px)",
+        "purpose": "Velatura in cima all'area contenuti."
+      },
+      {
+        "name": "honey-area",
+        "value": "linear-gradient(180deg, var(--honey-2) at 35% opacity, transparent)",
+        "purpose": "Area del grafico di risposta, sotto la linea honey-3 di 2px."
+      }
+    ],
     "typographyMeta": {
       "headline": {
         "displayName": "Headline",
@@ -304,31 +502,36 @@
       },
       "section": {
         "displayName": "Section",
-        "purpose": "Titoli di sezione, nomi nelle righe, voce attiva."
+        "purpose": "Titoli di sezione, nomi nelle righe, etichette delle impostazioni, voce attiva."
       },
       "body": {
         "displayName": "Body",
-        "purpose": "Testo corrente e celle di tabella."
+        "purpose": "Testo corrente, celle di tabella, spiegazioni."
       },
       "label": {
         "displayName": "Label",
-        "purpose": "Etichette, date relative, sottorighe."
+        "purpose": "Etichette, date relative, sottorighe; 500 in pillole e badge."
       },
       "mono": {
         "displayName": "Mono",
-        "purpose": "Misure, codici e identificatori."
+        "purpose": "Misure, assi del grafico, tasto ⌘K, identificatori."
       }
     },
     "shadows": [
       {
+        "name": "goccia",
+        "value": "0 1px 2px color-mix(in oklch, var(--honey-3) 35%, transparent)",
+        "purpose": "Bottone primario."
+      },
+      {
         "name": "appoggio",
         "value": "0 1px 2px 0 rgb(0 0 0 / 0.05)",
-        "purpose": "Campi, bottoni outline, card (shadow-xs delle primitive vega)."
+        "purpose": "Campi e bottoni outline (shadow-xs delle primitive vega)."
       },
       {
         "name": "sospensione",
         "value": "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)",
-        "purpose": "Menu, select e popover (shadow-md); i dialoghi usano un anello foreground al 10%."
+        "purpose": "Menu, select e popover (shadow-md)."
       }
     ],
     "motion": [
@@ -336,6 +539,11 @@
         "name": "pulse-in-corso",
         "value": "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite",
         "purpose": "Pallino blu dei siti in creazione o eliminazione, solo con motion-safe."
+      },
+      {
+        "name": "spin-in-corso",
+        "value": "spin 1s linear infinite",
+        "purpose": "Icona della pillola \"in corso\", solo con motion-safe."
       },
       {
         "name": "dialog-in",
@@ -346,6 +554,11 @@
         "name": "press",
         "value": "translateY(1px)",
         "purpose": "Pressione dei bottoni."
+      },
+      {
+        "name": "hover-primario",
+        "value": "filter: brightness(1.05)",
+        "purpose": "Hover del bottone primario."
       }
     ],
     "breakpoints": [
@@ -358,6 +571,11 @@
         "name": "md",
         "value": "768px",
         "purpose": "Barra laterale fissa invece del foglio; tabella dei siti invece della lista."
+      },
+      {
+        "name": "lg",
+        "value": "1024px",
+        "purpose": "Avvisi e attività affiancati; grafico di risposta su due terzi."
       }
     ],
     "darkMode": "Classe .dark su html, scelta dall'utente (Come il sistema, Chiaro, Scuro) via mode-watcher; i valori scuri stanno in colorMeta.<token>.dark."
@@ -367,9 +585,9 @@
       "name": "Bottone primario",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Azione principale della vista, con icona lucide a sinistra.",
+      "description": "Azione principale della vista: gradiente miele, testo inchiostro pietra.",
       "html": "<button class=\"ds-btn-primary\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M5 12h14\"/><path d=\"M12 5v14\"/></svg> Nuovo sito</button>",
-      "css": ".ds-btn-primary{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 10px;border-radius:0.4rem;border:1px solid transparent;font:500 0.875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;cursor:pointer;transition:all .15s;background:var(--primary);color:var(--primary-foreground)}.ds-btn-primary:hover{background:color-mix(in oklch, var(--primary) 80%, transparent)}.ds-btn-primary:active{transform:translateY(1px)}.ds-btn-primary:focus-visible{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);}"
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 10px;border-radius:0.4rem;border:1px solid transparent;font:500 0.875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;cursor:pointer;transition:all .15s;background-image:linear-gradient(135deg, var(--honey-1), var(--honey-2) 55%, var(--honey-3));color:var(--primary-foreground);box-shadow:0 1px 2px color-mix(in oklch, var(--honey-3) 35%, transparent)}.ds-btn-primary:hover{filter:brightness(1.05)}.ds-btn-primary:active{transform:translateY(1px)}.ds-btn-primary:focus-visible{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent)}"
     },
     {
       "name": "Bottone outline",
@@ -377,7 +595,7 @@
       "refersTo": "button-outline",
       "description": "Azione secondaria accanto al primario.",
       "html": "<button class=\"ds-btn-outline\">Importa</button>",
-      "css": ".ds-btn-outline{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 10px;border-radius:0.4rem;border:1px solid transparent;font:500 0.875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;cursor:pointer;transition:all .15s;background:var(--background);color:var(--foreground);border-color:var(--border);box-shadow:0 1px 2px 0 rgb(0 0 0 / .05)}.ds-btn-outline:hover{background:var(--muted)}.ds-btn-outline:active{transform:translateY(1px)}.ds-btn-outline:focus-visible{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);}"
+      "css": ".ds-btn-outline{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 10px;border-radius:0.4rem;border:1px solid transparent;font:500 0.875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;cursor:pointer;transition:all .15s;background:var(--background);color:var(--foreground);border-color:var(--border);box-shadow:0 1px 2px 0 rgb(0 0 0 / .05)}.ds-btn-outline:hover{background:var(--muted)}.ds-btn-outline:active{transform:translateY(1px)}.ds-btn-outline:focus-visible{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent)}"
     },
     {
       "name": "Bottone distruttivo",
@@ -391,17 +609,25 @@
       "name": "Campo di testo",
       "kind": "input",
       "refersTo": "input",
-      "description": "Campo dei moduli nei dialoghi.",
+      "description": "Campo dei moduli nei dialoghi; focus ambra.",
       "html": "<input class=\"ds-input\" placeholder=\"esempio.it\" aria-label=\"Dominio\">",
-      "css": ".ds-input{height:36px;padding:4px 10px;border:1px solid var(--input);border-radius:0.4rem;background:transparent;color:var(--foreground);font:400 0.875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;box-shadow:0 1px 2px 0 rgb(0 0 0 / .05);transition:color .15s,box-shadow .15s}.ds-input::placeholder{color:var(--muted-foreground)}.ds-input:focus-visible{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);}"
+      "css": ".ds-input{height:36px;padding:4px 10px;border:1px solid var(--input);border-radius:0.4rem;background:transparent;color:var(--foreground);font:400 0.875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;box-shadow:0 1px 2px 0 rgb(0 0 0 / .05);transition:color .15s,box-shadow .15s}.ds-input::placeholder{color:var(--muted-foreground)}.ds-input:focus-visible{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent)}"
     },
     {
-      "name": "Voce della barra laterale",
+      "name": "Barra laterale",
       "kind": "nav",
       "refersTo": "sidebar-item",
-      "description": "Navigazione principale; le voci dei siti portano il pallino di stato.",
-      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item ds-active\" href=\"#\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"7\" height=\"7\" x=\"3\" y=\"3\" rx=\"1\"/><rect width=\"7\" height=\"7\" x=\"14\" y=\"3\" rx=\"1\"/><rect width=\"7\" height=\"7\" x=\"14\" y=\"14\" rx=\"1\"/><rect width=\"7\" height=\"7\" x=\"3\" y=\"14\" rx=\"1\"/></svg><span>Panoramica</span></a><a class=\"ds-nav-item ds-sm\" href=\"#\"><span class=\"ds-dot ds-dot-ok\"></span><span>esempio.it</span></a><a class=\"ds-nav-item ds-sm\" href=\"#\"><span class=\"ds-dot ds-dot-warn\"></span><span>negozio.it</span></a></nav>",
-      "css": ".ds-nav{display:flex;flex-direction:column;gap:4px;width:240px;padding:8px;background:var(--sidebar);border-right:1px solid var(--border)}.ds-nav-item{display:flex;align-items:center;gap:8px;padding:8px;border-radius:0.4rem;color:var(--foreground);text-decoration:none;font:400 0.875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif}.ds-nav-item.ds-sm{height:28px;padding:0 8px}.ds-nav-item .ds-dot{margin:0 4px}.ds-nav-item:hover,.ds-nav-item.ds-active{background:var(--sidebar-accent)}.ds-nav-item.ds-active{font-weight:500}.ds-nav-item:focus-visible{outline:none;box-shadow:0 0 0 2px var(--ring)}.ds-dot{display:inline-block;width:8px;height:8px;border-radius:9999px;flex-shrink:0}.ds-dot-ok{background:var(--success)}.ds-dot-warn{background:var(--warning)}.ds-dot-down{background:var(--destructive)}.ds-dot-busy{background:var(--info)}.ds-dot-off{background:color-mix(in oklch, var(--muted-foreground) 50%, transparent)}.ds-dot-unknown{box-shadow:inset 0 0 0 1px color-mix(in oklch, var(--muted-foreground) 60%, transparent)}"
+      "description": "Ricerca ⌘K, voce attiva in miele tenue, siti con pallino di stato.",
+      "html": "<nav class=\"ds-nav\"><button class=\"ds-search\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/></svg><span>Cerca siti e azioni</span><kbd>⌘K</kbd></button><a class=\"ds-nav-item ds-active\" href=\"#\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"7\" height=\"7\" x=\"3\" y=\"3\" rx=\"1\"/><rect width=\"7\" height=\"7\" x=\"14\" y=\"3\" rx=\"1\"/><rect width=\"7\" height=\"7\" x=\"14\" y=\"14\" rx=\"1\"/><rect width=\"7\" height=\"7\" x=\"3\" y=\"14\" rx=\"1\"/></svg><span>Panoramica</span></a><a class=\"ds-nav-item ds-sm\" href=\"#\"><span class=\"ds-dot ds-dot-ok\"></span><span>esempio.it</span></a><a class=\"ds-nav-item ds-sm\" href=\"#\"><span class=\"ds-dot ds-dot-warn\"></span><span>negozio.it</span></a></nav>",
+      "css": ".ds-nav{display:flex;flex-direction:column;gap:4px;width:240px;padding:8px;background:var(--sidebar);border-right:1px solid var(--border)}.ds-search{display:flex;align-items:center;gap:8px;height:36px;padding:0 10px;margin-bottom:4px;border:1px solid var(--border);border-radius:0.4rem;background:var(--background);color:var(--muted-foreground);font:400 0.875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;cursor:pointer}.ds-search span{flex:1;text-align:left}.ds-search:hover{color:var(--foreground)}.ds-search:focus-visible{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent)}.ds-search kbd{border:1px solid var(--border);border-radius:4px;padding:0 6px;font:400 11px 'Geist Mono Variable', ui-monospace, monospace}.ds-nav-item{display:flex;align-items:center;gap:8px;padding:8px;border-radius:0.4rem;color:var(--foreground);text-decoration:none;font:400 0.875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif}.ds-nav-item.ds-sm{height:28px;padding:0 8px}.ds-nav-item .ds-dot{margin:0 4px}.ds-nav-item:hover{background:var(--sidebar-accent)}.ds-nav-item.ds-active{background-image:linear-gradient(90deg, var(--honey-soft-1), var(--honey-soft-2));font-weight:500}.ds-nav-item:focus-visible{outline:none;box-shadow:0 0 0 2px var(--ring)}.ds-dot{display:inline-block;width:8px;height:8px;border-radius:9999px;flex-shrink:0}.ds-dot-ok{background:var(--success)}.ds-dot-warn{background:var(--warning)}.ds-dot-down{background:var(--destructive)}.ds-dot-busy{background:var(--info)}.ds-dot-off{background:color-mix(in oklch, var(--muted-foreground) 50%, transparent)}.ds-dot-unknown{box-shadow:inset 0 0 0 1px color-mix(in oklch, var(--muted-foreground) 60%, transparent)}"
+    },
+    {
+      "name": "Pillola di stato",
+      "kind": "chip",
+      "refersTo": "status-pill-ok",
+      "description": "Stato in parole: icona + parola su fondo soft.",
+      "html": "<div class=\"ds-pills\"><span class=\"ds-pill ds-ok\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M20 6 9 17l-5-5\"/></svg>Online</span><span class=\"ds-pill ds-warn\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" x2=\"12\" y1=\"8\" y2=\"12\"/><line x1=\"12\" x2=\"12.01\" y1=\"16\" y2=\"16\"/></svg>Backup vecchio</span><span class=\"ds-pill ds-off\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"14\" y=\"4\" width=\"4\" height=\"16\" rx=\"1\"/><rect x=\"6\" y=\"4\" width=\"4\" height=\"16\" rx=\"1\"/></svg>Sospeso</span></div>",
+      "css": ".ds-pills{display:flex;gap:8px;flex-wrap:wrap}.ds-pill{display:inline-flex;align-items:center;gap:4px;padding:2px 8px 2px 6px;border-radius:9999px;font:500 0.75rem/1rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;white-space:nowrap}.ds-pill svg{stroke-width:2.5}.ds-ok{background:var(--success-soft);color:var(--success-text)}.ds-warn{background:var(--warning-soft);color:var(--warning-text)}.ds-off{background:var(--muted);color:var(--muted-foreground)}"
     },
     {
       "name": "Pallino di stato",
@@ -415,44 +641,52 @@
       "name": "Striscia di stato",
       "kind": "card",
       "refersTo": "stat-strip",
-      "description": "Quattro numeri in una riga bordata; il valore si colora solo se c'è un problema.",
-      "html": "<dl class=\"ds-strip\"><div><dt>Online</dt><dd class=\"ds-bad\">4/5</dd></div><div><dt>Da guardare</dt><dd>1</dd></div><div><dt>Backup nelle 36 h</dt><dd>5/5</dd></div><div><dt>Aggiornamenti</dt><dd>3</dd></div></dl>",
-      "css": ".ds-strip{display:grid;grid-template-columns:repeat(4,1fr);margin:0;border:1px solid var(--border);border-radius:0.5rem;overflow:hidden;font-family:'Geist Variable', ui-sans-serif, system-ui, sans-serif}.ds-strip>div{display:flex;flex-direction:column;gap:4px;padding:12px 16px}.ds-strip>div+div{border-left:1px solid var(--border)}.ds-strip dt{font-size:.75rem;line-height:1rem;color:var(--muted-foreground)}.ds-strip dd{margin:0;font-size:1.25rem;line-height:1.75rem;font-weight:600;font-variant-numeric:tabular-nums;color:var(--foreground)}.ds-strip dd.ds-bad{color:var(--destructive)}"
+      "description": "Quattro numeri con tessera icona miele; il valore si colora solo se c'è un problema.",
+      "html": "<dl class=\"ds-strip\"><div><dt><span class=\"ds-tile\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2\"/></svg></span>Online</dt><dd class=\"ds-bad\">4/5</dd></div><div><dt><span class=\"ds-tile\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"20\" height=\"5\" x=\"2\" y=\"3\" rx=\"1\"/><path d=\"M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8\"/><path d=\"M10 12h4\"/></svg></span>Backup nelle 36 h</dt><dd>5/5</dd></div></dl>",
+      "css": ".ds-strip{display:grid;grid-template-columns:repeat(2,1fr);margin:0;background:var(--card);border:1px solid var(--border);border-radius:0.5rem;overflow:hidden;font-family:'Geist Variable', ui-sans-serif, system-ui, sans-serif}.ds-strip>div{display:flex;flex-direction:column;gap:6px;padding:12px 16px}.ds-strip>div+div{border-left:1px solid var(--border)}.ds-strip dt{display:flex;align-items:center;gap:8px;font-size:.75rem;line-height:1rem;color:var(--muted-foreground)}.ds-tile{display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:0.4rem;background-image:linear-gradient(90deg, var(--honey-soft-1), var(--honey-soft-2))}.ds-strip dd{margin:0;font-size:1.25rem;line-height:1.75rem;font-weight:600;font-variant-numeric:tabular-nums;color:var(--foreground)}.ds-strip dd.ds-bad{color:var(--destructive)}"
     },
     {
-      "name": "Lista a righe",
+      "name": "Riga di sito con spazio",
       "kind": "card",
       "refersTo": "row-list",
-      "description": "Avvisi aperti e lista dei siti su telefono: bordo, divisori, una riga per elemento.",
-      "html": "<ul class=\"ds-rows\"><li><span class=\"ds-ico\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"/><path d=\"M12 9v4\"/><path d=\"M12 17h.01\"/></svg></span><div><p><a href=\"#\">negozio.it</a><span class=\"ds-mut\"> · backup</span></p><p class=\"ds-mut\">Ultimo backup fallito</p></div><time>2 h fa</time></li><li><span class=\"ds-ico\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"/><path d=\"M12 9v4\"/><path d=\"M12 17h.01\"/></svg></span><div><p><a href=\"#\">esempio.it</a><span class=\"ds-mut\"> · uptime</span></p><p class=\"ds-mut\">Risposta 502</p></div><time>5 min fa</time></li></ul>",
-      "css": ".ds-rows{list-style:none;margin:0;padding:0;border:1px solid var(--border);border-radius:0.5rem;font:400 .875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;color:var(--foreground)}.ds-rows li{display:flex;align-items:flex-start;gap:12px;padding:12px 16px}.ds-rows li+li{border-top:1px solid var(--border)}.ds-rows div{flex:1;min-width:0}.ds-rows p{margin:0}.ds-rows a{color:inherit;font-weight:500;text-decoration:none;text-underline-offset:.2em}.ds-rows a:hover{text-decoration:underline}.ds-rows a:focus-visible{outline:2px solid var(--ring);outline-offset:2px}.ds-mut{color:var(--muted-foreground)}.ds-ico{color:var(--destructive);margin-top:2px;display:flex}.ds-rows time{font-size:.75rem;color:var(--muted-foreground);font-variant-numeric:tabular-nums;flex-shrink:0}"
+      "description": "Lista bordata: avatar crema miele, nome, sottoriga muted, barra dello spazio.",
+      "html": "<ul class=\"ds-rows\"><li><span class=\"ds-av\">E</span><div><p class=\"ds-name\">esempio.it</p><p class=\"ds-mut\">WordPress</p></div><div class=\"ds-usage\"><span class=\"ds-track\"><span style=\"width:40%\"></span></span><span class=\"ds-mut\">412 MB</span></div></li><li><span class=\"ds-av\">N</span><div><p class=\"ds-name\">negozio.it</p><p class=\"ds-mut\">WordPress · staging</p></div><div class=\"ds-usage\"><span class=\"ds-track\"><span class=\"ds-over\" style=\"width:82%\"></span></span><span class=\"ds-mut\">1,6 GB</span></div></li></ul>",
+      "css": ".ds-rows{list-style:none;margin:0;padding:0;background:var(--card);border:1px solid var(--border);border-radius:0.5rem;font:400 .875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;color:var(--foreground)}.ds-rows li{display:flex;align-items:center;gap:12px;padding:10px 16px}.ds-rows li+li{border-top:1px solid var(--border)}.ds-rows li>div:first-of-type{flex:1;min-width:0}.ds-rows p{margin:0}.ds-name{font-weight:500}.ds-mut{color:var(--muted-foreground);font-size:.75rem;font-variant-numeric:tabular-nums}.ds-av{display:flex;align-items:center;justify-content:center;width:28px;height:28px;flex-shrink:0;border:1px solid var(--border);border-radius:0.4rem;background:var(--accent);color:var(--accent-foreground);font-size:.75rem;font-weight:600}.ds-usage{display:flex;align-items:center;gap:8px;width:176px}.ds-track{flex:1;height:6px;border-radius:9999px;background:var(--muted);overflow:hidden}.ds-track span{display:block;height:100%;border-radius:9999px;background-image:linear-gradient(135deg, var(--honey-1), var(--honey-2) 55%, var(--honey-3))}.ds-track span.ds-over{background:var(--warning)}"
+    },
+    {
+      "name": "Riga di impostazione",
+      "kind": "card",
+      "refersTo": "setting-row",
+      "description": "Sezione di impostazioni: titolo sopra, righe con etichetta a sinistra e controllo a destra.",
+      "html": "<section class=\"ds-set\"><h2>PHP</h2><p class=\"ds-mut\">Pool dedicato con l'utente Unix esempio.</p><div class=\"ds-box\"><div class=\"ds-row\"><div><p class=\"ds-lbl\">PHP 8.3</p><p class=\"ds-help\">memory_limit 256 MB · upload fino a 64 MB</p></div><button class=\"ds-btn\">Cambia</button></div></div></section>",
+      "css": ".ds-set{display:flex;flex-direction:column;gap:2px;font-family:'Geist Variable', ui-sans-serif, system-ui, sans-serif;color:var(--foreground)}.ds-set h2{margin:0;font-size:.875rem;font-weight:500}.ds-set p{margin:0}.ds-mut{color:var(--muted-foreground);font-size:.75rem}.ds-box{margin-top:6px;background:var(--card);border:1px solid var(--border);border-radius:0.5rem}.ds-row{display:flex;flex-wrap:wrap;align-items:center;gap:12px 24px;padding:14px 16px}.ds-row>div{flex:1 1 18rem;min-width:0}.ds-lbl{font-weight:500}.ds-help{color:var(--muted-foreground);font-size:.875rem;margin-top:2px}.ds-btn{height:36px;padding:0 10px;border:1px solid var(--border);border-radius:0.4rem;background:var(--background);color:var(--foreground);font:500 0.875rem/1.25rem 'Geist Variable', ui-sans-serif, system-ui, sans-serif;cursor:pointer}.ds-btn:hover{background:var(--muted)}.ds-btn:focus-visible{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent)}"
     }
   ],
   "narrative": {
     "northStar": "La sala macchine in ordine",
-    "overview": "Alveare è un pannello operativo: chi lo apre vuole sapere in un colpo d'occhio quali siti stanno bene e quali no, poi agire con un clic. Il sistema esegue lo standard della categoria (dashboard di hosting) al livello di Vercel, Railway e della dashboard Cloudflare: neutri freddi quasi monocromi, una barra laterale grigio chiarissimo, filetti sottili al posto delle ombre, Geist Sans per il testo e Geist Mono per misure e identificatori. Il colore è informazione, non decorazione: compare quasi solo come pallino di stato.\n\nLa densità è da strumento: corpo a 14px, righe compatte, tabella su desktop e lista a una riga su telefono, con lo stesso ordine (prima i siti con problemi). L'identità sta in due punti soli: il marchio a celle con la cella in cima in ambra, e la disciplina del vocabolario di stato. Tema chiaro e scuro sono pari, scelti dall'utente (Come il sistema, Chiaro, Scuro).\n\nRifiuti confermati in PRODUCT.md: il tema api o miele come costume, la dashboard SaaS generica (gradienti, metriche finte), i clic o lo scroll in più per le azioni frequenti.",
+    "overview": "Alveare è un pannello operativo: chi lo apre vuole sapere in un colpo d'occhio quali siti stanno bene e quali no, poi agire con un clic. Il sistema esegue lo standard della categoria (dashboard di hosting) al livello di Vercel, Railway e della dashboard Cloudflare: struttura sobria, filetti sottili al posto delle ombre, Geist Sans per il testo e Geist Mono per misure e identificatori. Su questa struttura si posa la palette miele (scelta esplicita del 2026-10-30): neutri caldi color pietra, un gradiente giallo → ambra → arancio sulle azioni primarie, la voce attiva in un miele tenue, una velatura calda in cima alla pagina.\n\nLa densità è da strumento: corpo a 14px, righe compatte, tabella su desktop e lista a una riga su telefono, con lo stesso ordine (prima i siti con problemi). Il miele dice \"marchio e azione\"; lo stato ha un vocabolario a parte, con l'attenzione in arancio scuro ben distinto dal miele, e si legge sempre anche senza colore (icona più parola nella pillola, nome accessibile sul pallino). Tema chiaro e scuro sono pari, scelti dall'utente (Come il sistema, Chiaro, Scuro).\n\nRifiuti confermati in PRODUCT.md: il tema api come illustrazione o decorazione (sta nei colori e nel marchio), la dashboard SaaS generica (metriche finte, banner promozionali), i clic o lo scroll in più per le azioni frequenti.",
     "keyCharacteristics": [
-      "Neutri freddi (tinta 275) quasi acromatici; nessun accento di interfaccia oltre al nero/bianco del primario.",
-      "Ambra di marca confinata nel logo.",
-      "Quattro colori di stato a significato fisso, decisi da una sola regola in codice.",
-      "Profondità con filetti di 1px e lievi scarti tonali, quasi senza ombre.",
-      "Geist Sans e Geist Mono, cifre tabulari nei dati.",
-      "Base shadcn-svelte stile vega, icone lucide."
+      "Neutri caldi pietra (tinta 56-88) al posto dei grigi freddi.",
+      "Gradiente miele confinato a pochi posti fissi: bottone primario, voce attiva, velatura di pagina, area del grafico, barra dello spazio.",
+      "Stati a significato fisso decisi da una sola regola in codice; attenzione in arancio scuro, separato dal miele.",
+      "Stato mostrato con pallino o con pillola icona + parola, mai solo col colore.",
+      "Profondità con filetti di 1px e card bianche sulla velatura, quasi senza ombre.",
+      "Geist Sans e Geist Mono, cifre tabulari nei dati; base shadcn-svelte stile vega, icone lucide."
     ],
     "rules": [
       {
-        "name": "The Ambra nel Logo Rule",
-        "body": "L'ambra di marca vive solo nel marchio. Mai su bottoni, link, superfici o grafici: lì l'ambra significa \"attenzione\".",
+        "name": "The Miele sulle Azioni Rule",
+        "body": "Il gradiente miele (`bg-honey`, 135°, honey-1 → honey-2 al 55% → honey-3) va sul bottone primario e sul riempimento della barra dello spazio; la sua versione tenue (`bg-honey-soft`) sulla voce attiva e sulle tessere icona; la velatura (`bg-honey-wash`) solo in cima all'area contenuti; l'area del grafico di risposta sfuma honey-2 dal 35% a 0. Altrove il miele non compare: niente gradienti su testo, bordi, card intere o fondi di sezione.",
         "section": "colors"
       },
       {
         "name": "The Vocabolario di Stato Rule",
-        "body": "Verde online, ambra attenzione, rosso giù o fallito, blu in corso, grigio spento, anello vuoto in attesa. Lo stato si calcola in un solo punto (`ui/src/lib/health.ts`) e ogni superficie (barra laterale, panoramica, sito) lo legge da lì; nessuna pagina ricalcola o ridipinge lo stato a modo suo.",
+        "body": "Verde online, arancio scuro attenzione, rosso giù o fallito, blu in corso, grigio spento, anello vuoto in attesa. Il miele non è mai uno stato e l'arancio di stato non è mai decorazione. Lo stato si calcola in un solo punto (`ui/src/lib/health.ts`) e ogni superficie (barra laterale, palette ⌘K, panoramica, sito) lo legge da lì.",
         "section": "colors"
       },
       {
         "name": "The Stato Leggibile Rule",
-        "body": "Su fondo chiaro, i colori di stato con contrasto sotto 4.5:1 (warning, success, info) servono per pallini e icone, non per testo. Come testo in chiaro regge solo destructive; il messaggio sta nell'etichetta in foreground o muted-foreground accanto al pallino.",
+        "body": "Come testo, gli stati usano le varianti -text (success-text, warning-text) o destructive, mai warning, success o info pieni: quelli servono per pallini, barre e icone (warning su bianco è 3.5:1). Il testo di una pillola deve reggere 4.5:1 sul proprio fondo soft.",
         "section": "colors"
       },
       {
@@ -467,23 +701,24 @@
       },
       {
         "name": "The Filetto Rule",
-        "body": "Un contenitore dell'app si separa con un bordo di 1px nel colore border e i divisori tra righe sono filetti, non ombre. L'ombra resta agli elementi che galleggiano.",
+        "body": "Un contenitore dell'app si separa con un bordo di 1px nel colore border e i divisori tra righe sono filetti, non ombre. L'ombra resta agli elementi che galleggiano e al bottone primario.",
         "section": "elevation"
       }
     ],
     "dos": [
-      "**Do** prendere lo stato di un sito da `health()` e mostrarlo con il pallino, sempre con la stessa mappa di colori.",
+      "**Do** prendere lo stato di un sito da `health()` e mostrarlo con il pallino o con la pillola icona + parola, sempre con la stessa mappa.",
       "**Do** ordinare i siti con i problemi in testa (giù, attenzione, in corso, in attesa, spento, online).",
-      "**Do** separare i contenitori con un bordo di 1px e raggio 8px, senza ombra.",
+      "**Do** usare `bg-honey` per l'azione principale della vista e `bg-honey-soft` per la selezione, con testo inchiostro pietra.",
+      "**Do** separare i contenitori con fondo card, bordo di 1px e raggio 8px, senza ombra.",
       "**Do** usare Geist Mono per misure e identificatori e lasciare le cifre tabulari ai dati.",
-      "**Do** dare a ogni tabella una forma a lista per telefono, con le stesse informazioni essenziali.",
-      "**Do** tenere l'ambra di marca dentro il marchio."
+      "**Do** dare a ogni tabella una forma a lista per telefono, con le stesse informazioni essenziali."
     ],
     "donts": [
-      "**Don't** usare il tema api o miele come costume: niente favi, gocce di miele o api decorative nell'interfaccia; il marchio a celle è l'unico riferimento.",
-      "**Don't** usare gradienti o metriche finte da dashboard SaaS generica.",
-      "**Don't** usare warning, success o info come colore del testo su fondo chiaro: sotto 4.5:1.",
-      "**Don't** usare un colore di stato per decorare o per distinguere categorie che non sono stati.",
+      "**Don't** usare il tema api come illustrazione o decorazione: niente favi, gocce o api disegnate; gli esagoni restano nel marchio.",
+      "**Don't** usare il miele per segnalare un problema, né l'arancio di stato (o le sue varianti -text e -soft) per decorare: miele è azione e marchio, arancio è attenzione.",
+      "**Don't** mettere gradienti fuori dai posti della Miele sulle Azioni Rule (testo, bordi, card intere, fondi di sezione).",
+      "**Don't** usare warning, success o info pieni come colore del testo: usa success-text, warning-text o destructive.",
+      "**Don't** usare metriche finte o banner promozionali da dashboard SaaS generica.",
       "**Don't** aggiungere ombre a liste, tabelle o strisce dell'app.",
       "**Don't** aggiungere un clic o uno scroll a un'azione frequente per far posto a un elemento visivo."
     ]

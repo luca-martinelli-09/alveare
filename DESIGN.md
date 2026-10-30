@@ -3,23 +3,34 @@ name: Alveare
 description: Pannello di hosting self-hosted per siti WordPress e PHP; lo stato prima delle azioni.
 colors:
   background: "oklch(1 0 0)"
-  foreground: "oklch(0.21 0.006 275)"
-  primary: "oklch(0.21 0.006 275)"
-  primary-foreground: "oklch(0.985 0 0)"
-  secondary: "oklch(0.966 0.002 275)"
-  muted: "oklch(0.972 0.002 275)"
-  muted-foreground: "oklch(0.5 0.01 275)"
-  accent: "oklch(0.958 0.003 275)"
-  border: "oklch(0.922 0.004 275)"
-  input: "oklch(0.89 0.005 275)"
-  ring: "oklch(0.6 0.13 255)"
-  sidebar: "oklch(0.981 0.002 275)"
-  sidebar-accent: "oklch(0.94 0.004 275)"
-  destructive: "oklch(0.57 0.21 25)"
-  success: "oklch(0.6 0.15 152)"
-  warning: "oklch(0.72 0.16 70)"
-  info: "oklch(0.58 0.16 255)"
+  foreground: "oklch(0.216 0.006 56)"
+  primary: "oklch(0.77 0.16 70)"
+  primary-foreground: "oklch(0.216 0.006 56)"
+  secondary: "oklch(0.97 0.025 85)"
+  muted: "oklch(0.977 0.008 80)"
+  muted-foreground: "oklch(0.52 0.014 58)"
+  accent: "oklch(0.96 0.035 88)"
+  border: "oklch(0.93 0.014 80)"
+  input: "oklch(0.89 0.018 78)"
+  ring: "oklch(0.77 0.16 70)"
+  sidebar: "oklch(0.988 0.012 85)"
+  sidebar-accent: "oklch(0.96 0.035 88)"
+  honey-1: "oklch(0.87 0.15 92)"
+  honey-2: "oklch(0.77 0.16 70)"
+  honey-3: "oklch(0.7 0.19 48)"
+  honey-soft-1: "oklch(0.92 0.11 95)"
+  honey-soft-2: "oklch(0.985 0.025 90)"
+  honey-wash: "oklch(0.97 0.04 88)"
   brand: "oklch(0.79 0.16 72)"
+  success: "oklch(0.6 0.15 152)"
+  success-soft: "oklch(0.96 0.03 155)"
+  success-text: "oklch(0.45 0.12 152)"
+  warning: "oklch(0.65 0.21 42)"
+  warning-soft: "oklch(0.95 0.04 65)"
+  warning-text: "oklch(0.47 0.15 40)"
+  destructive: "oklch(0.57 0.21 25)"
+  destructive-soft: "oklch(0.95 0.025 20)"
+  info: "oklch(0.58 0.16 255)"
 typography:
   headline:
     fontFamily: "Geist Variable, ui-sans-serif, system-ui, sans-serif"
@@ -68,7 +79,7 @@ spacing:
   2xl: "32px"
 components:
   button-primary:
-    backgroundColor: "{colors.primary}"
+    backgroundColor: "{colors.honey-2}"
     textColor: "{colors.primary-foreground}"
     rounded: "{rounded.md}"
     padding: "0 10px"
@@ -110,15 +121,52 @@ components:
     typography: "{typography.body}"
     rounded: "{rounded.md}"
     padding: "8px"
-  sidebar-item-active:
+  sidebar-item-hover:
     backgroundColor: "{colors.sidebar-accent}"
+  sidebar-item-active:
+    backgroundColor: "{colors.honey-soft-1}"
   status-dot:
     rounded: "{rounded.full}"
     size: "8px"
+  status-pill-ok:
+    backgroundColor: "{colors.success-soft}"
+    textColor: "{colors.success-text}"
+    typography: "{typography.label}"
+    rounded: "{rounded.full}"
+    padding: "2px 8px 2px 6px"
+  status-pill-warn:
+    backgroundColor: "{colors.warning-soft}"
+    textColor: "{colors.warning-text}"
+    typography: "{typography.label}"
+    rounded: "{rounded.full}"
+    padding: "2px 8px 2px 6px"
+  status-pill-down:
+    backgroundColor: "{colors.destructive-soft}"
+    textColor: "{colors.destructive}"
+    typography: "{typography.label}"
+    rounded: "{rounded.full}"
+    padding: "2px 8px 2px 6px"
+  site-avatar:
+    backgroundColor: "{colors.accent}"
+    textColor: "{colors.foreground}"
+    rounded: "{rounded.md}"
+    size: "28px"
+  icon-tile:
+    backgroundColor: "{colors.honey-soft-1}"
+    rounded: "{rounded.md}"
+    size: "24px"
+  usage-bar:
+    backgroundColor: "{colors.muted}"
+    rounded: "{rounded.full}"
+    height: "6px"
   row-list:
     backgroundColor: "{colors.background}"
     rounded: "{rounded.lg}"
     padding: "12px 16px"
+  setting-row:
+    backgroundColor: "{colors.background}"
+    rounded: "{rounded.lg}"
+    padding: "14px 16px"
   stat-strip:
     typography: "{typography.title}"
     rounded: "{rounded.lg}"
@@ -131,52 +179,59 @@ components:
 
 **Creative North Star: "La sala macchine in ordine"**
 
-Alveare è un pannello operativo: chi lo apre vuole sapere in un colpo d'occhio quali siti stanno bene e quali no, poi agire con un clic. Il sistema esegue lo standard della categoria (dashboard di hosting) al livello di Vercel, Railway e della dashboard Cloudflare: neutri freddi quasi monocromi, una barra laterale grigio chiarissimo, filetti sottili al posto delle ombre, Geist Sans per il testo e Geist Mono per misure e identificatori. Il colore è informazione, non decorazione: compare quasi solo come pallino di stato.
+Alveare è un pannello operativo: chi lo apre vuole sapere in un colpo d'occhio quali siti stanno bene e quali no, poi agire con un clic. Il sistema esegue lo standard della categoria (dashboard di hosting) al livello di Vercel, Railway e della dashboard Cloudflare: struttura sobria, filetti sottili al posto delle ombre, Geist Sans per il testo e Geist Mono per misure e identificatori. Su questa struttura si posa la palette miele (scelta esplicita del 2026-10-30): neutri caldi color pietra, un gradiente giallo → ambra → arancio sulle azioni primarie, la voce attiva in un miele tenue, una velatura calda in cima alla pagina.
 
-La densità è da strumento: corpo a 14px, righe compatte, tabella su desktop e lista a una riga su telefono, con lo stesso ordine (prima i siti con problemi). L'identità sta in due punti soli: il marchio a celle con la cella in cima in ambra, e la disciplina del vocabolario di stato. Tema chiaro e scuro sono pari, scelti dall'utente (Come il sistema, Chiaro, Scuro).
+La densità è da strumento: corpo a 14px, righe compatte, tabella su desktop e lista a una riga su telefono, con lo stesso ordine (prima i siti con problemi). Il miele dice "marchio e azione"; lo stato ha un vocabolario a parte, con l'attenzione in arancio scuro ben distinto dal miele, e si legge sempre anche senza colore (icona più parola nella pillola, nome accessibile sul pallino). Tema chiaro e scuro sono pari, scelti dall'utente (Come il sistema, Chiaro, Scuro).
 
-Rifiuti confermati in PRODUCT.md: il tema api o miele come costume, la dashboard SaaS generica (gradienti, metriche finte), i clic o lo scroll in più per le azioni frequenti.
+Rifiuti confermati in PRODUCT.md: il tema api come illustrazione o decorazione (sta nei colori e nel marchio), la dashboard SaaS generica (metriche finte, banner promozionali), i clic o lo scroll in più per le azioni frequenti.
 
 **Key Characteristics:**
-- Neutri freddi (tinta 275) quasi acromatici; nessun accento di interfaccia oltre al nero/bianco del primario.
-- Ambra di marca confinata nel logo.
-- Quattro colori di stato a significato fisso, decisi da una sola regola in codice.
-- Profondità con filetti di 1px e lievi scarti tonali, quasi senza ombre.
-- Geist Sans e Geist Mono, cifre tabulari nei dati.
-- Base shadcn-svelte stile vega, icone lucide.
+- Neutri caldi pietra (tinta 56-88) al posto dei grigi freddi.
+- Gradiente miele confinato a pochi posti fissi: bottone primario, voce attiva, velatura di pagina, area del grafico, barra dello spazio.
+- Stati a significato fisso decisi da una sola regola in codice; attenzione in arancio scuro, separato dal miele.
+- Stato mostrato con pallino o con pillola icona + parola, mai solo col colore.
+- Profondità con filetti di 1px e card bianche sulla velatura, quasi senza ombre.
+- Geist Sans e Geist Mono, cifre tabulari nei dati; base shadcn-svelte stile vega, icone lucide.
 
 ## Colors
 
-Palette quasi monocroma di grigi freddi, dove gli unici colori saturi portano uno stato o il marchio.
+Neutri caldi e quieti, un miele saturo che segna azioni e selezione, e quattro colori di stato che non si confondono con il miele.
 
 ### Primary
-- **Inchiostro Grafite** (primary / foreground): testo principale e riempimento del bottone primario ("Nuovo sito", "Crea sito"). In tema scuro si inverte in quasi bianco (oklch(0.96 0.002 275)) con testo grafite.
+- **Miele Ambra** (primary, honey-2, oklch(0.77 0.16 70)): colore primario e anello di focus (ring); linea attiva delle schede, selezione del testo (al 30%), centro del gradiente miele. In scuro sale a oklch(0.8 0.15 75).
+- **Miele Chiaro** (honey-1, oklch(0.87 0.15 92)): inizio giallo del gradiente miele.
+- **Miele Bruciato** (honey-3, oklch(0.7 0.19 48)): coda arancio del gradiente, ombra tinta del bottone primario, linea del grafico di risposta.
+- **Inchiostro Pietra** (primary-foreground = foreground, oklch(0.216 0.006 56)): il testo sopra il miele è scuro, non bianco (11.8:1 su honey-1, 6.1:1 su honey-3).
+
+### Secondary
+- **Polline** (honey-soft-1, oklch(0.92 0.11 95)) e **Panna** (honey-soft-2, oklch(0.985 0.025 90)): il gradiente tenue `bg-honey-soft` della voce attiva della barra laterale e delle tessere icona. In scuro diventano oklch(0.36 0.07 72) e oklch(0.22 0.02 70).
+- **Velatura** (honey-wash, oklch(0.97 0.04 88)): `bg-honey-wash`, sfuma in trasparente entro 320px dall'alto dell'area contenuti.
 
 ### Neutral
-- **Bianco Pieno** (background): fondo di pagina, card e popover in tema chiaro.
-- **Grigio Banco** (sidebar): fondo della barra laterale, un soffio sotto il bianco; in scuro scende sotto il fondo (oklch(0.145 0.005 275)).
-- **Grigio Selezione** (sidebar-accent): voce attiva e hover nella barra laterale.
-- **Nebbia Fredda** (muted, secondary, accent): hover di righe e bottoni ghost, fondo dei badge secondari, fondo delle iniziali utente, fondo `muted/40` della cornice di accesso.
-- **Grigio Didascalia** (muted-foreground): metadati, etichette di colonna, date relative, descrizioni sotto i titoli.
-- **Filetto** (border) e **Filetto Campo** (input): bordi di contenitori, divisori di righe, bordi dei campi. In scuro diventano bianco al 9% e 14%.
-- **Blu Fuoco** (ring): anello di focus e selezione del testo (info al 22%).
+- **Bianco Pieno** (background, card): fondo di card, liste, tabelle e popover; in scuro oklch(0.17 0.006 56), card oklch(0.2 0.007 56).
+- **Cera** (sidebar, oklch(0.988 0.012 85)): fondo della barra laterale; in scuro scende sotto il fondo (oklch(0.15 0.006 56)).
+- **Crema Miele** (accent, sidebar-accent, oklch(0.96 0.035 88)): hover della barra laterale, fondo dell'avatar del sito.
+- **Crema** (secondary, oklch(0.97 0.025 85)): badge secondari, bottone secondario.
+- **Nebbia Calda** (muted, oklch(0.977 0.008 80)): hover di righe e bottoni ghost, binario della barra dello spazio, tessere icona dell'attività, fondo delle iniziali utente.
+- **Grigio Pietra** (muted-foreground, oklch(0.52 0.014 58)): metadati, etichette di colonna, date relative, descrizioni.
+- **Filetto** (border, oklch(0.93 0.014 80)) e **Filetto Campo** (input, oklch(0.89 0.018 78)): bordi e divisori; in scuro bianco al 9% e 14%.
 
 ### Stati
-- **Verde Online** (success): pallino del sito che risponde.
-- **Ambra Attenzione** (warning): pallino "Da guardare" (backup vecchio o fallito, errori 5xx).
-- **Rosso Giù** (destructive): pallino del sito che non risponde o in errore; testo di valori falliti; bottoni distruttivi tinti.
+- **Verde Online** (success, soft, text): pallino del sito che risponde; pillola su success-soft con testo success-text.
+- **Arancio Attenzione** (warning, oklch(0.65 0.21 42)): "Da guardare" (backup vecchio o fallito, errori 5xx); barra dello spazio oltre il 75%. Pillola su warning-soft con warning-text (oklch(0.47 0.15 40)).
+- **Rosso Giù** (destructive, destructive-soft): sito che non risponde o in errore, valori falliti, bottoni distruttivi tinti.
 - **Blu In Corso** (info): pallino pulsante dei siti in creazione o eliminazione.
-- Spento: pallino grigio (muted-foreground al 50%). In attesa del primo controllo: anello vuoto senza riempimento.
+- Spento: grigio (muted-foreground al 50%). In attesa del primo controllo: anello vuoto.
 
 ### Brand
-- **Ambra Cella** (brand): la cella in cima al marchio. Il token esiste in entrambi i temi con lo stesso valore (il logo lo legge con `fill-brand`; la favicon SVG statica ha lo stesso colore in esadecimale); nell'interfaccia non ha altri usi.
+- **Ambra Cella** (brand, oklch(0.79 0.16 72), uguale nei due temi): la cella in cima al marchio (`fill-brand`) e la favicon. Il token resta nel marchio; il miele dell'interfaccia passa da primary e honey-*.
 
 ### Named Rules
-**The Ambra nel Logo Rule.** L'ambra di marca vive solo nel marchio. Mai su bottoni, link, superfici o grafici: lì l'ambra significa "attenzione".
+**The Miele sulle Azioni Rule.** Il gradiente miele (`bg-honey`, 135°, honey-1 → honey-2 al 55% → honey-3) va sul bottone primario e sul riempimento della barra dello spazio; la sua versione tenue (`bg-honey-soft`) sulla voce attiva e sulle tessere icona; la velatura (`bg-honey-wash`) solo in cima all'area contenuti; l'area del grafico di risposta sfuma honey-2 dal 35% a 0. Altrove il miele non compare: niente gradienti su testo, bordi, card intere o fondi di sezione. Icone nelle tessere e linea del grafico usano l'inchiostro miele (`honey-ink`, oklch(0.52 0.11 70) in chiaro, oklch(0.85 0.12 85) in scuro), che regge 4.5:1 e non si confonde con l'arancio di stato; il segmento del database nella barra dello spazio è honey-1.
 
-**The Vocabolario di Stato Rule.** Verde online, ambra attenzione, rosso giù o fallito, blu in corso, grigio spento, anello vuoto in attesa. Lo stato si calcola in un solo punto (`ui/src/lib/health.ts`) e ogni superficie (barra laterale, panoramica, sito) lo legge da lì; nessuna pagina ricalcola o ridipinge lo stato a modo suo.
+**The Vocabolario di Stato Rule.** Verde online, arancio scuro attenzione, rosso giù o fallito, blu in corso, grigio spento, anello vuoto in attesa. Il miele non è mai uno stato e l'arancio di stato non è mai decorazione. Lo stato si calcola in un solo punto (`ui/src/lib/health.ts`) e ogni superficie (barra laterale, palette ⌘K, panoramica, sito) lo legge da lì.
 
-**The Stato Leggibile Rule.** Su fondo chiaro, i colori di stato con contrasto sotto 4.5:1 (warning, success, info) servono per pallini e icone, non per testo. Come testo regge destructive; per l'ambra come testo c'è `warning-text` (oklch(0.52 0.13 60) in chiaro, uguale a warning in scuro), da usare con `text-warning-text`.
+**The Stato Leggibile Rule.** Come testo, gli stati usano le varianti -text (success-text, warning-text, destructive-text, info-text), mai warning, success o info pieni: quelli servono per pallini, barre e icone (warning su bianco è 3.5:1). Il testo di una pillola deve reggere 4.5:1 sul proprio fondo soft.
 
 ## Typography
 
@@ -187,11 +242,11 @@ Palette quasi monocroma di grigi freddi, dove gli unici colori saturi portano un
 
 ### Hierarchy
 - **Headline** (600, 1.5rem/2rem, tracking -0.025em): titolo di pagina nell'intestazione (Panoramica, nome host del sito, Template). Uno per pagina.
-- **Title** (600, 1.25rem/1.75rem, cifre tabulari): valori della striscia di stato (Online 4/5, Da guardare 1).
-- **Section** (500, 0.875rem/1.25rem): titoli di sezione sopra liste e tabelle ("Avvisi aperti", "Siti"), nomi di sito nelle righe, voce attiva della barra laterale.
-- **Body** (400, 0.875rem/1.25rem): testo corrente, celle di tabella, descrizioni. Gli input salgono a 1rem sotto 768px per evitare lo zoom su telefono.
-- **Label** (400, 0.75rem/1rem): etichette della striscia di stato, date relative, sottorighe (tipo di sito, "staging"), email nell'account.
-- **Mono** (400, 0.75rem/1rem): tempi di risposta ("200 · 84 ms"), identificatori di template, percorsi, campi di identificatore.
+- **Title** (600, 1.25rem/1.75rem, cifre tabulari): valori della striscia di stato.
+- **Section** (500, 0.875rem/1.25rem): titoli di sezione ("Avvisi aperti", "Attività recente", "Siti"), nomi di sito nelle righe, etichette delle impostazioni, voce attiva della barra laterale.
+- **Body** (400, 0.875rem/1.25rem): testo corrente, celle di tabella, spiegazioni delle impostazioni. Gli input salgono a 1rem sotto 768px per evitare lo zoom su telefono.
+- **Label** (400, 0.75rem/1rem): etichette della striscia, date relative, sottorighe; in peso 500 nelle pillole di stato e nei badge.
+- **Mono** (400, 0.75rem/1rem): tempi di risposta ("200 · 84 ms"), assi del grafico (11px), tasto ⌘K, identificatori e percorsi.
 
 ### Named Rules
 **The Cifre in Colonna Rule.** Celle di tabella, intestazioni, elementi `time` e la classe `.tabular` usano cifre tabulari, impostate globalmente: i numeri si allineano senza lavoro per pagina.
@@ -200,81 +255,102 @@ Palette quasi monocroma di grigi freddi, dove gli unici colori saturi portano un
 
 ## Layout
 
-Barra laterale fissa a sinistra (Panoramica, elenco siti con pallino ordinati per salute, gruppo Amministrazione per gli admin, account in fondo) e colonna di contenuto a destra, centrata con larghezza massima 72rem (max-w-6xl). Margini del contenuto 16px su telefono e 32px da 768px; ritmo verticale tra i blocchi di 24px; dentro una sezione titolo e contenuto distano 8px; righe e celle della striscia hanno 12px verticali e 16px orizzontali.
+Barra laterale fissa a sinistra (marchio, ricerca ⌘K, Panoramica, elenco siti con pallino ordinati per salute, gruppo Amministrazione per gli admin, account in fondo) e colonna di contenuto a destra, centrata con larghezza massima 72rem (max-w-6xl), su fondo con velatura miele in cima. Margini del contenuto 16px su telefono e 32px da 768px; ritmo verticale tra i blocchi di 24px; dentro una sezione titolo e contenuto distano 8px; righe e celle della striscia hanno 12px verticali e 16px orizzontali (14px nelle righe di impostazione, 10px nelle righe di attività).
 
-Sotto 768px la barra laterale diventa un foglio aperto dal pulsante menu in un'intestazione appiccicosa alta 48px (fondo al 90% con sfocatura), e si chiude a ogni navigazione. Sempre sotto 768px la tabella dei siti lascia il posto a una lista a una riga per sito con pallino, nome, primo problema e data del backup; la striscia di stato passa da 4 a 2 colonne sotto 640px. Le schede del sito scorrono in orizzontale senza barra visibile. Il filtro dei siti nella barra laterale compare solo oltre 8 siti.
+Panoramica: intestazione con azioni, striscia di stato, poi avvisi aperti e attività recente affiancati da 1024px (senza avvisi la colonna sparisce su schermi stretti), poi i siti. Nella scheda del sito, il grafico di risposta occupa due terzi e "In breve" un terzo da 1024px.
+
+Sotto 768px la barra laterale diventa un foglio aperto dal pulsante menu in un'intestazione appiccicosa alta 48px (fondo al 90% con sfocatura), e si chiude a ogni navigazione. Sempre sotto 768px la tabella dei siti lascia il posto a una lista a una riga per sito con avatar (pallino di stato sull'angolo), nome e primo problema; la striscia di stato passa da 4 a 2 colonne sotto 640px. Le righe di impostazione mandano il controllo sotto l'etichetta quando lo spazio scende sotto 18rem. Le schede del sito scorrono in orizzontale senza barra visibile. Il filtro dei siti nella barra laterale compare solo oltre 8 siti.
 
 Le pagine di accesso (login, invito, reset) usano una cornice a parte: fondo muted al 40%, marchio con nome sopra, modulo largo al massimo 24rem al centro.
 
 ## Elevation & Depth
 
-Il sistema è piatto: la profondità si legge da filetti di 1px e da scarti tonali minimi (bianco della pagina, grigio banco della barra laterale, nebbia degli hover). I contenitori dell'app (striscia di stato, liste di avvisi e siti, cornice della tabella) hanno bordo e nessuna ombra. Le ombre presenti arrivano dalle primitive vega: un'ombra minima su campi, bottoni outline e card, ombre medie e ampie solo su menu, popover e dialoghi che galleggiano sopra la pagina; card e dialoghi aggiungono un anello foreground al 10%.
+Il sistema è piatto: la profondità si legge da filetti di 1px e da scarti tonali (card bianche sulla velatura miele, barra laterale color cera, hover in crema). I contenitori dell'app (striscia, liste, tabella, sezioni di impostazioni, card del monitor) hanno fondo card, bordo e nessuna ombra. Unica ombra nuova: il bottone primario poggia su un'ombra tinta di miele bruciato. Il resto arriva dalle primitive vega: ombra minima su campi e bottoni outline, ombre medie solo su menu, popover e dialoghi.
 
 ### Shadow Vocabulary
-- **Appoggio** (`box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05)`, shadow-xs): campi, bottoni outline, card.
+- **Goccia** (`box-shadow: 0 1px 2px color-mix(in oklch, var(--honey-3) 35%, transparent)`): bottone primario.
+- **Appoggio** (`box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05)`, shadow-xs): campi, bottoni outline.
 - **Sospensione** (shadow-md / shadow-lg di Tailwind): menu a tendina, select, popover.
 
 ### Named Rules
-**The Filetto Rule.** Un contenitore dell'app si separa con un bordo di 1px nel colore border e i divisori tra righe sono filetti, non ombre. L'ombra resta agli elementi che galleggiano.
+**The Filetto Rule.** Un contenitore dell'app si separa con un bordo di 1px nel colore border e i divisori tra righe sono filetti, non ombre. L'ombra resta agli elementi che galleggiano e al bottone primario.
 
 ## Shapes
 
-Raggio piccolo e coerente, derivato da una sola variabile (0.5rem). I contenitori di pagina (striscia, liste, tabella, schede bordate) usano 8px; bottoni, campi, voci di menu e iniziali utente 6.4px; card e dialoghi 11.2px; i badge sono pillole; il pallino di stato è un cerchio di 8px (10px accanto al titolo del sito). Il marchio è un quadrato arrotondato (raggio 7 su 32) con sei celle esagonali (punta in alto, angoli arrotondati) in impaccamento a nido d'ape, disposte a piramide 1-2-3 come una "A", la cella in cima in ambra.
+Raggio piccolo e coerente, derivato da una sola variabile (0.5rem). I contenitori di pagina usano 8px; bottoni, campi, voci di menu, avatar del sito e tessere icona 6.4px; card e dialoghi 11.2px; badge e pillole di stato sono pillole piene; pallino di stato e barra dello spazio sono arrotondati al massimo. Il marchio è un quadrato arrotondato (raggio 7 su 32) in inchiostro pietra con sei celle esagonali (punta in alto, angoli arrotondati) a piramide 1-2-3 come una "A", la cella in cima in ambra. Gli esagoni restano nel marchio.
 
 ## Components
 
 ### Buttons
-Compatti e sobri, altezza 36px, testo 14px medio, con icona lucide a sinistra quando l'azione crea qualcosa.
+Compatti, altezza 36px, testo 14px medio, con icona lucide a sinistra quando l'azione crea qualcosa.
 - **Shape:** angoli lievemente arrotondati (6.4px).
-- **Primary:** riempimento grafite e testo bianco (inverso in scuro); hover all'80% di opacità. Per l'azione principale della vista (Nuovo sito, Crea sito).
+- **Primary:** gradiente `bg-honey` con testo inchiostro pietra e ombra Goccia; hover a luminosità 105%. Per l'azione principale della vista (Nuovo sito, Crea sito).
 - **Outline:** fondo pagina, bordo, ombra minima; hover su nebbia.
+- **Secondary:** fondo crema, hover scurito del 5% verso il testo.
 - **Ghost:** trasparente, hover su nebbia; per azioni di riga e icone.
 - **Destructive:** fondo rosso al 10% con testo rosso, non un blocco pieno.
-- **Press / Focus:** alla pressione scende di 1px; focus con anello di 3px in ring al 50%.
+- **Press / Focus:** alla pressione scende di 1px; focus con anello di 3px in ambra al 50%.
 
 ### Badges
-- **Style:** pillola alta 20px, testo 12px medio. Secondary (nebbia) per conteggi come gli aggiornamenti in attesa; destructive tinto per lo stato "Errore"; outline per gli altri stati del ciclo di vita.
+- **Style:** pillola alta 20px, testo 12px medio. Secondary (crema) per conteggi come gli aggiornamenti in attesa.
+
+### Status Pill
+Stato in parole: pillola piena, icona lucide 12px (tratto 2.5) più parola 12px media, padding 2px 8px 2px 6px. Online: segno di spunta su success-soft; attenzione: cerchio con punto esclamativo su warning-soft; giù: X su destructive-soft; in corso: cerchio di caricamento che ruota solo con motion-safe; spento: pausa; in attesa: cerchio tratteggiato. Sta nella colonna Stato della tabella e accanto al titolo del sito.
+
+### Status Dot
+Cerchio pieno di 8px colorato dal livello di salute, con nome accessibile e tooltip. Il blu "in corso" pulsa solo con motion-safe. Compare in barra laterale, palette ⌘K e, a 10px con anello del fondo, sull'angolo dell'avatar nella lista mobile.
+
+### Site Avatar
+Tessera di 28px, raggio 6.4px, bordo, fondo crema miele, iniziale del sito 12px semibold. Apre ogni riga di sito.
+
+### Stat Strip
+Una riga di quattro celle bordate in un unico contenitore bianco (due colonne su telefono). Sopra: tessera icona di 24px in `bg-honey-soft` con icona 14px ed etichetta 12px muted; sotto: valore 20px semibold tabulare. Il valore si colora solo se c'è un problema (destructive o warning-text).
+
+### Usage Bar
+Binario muted alto 6px a pillola, riempimento `bg-honey`, che passa ad arancio attenzione oltre il 75% della soglia d'avviso; a destra la misura in 12px tabulare.
+
+### Row List / Activity List
+Lista bordata con divisori, una riga per elemento: pallino, icona o tessera icona (28px, fondo muted) a sinistra, nome in medio e descrizione muted al centro, data 12px a destra. È la forma degli avvisi aperti, dell'attività recente e della lista mobile dei siti.
+
+### Settings Section / Setting Row
+Titolo di sezione 14px medio con descrizione 12px muted, poi un riquadro bianco bordato con righe divise da filetti. Ogni riga: etichetta media e spiegazione muted a sinistra, controlli a destra (sotto, su telefono).
+
+### Response Chart
+Card con padding 16px: linea di 2px in miele bruciato su un'area che sfuma il miele ambra dal 35% a 0; assi in mono 11px muted. Lo spazio sotto ripete la barra: file in `bg-honey`, database in honey-3.
 
 ### Cards / Containers
 - **Corner Style:** 8px per i contenitori dell'app, 11.2px per le card della libreria.
-- **Background:** quello della pagina.
-- **Shadow Strategy:** nessuna per i contenitori dell'app (vedi Elevation & Depth).
+- **Background:** card (bianco), sopra la velatura.
+- **Shadow Strategy:** nessuna (vedi Elevation & Depth).
 - **Border:** 1px border; divisori interni dello stesso colore.
-- **Internal Padding:** 12px per 16px per righe e celle.
+- **Internal Padding:** 12px per 16px per righe e celle, 16px per le card del monitor.
 
 ### Inputs / Fields
 - **Style:** alti 36px, fondo trasparente, bordo input, raggio 6.4px, ombra minima.
-- **Focus:** bordo ring più anello di 3px in ring al 50%.
+- **Focus:** bordo ambra più anello di 3px in ambra al 50%.
 - **Error / Disabled:** bordo e anello destructive con aria-invalid; disabilitato al 50% di opacità.
 
 ### Navigation
-- **Barra laterale:** voci a 14px con icona lucide da 16px, raggio 6.4px, padding 8px; hover e voce attiva su grigio selezione, attiva anche in peso medio. Le voci dei siti sono compatte e portano il pallino di stato al posto dell'icona. Etichette di gruppo ("Siti", "Amministrazione") in piccolo e muted.
-- **Schede del sito:** variante a linea, testo 14px medio al 60%; la scheda attiva va a piena intensità con una linea di 2px sotto.
+- **Barra laterale:** voci a 14px con icona lucide da 16px, raggio 6.4px, padding 8px; hover su crema miele, voce attiva su `bg-honey-soft` in peso medio. Le voci dei siti portano il pallino di stato al posto dell'icona. Etichette di gruppo in piccolo e muted.
+- **Ricerca ⌘K:** in cima alla barra, un campo finto alto 36px (fondo pagina, bordo, icona di ricerca, "Cerca siti e azioni", tasto ⌘K in mono 11px) che apre la palette dei comandi con siti (pallino e stato) e azioni.
+- **Schede del sito:** variante a linea, testo 14px medio al 60%; la scheda attiva va a piena intensità con una linea ambra (primary) di 2px sotto.
 - **Telefono:** foglio laterale dal pulsante menu, chiuso a ogni cambio di pagina.
-
-### Status Dot
-Il componente firma: cerchio pieno di 8px colorato dal livello di salute, con nome accessibile ed etichetta in tooltip. Il blu "in corso" pulsa solo se l'utente non ha chiesto meno movimento. Compare identico in barra laterale, tabella, lista mobile e titolo del sito.
-
-### Stat Strip
-Una riga di quattro celle bordate in un unico contenitore (due colonne su telefono): etichetta 12px muted sopra, valore 20px semibold tabulare sotto. Il valore si colora solo se c'è un problema.
-
-### Row List
-Lista bordata con divisori, una riga per elemento: pallino o icona a sinistra, nome in medio e sottoriga muted 12px al centro, data o azioni a destra. È la forma mobile della tabella dei siti e la forma degli avvisi aperti.
 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** prendere lo stato di un sito da `health()` e mostrarlo con il pallino, sempre con la stessa mappa di colori.
+- **Do** prendere lo stato di un sito da `health()` e mostrarlo con il pallino o con la pillola icona + parola, sempre con la stessa mappa.
 - **Do** ordinare i siti con i problemi in testa (giù, attenzione, in corso, in attesa, spento, online).
-- **Do** separare i contenitori con un bordo di 1px e raggio 8px, senza ombra.
+- **Do** usare `bg-honey` per l'azione principale della vista e `bg-honey-soft` per la selezione, con testo inchiostro pietra.
+- **Do** separare i contenitori con fondo card, bordo di 1px e raggio 8px, senza ombra.
 - **Do** usare Geist Mono per misure e identificatori e lasciare le cifre tabulari ai dati.
 - **Do** dare a ogni tabella una forma a lista per telefono, con le stesse informazioni essenziali.
-- **Do** tenere l'ambra di marca dentro il marchio.
 
 ### Don't:
-- **Don't** usare il tema api o miele come costume: niente favi, gocce di miele o api decorative nell'interfaccia; il marchio esagonale è l'unico riferimento, e gli esagoni restano nel marchio.
-- **Don't** usare gradienti o metriche finte da dashboard SaaS generica.
-- **Don't** usare warning, success o info come colore del testo su fondo chiaro: sotto 4.5:1. Per un'avvertenza in testo usa `text-warning-text`.
-- **Don't** usare un colore di stato per decorare o per distinguere categorie che non sono stati.
+- **Don't** usare il tema api come illustrazione o decorazione: niente favi, gocce o api disegnate; gli esagoni restano nel marchio.
+- **Don't** usare il miele per segnalare un problema, né l'arancio di stato (o le sue varianti -text e -soft) per decorare: miele è azione e marchio, arancio è attenzione.
+- **Don't** mettere gradienti fuori dai posti della Miele sulle Azioni Rule (testo, bordi, card intere, fondi di sezione).
+- **Don't** usare warning, success o info pieni come colore del testo: usa success-text, warning-text o destructive.
+- **Don't** usare metriche finte o banner promozionali da dashboard SaaS generica.
 - **Don't** aggiungere ombre a liste, tabelle o strisce dell'app.
 - **Don't** aggiungere un clic o uno scroll a un'azione frequente per far posto a un elemento visivo.

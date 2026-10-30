@@ -169,7 +169,7 @@
 		{#each summary as item, i (item.label)}
 			<div class={['flex flex-col gap-1.5 px-4 py-3', i % 2 === 1 && 'border-l', i >= 2 && 'border-t sm:border-t-0', i === 2 && 'sm:border-l']}>
 				<dt class="text-muted-foreground flex items-center gap-2 text-xs">
-					<span class="bg-honey-soft text-warning-text flex size-6 items-center justify-center rounded-md" aria-hidden="true"><item.icon class="size-3.5" /></span>
+					<span class="bg-honey-soft text-honey-ink flex size-6 items-center justify-center rounded-md" aria-hidden="true"><item.icon class="size-3.5" /></span>
 					{item.label}
 				</dt>
 				<dd class={['text-xl font-semibold tabular-nums', item.tone]}>{item.value}</dd>

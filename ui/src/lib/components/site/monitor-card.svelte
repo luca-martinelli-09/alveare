@@ -71,7 +71,7 @@
 				</defs>
 				<line x1="0" y1={H} x2={W} y2={H} stroke="var(--border)" />
 				<polygon points={chart.area} fill="url(#honey-area)" />
-				<polyline points={chart.line} fill="none" stroke="var(--honey-3)" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+				<polyline points={chart.line} fill="none" stroke="var(--honey-ink)" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
 				{#each chart.fails as fx, i (i)}
 					<rect x={fx - 2} y={H + 1} width="4" height="5" fill="var(--destructive)" />
 				{/each}
@@ -111,7 +111,7 @@
 			<div class="bg-muted flex h-1.5 overflow-hidden rounded-full" aria-hidden="true">
 				{#if m?.usage}
 					<div class="bg-honey h-full" style:width={`${Math.min(100, ((m.usage.files_bytes ?? 0) / limit) * 100)}%`}></div>
-					<div class="bg-honey-3 h-full" style:width={`${Math.min(100, ((m.usage.db_bytes ?? 0) / limit) * 100)}%`}></div>
+					<div class="bg-honey-1 h-full" style:width={`${Math.min(100, ((m.usage.db_bytes ?? 0) / limit) * 100)}%`}></div>
 				{/if}
 			</div>
 			{#if m?.usage}<p class="text-muted-foreground text-xs">File {formatBytes(m.usage.files_bytes)} · database {formatBytes(m.usage.db_bytes)}</p>{/if}
