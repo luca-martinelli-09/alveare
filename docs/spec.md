@@ -44,7 +44,7 @@ Reti
 caddy
 caddy:2
 Reverse proxy HTTP, file statici, inoltro PHP ai socket FPM
-hosting, cloudflared
+control, cloudflared (non hosting: i siti non lo raggiungono dall'interno)
 php
 immagine custom basata su php:8.5-fpm
 Un pool FPM per sito, WP-CLI incluso

@@ -80,7 +80,9 @@ services:
       - ./data/logs:/srv/logs
       - ./data/run/php:/run/php
       - ./data/run/caddy:/run/caddy
-    networks: [hosting, control, cloudflared]
+    # Niente rete hosting: PHP lo raggiunge Caddy dai socket, mai il contrario. Così il codice dei siti
+    # non arriva al pannello passando da Caddy né falsifica CF-Connecting-IP.
+    networks: [control, cloudflared]
     depends_on:
       panel: { condition: service_healthy }
 

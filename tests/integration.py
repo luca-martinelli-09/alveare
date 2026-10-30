@@ -257,6 +257,11 @@ def main():
                                 "echo @file_get_contents('http://panel:8080/healthz') === false ? 'no' : 'si';"],
                                cwd=work, capture_output=True, text=True).stdout
         assert reach == "no", "il codice PHP raggiunge il pannello"
+        # Nemmeno passando da Caddy (salterebbe Cloudflare Access e falsificherebbe CF-Connecting-IP).
+        reach = subprocess.run([*compose, "exec", "-T", "php", "php", "-r",
+                                "echo @file_get_contents('http://caddy/') === false ? 'no' : 'si';"],
+                               cwd=work, capture_output=True, text=True).stdout
+        assert reach == "no", "il codice PHP raggiunge Caddy dall'interno"
 
         status, _ = page("sona.test", "/wp-content/uploads/x.php")
         assert status == 403, f"php in uploads: {status}"

@@ -8,7 +8,9 @@ pub const SOCKET_DIR: &str = "/run/php";
 /// Gli UID dei siti partono da qui: sotto ci sono solo utenti di sistema.
 pub const FIRST_SITE_UID: u32 = 20000;
 
-const DISABLED_FUNCTIONS: &str = "exec,shell_exec,system,passthru,proc_open,popen";
+// pcntl_exec avvierebbe un programma fuori da open_basedir; senza putenv non si imposta LD_PRELOAD
+// per mail(), che resta (WordPress senza SMTP ci ricade) ma non ha sendmail né sendmail_path modificabile.
+const DISABLED_FUNCTIONS: &str = "exec,shell_exec,system,passthru,proc_open,popen,pcntl_exec,pcntl_fork,pcntl_signal,pcntl_alarm,pcntl_waitpid,putenv";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhpSettings {
@@ -49,8 +51,25 @@ pub fn valid_runtime(name: &str) -> bool {
 }
 
 /// Valori che reggono l'isolamento tra siti: nessun override li tocca.
-const PROTECTED_INI: [&str; 9] =
-    ["open_basedir", "disable_functions", "disable_classes", "error_log", "session.save_path", "upload_tmp_dir", "sys_temp_dir", "user_dir", "doc_root"];
+/// Anche quelli che caricano codice o lanciano comandi (estensioni, sendmail, file anteposti).
+const PROTECTED_INI: [&str; 16] = [
+    "open_basedir",
+    "disable_functions",
+    "disable_classes",
+    "error_log",
+    "session.save_path",
+    "upload_tmp_dir",
+    "sys_temp_dir",
+    "user_dir",
+    "doc_root",
+    "sendmail_path",
+    "mail.force_extra_parameters",
+    "extension",
+    "zend_extension",
+    "extension_dir",
+    "auto_prepend_file",
+    "auto_append_file",
+];
 
 /// Override globale `conf.d/zz-custom.ini`: solo `chiave = valore`, mai i valori che reggono
 /// l'isolamento (nemmeno quelli di opcache che separano gli script dei siti).
@@ -200,7 +219,7 @@ mod tests {
     #[test]
     fn global_ini_accepts_plain_settings_only() {
         assert_eq!(parse_global_ini("; nota\nmax_input_vars = 3000\nopcache.memory_consumption=256\n").unwrap(), ["max_input_vars = 3000", "opcache.memory_consumption = 256"]);
-        for bad in ["disable_functions =", "open_basedir = /", "opcache.validate_root = 0", "opcache.validate_permission=0", "[sezione]", "senza uguale", "Max_Input = 1"] {
+        for bad in ["disable_functions =", "open_basedir = /", "sendmail_path = /bin/sh", "extension = /srv/x.so", "auto_append_file = /x", "opcache.validate_root = 0", "opcache.validate_permission=0", "[sezione]", "senza uguale", "Max_Input = 1"] {
             assert!(parse_global_ini(bad).is_err(), "{bad}");
         }
     }
@@ -228,6 +247,10 @@ mod tests {
             "php_value[error_log] = /srv/sites/altro/x",
             "php_value[x] = a\nuser = root",
             "php_value[a b] = 1",
+            "php_admin_value[sendmail_path] = /srv/sites/x/sh",
+            "php_admin_value[extension] = /srv/sites/x/evil.so",
+            "php_value[auto_prepend_file] = /srv/sites/altro/.env",
+            "php_admin_value[zend_extension] = /tmp/x.so",
         ] {
             assert!(parse_extra(bad).is_err(), "accettata: {bad:?}");
         }
@@ -259,7 +282,11 @@ mod tests {
         assert!(p.contains("\nphp_admin_value[upload_tmp_dir] = /srv/tmp/sona_it\n"));
         assert!(p.contains("\nphp_admin_value[session.save_path] = /srv/tmp/sona_it\n"));
         assert!(p.contains("\nphp_admin_value[sys_temp_dir] = /srv/tmp/sona_it\n"));
-        assert!(p.contains("\nphp_admin_value[disable_functions] = exec,shell_exec,system,passthru,proc_open,popen\n"));
+        let disabled = p.lines().find_map(|l| l.strip_prefix("php_admin_value[disable_functions] = ")).unwrap();
+        // pcntl_exec e putenv (LD_PRELOAD per mail) aggirerebbero gli altri divieti.
+        for f in ["exec", "shell_exec", "system", "passthru", "proc_open", "popen", "pcntl_exec", "pcntl_fork", "putenv"] {
+            assert!(disabled.split(',').any(|x| x == f), "{f} non disabilitata: {disabled}");
+        }
     }
 
     #[test]
