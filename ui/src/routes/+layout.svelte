@@ -33,7 +33,7 @@
 
 	const links = $derived([
 		{ href: '/', label: 'Siti' },
-		...(session.user?.is_admin ? [{ href: '/users', label: 'Utenti' }] : []),
+		...(session.user?.is_admin ? [{ href: '/users', label: 'Utenti' }, { href: '/server', label: 'Server' }] : []),
 		{ href: '/account', label: 'Account' }
 	]);
 </script>

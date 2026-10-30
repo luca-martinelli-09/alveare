@@ -9,6 +9,7 @@
 	import Database from '$lib/components/site/database.svelte';
 	import Backups from '$lib/components/site/backups.svelte';
 	import Activity from '$lib/components/site/activity.svelte';
+	import Settings from '$lib/components/site/settings.svelte';
 	import { api } from '$lib/api';
 	import type { SiteDetail } from '$lib/components/site/types';
 
@@ -43,14 +44,18 @@
 				<Tabs.Trigger value="database">Database</Tabs.Trigger>
 			{/if}
 			<Tabs.Trigger value="backups">Backup</Tabs.Trigger>
+			{#if detail.can_manage}
+				<Tabs.Trigger value="settings">Impostazioni</Tabs.Trigger>
+			{/if}
 			<Tabs.Trigger value="activity">Attività</Tabs.Trigger>
 		</Tabs.List>
 		<Tabs.Content value="overview"><Overview {detail} onchange={load} /></Tabs.Content>
 		{#if detail.can_manage}
 			<Tabs.Content value="files"><Files {id} /></Tabs.Content>
 			<Tabs.Content value="database"><Database {id} /></Tabs.Content>
+			<Tabs.Content value="settings"><Settings {detail} onchange={load} /></Tabs.Content>
 		{/if}
-		<Tabs.Content value="logs"><Logs {id} /></Tabs.Content>
+		<Tabs.Content value="logs"><Logs {id} canManage={detail.can_manage} /></Tabs.Content>
 		<Tabs.Content value="backups"><Backups {id} canManage={detail.can_manage} /></Tabs.Content>
 		<Tabs.Content value="activity"><Activity {id} /></Tabs.Content>
 	</Tabs.Root>

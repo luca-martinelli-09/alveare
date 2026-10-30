@@ -6,12 +6,15 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
 	import { api } from '$lib/api';
+	import BlockDialog from '$lib/components/app/block-dialog.svelte';
+	import BanIcon from '@lucide/svelte/icons/ban';
 	import PauseIcon from '@lucide/svelte/icons/pause';
 	import PlayIcon from '@lucide/svelte/icons/play';
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import SearchIcon from '@lucide/svelte/icons/search';
 
-	let { id }: { id: number } = $props();
+	let { id, canManage = false }: { id: number; canManage?: boolean } = $props();
+	let blocking = $state<string | null>(null);
 	type Access = { ts: number; ip: string; method: string; uri: string; status: number; duration_ms: number; user_agent: string };
 	type Group = { message: string; count: number; last: string };
 	type Kind = 'access' | 'php-error' | 'php-slow' | 'wp-debug';
@@ -163,7 +166,12 @@
 				{#each entries as e, i (i)}
 					<Table.Row>
 						<Table.Cell class="whitespace-nowrap">{new Date(e.ts * 1000).toLocaleString('it-IT')}</Table.Cell>
-						<Table.Cell><code>{e.ip}</code></Table.Cell>
+						<Table.Cell class="whitespace-nowrap">
+							<code>{e.ip}</code>
+							{#if canManage}
+								<Button variant="ghost" size="icon-sm" aria-label={`Blocca ${e.ip}`} onclick={() => (blocking = e.ip)}><BanIcon /></Button>
+							{/if}
+						</Table.Cell>
 						<Table.Cell class="max-w-md truncate">{e.method} {e.uri}</Table.Cell>
 						<Table.Cell><Badge variant={statusVariant(e.status)}>{e.status}</Badge></Table.Cell>
 						<Table.Cell>{e.duration_ms} ms</Table.Cell>
@@ -176,3 +184,5 @@
 		<pre class="bg-muted max-h-[60vh] overflow-auto rounded p-3 text-xs whitespace-pre-wrap">{lines.join('\n') || 'Nessuna riga.'}</pre>
 	{/if}
 </div>
+
+<BlockDialog siteId={id} bind:ip={blocking} />
