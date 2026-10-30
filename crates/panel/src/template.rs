@@ -152,6 +152,36 @@ pub fn env_file(vars: &Vars) -> Result<String> {
 }
 
 /// Legge un `.env` scritto da `env_file` (o a mano): `KEY='v'`, `KEY="v"` o `KEY=v`.
+/// Un .env scritto a mano: ogni riga NOME=valore (valore tra apici, virgolette o nudo), commenti
+/// con #. Nomi maiuscoli come li legge wp-config.php; il valore deve poter tornare tra apici singoli.
+pub fn parse_env_strict(text: &str) -> std::result::Result<Vars, String> {
+    let mut out = Vars::new();
+    for (i, line) in text.lines().enumerate() {
+        let (n, line) = (i + 1, line.trim());
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (key, value) = line.split_once('=').ok_or(format!("riga {n}: manca ="))?;
+        let key = key.trim();
+        let mut chars = key.chars();
+        if !chars.next().is_some_and(|c| c.is_ascii_uppercase() || c == '_') || !chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_') {
+            return Err(format!("riga {n}: nome non valido"));
+        }
+        let value = value.trim();
+        let value = match value.chars().next() {
+            Some(q @ ('\'' | '"')) => value[1..].strip_suffix(q).ok_or(format!("riga {n}: virgolette non chiuse"))?,
+            _ => value,
+        };
+        if value.contains('\'') {
+            return Err(format!("riga {n}: apice singolo nel valore"));
+        }
+        if out.insert(key.to_string(), value.to_string()).is_some() {
+            return Err(format!("riga {n}: {key} è già definita"));
+        }
+    }
+    Ok(out)
+}
+
 pub fn parse_env(text: &str) -> Vars {
     text.lines()
         .filter(|l| !l.trim_start().starts_with('#'))
@@ -170,6 +200,21 @@ pub fn parse_env(text: &str) -> Vars {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn env_edited_by_hand_is_checked_line_by_line() {
+        let ok = parse_env_strict("# commento\n\nDB_NAME='sona'\nAPI_KEY=\"abc 123\"\n  DEBUG = true  \n").unwrap();
+        assert_eq!(ok, Vars::from([("DB_NAME".into(), "sona".into()), ("API_KEY".into(), "abc 123".into()), ("DEBUG".into(), "true".into())]));
+        for (text, err) in [
+            ("SOLO_NOME", "riga 1: manca ="),
+            ("ok='1'\n", "riga 1: nome non valido"),
+            ("A='1'\nA='2'", "riga 2: A è già definita"),
+            ("A='l'apostrofo'", "riga 1: apice singolo nel valore"),
+            ("A='non chiuso", "riga 1: virgolette non chiuse"),
+        ] {
+            assert_eq!(parse_env_strict(text).unwrap_err(), err, "{text}");
+        }
+    }
 
     #[test]
     fn image_templates_fill_only_an_empty_folder() {

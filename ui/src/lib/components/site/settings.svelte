@@ -13,6 +13,7 @@
 	import { toast } from 'svelte-sonner';
 	import type { SiteDetail } from './types';
 	import EmailCard from './email-card.svelte';
+	import EnvEditor from './env-editor.svelte';
 
 	let { detail, onchange }: { detail: SiteDetail; onchange: () => void } = $props();
 	type Block = { id: number; site_id: number | null; cidr: string; expires_at: number | null; created_at: number };
@@ -147,6 +148,7 @@
 	{/if}
 
 	<EmailCard id={detail.site.id} />
+	{#if session.user?.is_admin}<EnvEditor id={detail.site.id} />{/if}
 
 	<SettingsSection title="IP bloccati">
 		{#each blocks as b (b.id)}
