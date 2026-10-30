@@ -317,6 +317,26 @@ async fn caddy_admin(socket: &Path, method: &str, path: &str, caddyfile: &str) -
 }
 
 /// Il corpo può arrivare in chunked encoding: si ricompone.
+/// Argomenti di un comando da mostrare in un errore (e quindi nel log del job): le password diventano ***,
+/// sia `--admin_password=x` sia `--dbpass x`.
+pub(crate) fn shown_args(args: &[String]) -> String {
+    let secret = |key: &str| key.starts_with("--") && key.to_ascii_lowercase().contains("pass");
+    let mut out = Vec::with_capacity(args.len());
+    let mut hide_next = false;
+    for a in args {
+        out.push(match a.split_once('=') {
+            _ if std::mem::take(&mut hide_next) => "***".to_string(),
+            Some((k, _)) if secret(k) => format!("{k}=***"),
+            None if secret(a) => {
+                hide_next = true;
+                a.clone()
+            }
+            _ => a.clone(),
+        });
+    }
+    out.join(" ")
+}
+
 fn dechunk(body: &[u8]) -> String {
     // Le dimensioni sono in byte e un chunk può finire a metà di un carattere: si ricompone in byte.
     let mut out = Vec::new();
@@ -597,7 +617,7 @@ impl Host for SystemHost {
     async fn wp(&self, slug: &Slug, args: &[String]) -> Result<String> {
         let (ok, output) = self.wp_output(slug, args).await?;
         if !ok {
-            bail!("wp {}: {}", args.join(" "), output.trim());
+            bail!("wp {}: {}", shown_args(args), output.trim());
         }
         Ok(output)
     }
@@ -1023,6 +1043,13 @@ impl Host for SystemHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wp_errors_never_show_passwords() {
+        let args = ["core", "install", "--title=Via dell'Upupa", "--admin_password=KWVFqKfg9X", "--user_pass=abc", "--dbpass", "segreta"].map(String::from);
+        let shown = shown_args(&args);
+        assert_eq!(shown, "core install --title=Via dell'Upupa --admin_password=*** --user_pass=*** --dbpass ***");
+    }
     use alveare_core::php::PhpSettings;
     use std::os::unix::fs::PermissionsExt;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};

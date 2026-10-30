@@ -674,7 +674,9 @@ async fn create_steps<H: Host>(c: &Ctx<H>, req: &CreateSite, site: &Site, undo: 
     }
 
     for args in &commands {
-        c.host.wp(slug, args).await.with_context(|| format!("wp {}", args.first().map_or("", String::as_str)))?;
+        let out = c.host.wp(slug, args).await.with_context(|| format!("wp {}", args.first().map_or("", String::as_str)))?;
+        // Ultima riga di WP-CLI ("Success: …"): se un passo non fa quello che dice, si vede qui.
+        log.push(format!("wp {}: {}", crate::host::shown_args(args), out.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("ok").trim()));
     }
     if !commands.is_empty() {
         // La password non va nel log: resta cifrata e si mostra una volta, entro 24 ore.
