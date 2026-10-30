@@ -91,6 +91,7 @@ pub struct Site {
     pub template: String,
     pub status: SiteStatus,
     pub staging: bool,
+    pub log_retention_days: u32,
     pub settings: PhpSettingsRow,
 }
 
@@ -119,7 +120,7 @@ impl Site {
     }
 }
 
-const SITE_COLUMNS: &str = "id, slug, kind, template, status, staging, memory_limit_mb, upload_max_mb, max_execution_time_s, max_children";
+const SITE_COLUMNS: &str = "id, slug, kind, template, status, staging, log_retention_days, memory_limit_mb, upload_max_mb, max_execution_time_s, max_children";
 
 fn site_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Site> {
     let decode = |e: alveare_core::site::InvalidSlug| StoreError::Db(sqlx::Error::Decode(e.to_string().into()));
@@ -130,6 +131,7 @@ fn site_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Site> {
         template: r.try_get("template")?,
         status: r.try_get::<&str, _>("status")?.parse()?,
         staging: r.try_get("staging")?,
+        log_retention_days: r.try_get("log_retention_days")?,
         settings: PhpSettingsRow {
             memory_limit_mb: r.try_get("memory_limit_mb")?,
             upload_max_mb: r.try_get("upload_max_mb")?,
@@ -248,6 +250,11 @@ impl Store {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    pub async fn set_log_retention(&self, id: i64, days: u32) -> Result<()> {
+        sqlx::query("UPDATE sites SET log_retention_days = ? WHERE id = ?").bind(days).bind(id).execute(&self.pool).await?;
         Ok(())
     }
 
@@ -504,6 +511,7 @@ impl Store {
                 redirects: of(DomainKind::Redirect),
                 suspended: site.status == SiteStatus::Suspended,
                 staging_hash,
+                log_days: site.log_retention_days,
             });
         }
         Ok(out)

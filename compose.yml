@@ -18,7 +18,8 @@ services:
     volumes:
       # Un solo mount: tra sites/, tmp/ e trash/ i file si spostano con un rename.
       - ./data:/srv
-      - ./templates:/srv/templates:ro
+      # Scrivibile: "salva come template" vi crea i template snapshot.
+      - ./templates:/srv/templates
       - ./data/run/caddy:/run/caddy
       - ./data/run/alveare:/run/alveare
     depends_on:

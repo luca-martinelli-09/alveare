@@ -139,6 +139,103 @@ pub fn rotate(path: &Path, max: u64, keep: u32, owner: Option<u32>) -> std::io::
     Ok(true)
 }
 
+/// Il log attuale e quelli ruotati, dal più recente: `php-error.log.1`, `.2`… (pannello) o
+/// `access-<data>.log.gz` (Caddy).
+pub fn log_files(dir: &Path, base: &str) -> Vec<PathBuf> {
+    let stem = base.strip_suffix(".log").unwrap_or(base);
+    let mut numbered: Vec<(u32, PathBuf)> = Vec::new();
+    let mut dated: Vec<PathBuf> = Vec::new();
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Some(n) = name.strip_prefix(&format!("{base}.")).and_then(|n| n.parse().ok()) {
+            numbered.push((n, entry.path()));
+        } else if name.starts_with(&format!("{stem}-")) && (name.ends_with(".log") || name.ends_with(".log.gz")) {
+            dated.push(entry.path());
+        }
+    }
+    numbered.sort();
+    dated.sort();
+    dated.reverse();
+    let current = dir.join(base);
+    current.exists().then_some(current).into_iter().chain(numbered.into_iter().map(|(_, p)| p)).chain(dated).collect()
+}
+
+fn file_lines(path: &Path) -> std::io::Result<Vec<String>> {
+    let f = fs::File::open(path)?;
+    let mut text = Vec::new();
+    if path.extension().is_some_and(|e| e == "gz") {
+        flate2::read::GzDecoder::new(f).read_to_end(&mut text)?;
+    } else {
+        f.take(512 * 1024 * 1024).read_to_end(&mut text)?;
+    }
+    Ok(String::from_utf8_lossy(&text).lines().map(String::from).collect())
+}
+
+/// Righe che soddisfano `keep`, dalla più recente, al massimo `limit`.
+pub fn search(files: &[PathBuf], keep: impl Fn(&str) -> bool, limit: usize) -> std::io::Result<Vec<String>> {
+    let mut out = Vec::new();
+    for f in files {
+        for line in file_lines(f)?.into_iter().rev() {
+            if keep(&line) {
+                out.push(line);
+                if out.len() >= limit {
+                    return Ok(out);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ErrorGroup {
+    pub message: String,
+    pub count: u64,
+    pub last: String,
+}
+
+/// Errori PHP raggruppati per messaggio (senza data), il più frequente prima. Gli stack trace si saltano.
+pub fn php_error_groups(lines: &[String]) -> Vec<ErrorGroup> {
+    let mut groups: Vec<ErrorGroup> = Vec::new();
+    for line in lines {
+        let (when, msg) = match line.strip_prefix('[').and_then(|r| r.split_once("] ")) {
+            Some((w, m)) => (w.to_string(), m),
+            None => (String::new(), line.as_str()),
+        };
+        let rest = msg.trim_start_matches("PHP").trim_start();
+        if msg.starts_with("PHP Stack trace") || rest.split_once(". ").is_some_and(|(n, _)| n.parse::<u32>().is_ok()) || msg.trim().is_empty() {
+            continue;
+        }
+        let message = msg.split_whitespace().collect::<Vec<_>>().join(" ");
+        match groups.iter_mut().find(|g| g.message == message) {
+            Some(g) => {
+                g.count += 1;
+                g.last = when;
+            }
+            None => groups.push(ErrorGroup { message, count: 1, last: when }),
+        }
+    }
+    groups.sort_by(|a, b| b.count.cmp(&a.count));
+    groups
+}
+
+/// Elimina i log ruotati più vecchi di `days` giorni (mai quelli attuali); restituisce quanti.
+pub fn purge_old_logs(dir: &Path, days: u32, now: std::time::SystemTime) -> std::io::Result<usize> {
+    let mut removed = 0;
+    for entry in fs::read_dir(dir)?.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // Ruotati: `<nome>.log.<n>` del pannello o `<nome>-<data>.log[.gz]` di Caddy.
+        let rotated = name.rsplit_once(".log.").is_some_and(|(_, n)| n.parse::<u32>().is_ok() || n == "gz")
+            || name.split_once('-').is_some_and(|(_, d)| d.starts_with(|c: char| c.is_ascii_digit()) && name.ends_with(".log"));
+        let age = entry.metadata()?.modified().ok().and_then(|m| now.duration_since(m).ok()).unwrap_or_default();
+        if rotated && age > Duration::from_secs(u64::from(days) * 86400) {
+            fs::remove_file(entry.path())?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +289,59 @@ mod tests {
         assert_eq!(fs::read_to_string(t.path().join("php-error.log.1")).unwrap(), "x".repeat(100));
         assert_eq!(fs::read_to_string(t.path().join("php-error.log.2")).unwrap(), "uno");
         assert!(!t.path().join("php-error.log.3").exists());
+    }
+
+    #[test]
+    fn log_files_are_current_then_rotated_newest_first() {
+        let t = tempfile::tempdir().unwrap();
+        for f in ["php-error.log", "php-error.log.2", "php-error.log.1", "access.log", "access-2026-10-28T01-00-00.000.log.gz", "access-2026-10-29T01-00-00.000.log.gz", "altro.log"] {
+            fs::write(t.path().join(f), "").unwrap();
+        }
+        let names = |base| log_files(t.path(), base).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(names("php-error.log"), ["php-error.log", "php-error.log.1", "php-error.log.2"]);
+        assert_eq!(names("access.log"), ["access.log", "access-2026-10-29T01-00-00.000.log.gz", "access-2026-10-28T01-00-00.000.log.gz"]);
+    }
+
+    #[test]
+    fn search_reads_rotated_and_gzipped_files_newest_first() {
+        let t = tempfile::tempdir().unwrap();
+        fs::write(t.path().join("access.log"), "a 1.2.3.4 nuova\nb 5.6.7.8\n").unwrap();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(b"c 1.2.3.4 vecchia\n").unwrap();
+        fs::write(t.path().join("access-2026-10-29T01-00-00.000.log.gz"), gz.finish().unwrap()).unwrap();
+        let found = search(&log_files(t.path(), "access.log"), |l| l.contains("1.2.3.4"), 10).unwrap();
+        assert_eq!(found, ["a 1.2.3.4 nuova", "c 1.2.3.4 vecchia"]);
+        assert_eq!(search(&log_files(t.path(), "access.log"), |_| true, 2).unwrap(), ["b 5.6.7.8", "a 1.2.3.4 nuova"]);
+    }
+
+    #[test]
+    fn php_errors_are_grouped_by_message() {
+        let lines = [
+            "[30-Oct-2026 06:00:01 Europe/Rome] PHP Warning:  Undefined variable $x in /srv/sites/a/public/x.php on line 3",
+            "[30-Oct-2026 06:00:05 Europe/Rome] PHP Fatal error:  Uncaught Error: boom in /srv/sites/a/public/y.php:9",
+            "[30-Oct-2026 06:00:05 Europe/Rome] PHP Stack trace:",
+            "[30-Oct-2026 06:00:05 Europe/Rome] PHP   1. {main}() /srv/sites/a/public/y.php:0",
+            "[30-Oct-2026 07:10:00 Europe/Rome] PHP Warning:  Undefined variable $x in /srv/sites/a/public/x.php on line 3",
+        ]
+        .map(String::from);
+        let groups = php_error_groups(&lines);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].message, "PHP Warning: Undefined variable $x in /srv/sites/a/public/x.php on line 3");
+        assert_eq!((groups[0].count, groups[0].last.as_str()), (2, "30-Oct-2026 07:10:00 Europe/Rome"));
+        assert_eq!(groups[1].count, 1);
+    }
+
+    #[test]
+    fn old_rotated_logs_are_purged_but_never_the_current_one() {
+        let t = tempfile::tempdir().unwrap();
+        for f in ["php-error.log", "php-error.log.1", "access-2026-01-01T00-00-00.000.log.gz"] {
+            fs::write(t.path().join(f), "x").unwrap();
+        }
+        let now = std::time::SystemTime::now();
+        assert_eq!(purge_old_logs(t.path(), 30, now).unwrap(), 0);
+        let later = now + Duration::from_secs(31 * 86400);
+        assert_eq!(purge_old_logs(t.path(), 30, later).unwrap(), 2);
+        assert!(t.path().join("php-error.log").exists());
     }
 
     #[tokio::test]

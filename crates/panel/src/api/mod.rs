@@ -247,8 +247,6 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/sites/{id}/files/uploads", post(upload_start::<H>))
         .route("/api/sites/{id}/files/uploads/{upload}", get(upload_status::<H>))
         .route("/api/sites/{id}/files/uploads/{upload}/{n}", put(upload_chunk::<H>).layer(DefaultBodyLimit::max(CHUNK as usize + 1024)))
-        .route("/api/sites/{id}/logs/{kind}", get(read_log::<H>).delete(clear_log::<H>))
-        .route("/api/sites/{id}/logs/{kind}/stream", get(stream_log::<H>))
         .route("/api/sites/{id}/database", get(database_overview::<H>))
         .route("/api/sites/{id}/database/export", get(database_export::<H>))
         .route("/api/sites/{id}/database/import", post(database_import::<H>))
@@ -262,6 +260,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/jobs/{id}", get(get_job::<H>))
         .merge(sites::routes::<H>())
         .merge(imports::routes::<H>())
+        .merge(logs::routes::<H>())
         .with_state(app)
 }
 
@@ -631,95 +630,6 @@ async fn upload_chunk<H: Host>(State(app): State<App<H>>, Path((id, upload, n)):
     Ok(Json(blocking(move || files.upload_chunk(&upload, n, &body)).await?).into_response())
 }
 
-#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-enum LogKind {
-    Access,
-    PhpError,
-    PhpSlow,
-    WpDebug,
-}
-
-const WP_DEBUG_LOG: &str = "public/wp-content/debug.log";
-
-impl LogKind {
-    fn file(self) -> &'static str {
-        match self {
-            LogKind::Access => "access.log",
-            LogKind::PhpError => "php-error.log",
-            LogKind::PhpSlow => "php-slow.log",
-            LogKind::WpDebug => "debug.log",
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct LinesQuery {
-    lines: Option<usize>,
-}
-
-fn log_payload(kind: LogKind, lines: Vec<String>) -> serde_json::Value {
-    if kind == LogKind::Access {
-        let entries: Vec<_> = lines.iter().filter_map(|l| crate::logs::parse_access(l)).collect();
-        json!({ "entries": entries })
-    } else {
-        json!({ "lines": lines })
-    }
-}
-
-async fn read_log<H: Host>(State(app): State<App<H>>, Path((id, kind)): Path<(i64, LogKind)>, Query(q): Query<LinesQuery>, m: Method, h: HeaderMap) -> ApiResult<Response> {
-    let user = caller(&app, &m, &h).await?;
-    require_site(&app, &user, id, Need::Read).await?;
-    let site = app.ctx.store.site(id).await?;
-    let n = q.lines.unwrap_or(200).min(5000);
-    let lines = if kind == LogKind::WpDebug {
-        // debug.log sta nella cartella del sito: si legge con cap-std, mai seguendo link verso fuori.
-        let files = SiteFiles::open(&app.paths, &site.slug, None)?;
-        match files.open_read(WP_DEBUG_LOG) {
-            Ok(f) => blocking(move || crate::logs::tail_file(f, n).map_err(FileError::Io)).await?,
-            Err(FileError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => vec![],
-            Err(e) => return Err(e.into()),
-        }
-    } else {
-        let path = app.paths.logs.join(site.slug.as_str()).join(kind.file());
-        blocking(move || crate::logs::tail(&path, n).map_err(FileError::Io)).await?
-    };
-    Ok(Json(log_payload(kind, lines)).into_response())
-}
-
-/// Solo il debug.log di WordPress si svuota dal pannello; gli altri ruotano da soli.
-async fn clear_log<H: Host>(State(app): State<App<H>>, Path((id, kind)): Path<(i64, LogKind)>, m: Method, h: HeaderMap) -> ApiResult<Response> {
-    let user = caller(&app, &m, &h).await?;
-    if kind != LogKind::WpDebug {
-        return Err(ApiError::bad_request("si può svuotare solo il debug.log di WordPress"));
-    }
-    let files = site_files(&app, &user, id).await?;
-    blocking(move || files.write(WP_DEBUG_LOG, b"")).await?;
-    app.auth.audit(Some(user.id), "log.clear", Some(id), "debug.log").await?;
-    Ok(Json(json!({})).into_response())
-}
-
-async fn stream_log<H: Host>(State(app): State<App<H>>, Path((id, kind)): Path<(i64, LogKind)>, m: Method, h: HeaderMap) -> ApiResult<Response> {
-    use axum::response::sse::{Event, KeepAlive, Sse};
-    use tokio_stream::StreamExt;
-    let user = caller(&app, &m, &h).await?;
-    require_site(&app, &user, id, Need::Read).await?;
-    if kind == LogKind::WpDebug {
-        return Err(ApiError::bad_request("il debug.log non si segue in tempo reale"));
-    }
-    let site = app.ctx.store.site(id).await?;
-    let path = app.paths.logs.join(site.slug.as_str()).join(kind.file());
-    let rx = crate::logs::follow(path, std::time::Duration::from_secs(1));
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(move |line| {
-        let data = match kind {
-            LogKind::Access => crate::logs::parse_access(&line).map(|e| serde_json::to_string(&e).expect("serializzazione")),
-            _ => Some(serde_json::to_string(&line).expect("serializzazione")),
-        };
-        Ok::<_, std::convert::Infallible>(Event::default().data(data.unwrap_or_else(|| "null".into())))
-    });
-    Ok(Sse::new(stream).keep_alive(KeepAlive::default()).into_response())
-}
-
 async fn database_overview<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
     require_site(&app, &user, id, Need::Manage).await?;
@@ -961,6 +871,7 @@ async fn get_job<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Met
 }
 
 mod imports;
+mod logs;
 mod sites;
 
 #[cfg(test)]

@@ -24,6 +24,7 @@ pub(super) fn staging_json(password: Option<String>) -> serde_json::Value {
 struct UpdateSite {
     suspended: Option<bool>,
     staging: Option<bool>,
+    log_retention_days: Option<u32>,
 }
 
 async fn update_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(r): Json<UpdateSite>) -> ApiResult<Response> {
@@ -37,6 +38,14 @@ async fn update_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m:
     if let Some(on) = r.staging {
         flows::set_staging(&app.ctx, id, on).await?;
         app.auth.audit(Some(user.id), if on { "site.staging.on" } else { "site.staging.off" }, Some(id), "").await?;
+    }
+    if let Some(days) = r.log_retention_days {
+        if !(1..=365).contains(&days) {
+            return Err(ApiError::bad_request("conservazione dei log tra 1 e 365 giorni"));
+        }
+        app.ctx.store.set_log_retention(id, days).await?;
+        flows::sync_caddy(&app.ctx).await?;
+        app.auth.audit(Some(user.id), "site.log_retention", Some(id), &format!("{days} giorni")).await?;
     }
     let site = app.ctx.store.site(id).await?;
     Ok(Json(json!({ "site": site, "staging": staging_json(flows::staging_password(&app.ctx, id).await?) })).into_response())
@@ -230,6 +239,20 @@ mod tests {
         let (_, audit, _) = call(&t, req("GET", &format!("/api/sites/{id}/audit"), Some(&admin), None)).await;
         let actions: Vec<&str> = audit.as_array().unwrap().iter().map(|a| a["action"].as_str().unwrap()).collect();
         assert!(actions.contains(&"site.suspend") && actions.contains(&"site.resume"), "{actions:?}");
+    }
+
+    #[tokio::test]
+    async fn log_retention_is_set_per_site_within_bounds() {
+        let t = setup().await;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let id = create_site(&t, &admin, "sona.it").await;
+        let (_, body, _) = call(&t, req("GET", &format!("/api/sites/{id}"), Some(&admin), None)).await;
+        assert_eq!(body["site"]["log_retention_days"], 30);
+        let (s, body, _) = call(&t, req("PATCH", &format!("/api/sites/{id}"), Some(&admin), Some(json!({"log_retention_days": 14})))).await;
+        assert_eq!((s, body["site"]["log_retention_days"].as_u64()), (StatusCode::OK, Some(14)));
+        assert_eq!(t.app.ctx.store.caddy_sites().await.unwrap()[0].log_days, 14);
+        let (s, _, _) = call(&t, req("PATCH", &format!("/api/sites/{id}"), Some(&admin), Some(json!({"log_retention_days": 0})))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

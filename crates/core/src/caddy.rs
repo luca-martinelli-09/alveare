@@ -15,6 +15,8 @@ pub struct CaddySite {
     pub suspended: bool,
     /// Hash bcrypt della password dello staging (utente `staging`).
     pub staging_hash: Option<String>,
+    /// Giorni di conservazione degli access log ruotati.
+    pub log_days: u32,
 }
 
 const MAINTENANCE_PAGE: &str = "<!doctype html><html lang=\"it\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sito in manutenzione</title><body style=\"font-family:system-ui;text-align:center;padding:4rem 1rem\"><h1>Sito in manutenzione</h1><p>Torniamo online a breve.</p></body></html>";
@@ -85,7 +87,7 @@ fn render_site(out: &mut String, site: &CaddySite) {
 		output file {LOGS_DIR}/{s}/access.log {{
 			roll_size 10MiB
 			roll_keep 5
-			roll_keep_for 720h
+			roll_keep_for {keep}h
 		}}
 		format json
 	}}
@@ -98,6 +100,7 @@ fn render_site(out: &mut String, site: &CaddySite) {
 }}
 ",
             socket = socket_path(&site.slug),
+            keep = site.log_days * 24,
         )
         .unwrap();
     }
@@ -123,6 +126,7 @@ mod tests {
             redirects: vec![d("www.sona.it")],
             suspended: false,
             staging_hash: None,
+            log_days: 30,
         }
     }
 
@@ -174,6 +178,14 @@ mod tests {
     fn access_log_is_json_rotated_in_site_folder() {
         let c = render_caddyfile(&cfg());
         assert!(c.contains("\tlog {\n\t\toutput file /srv/logs/sona_it/access.log {\n\t\t\troll_size 10MiB\n\t\t\troll_keep 5\n\t\t\troll_keep_for 720h\n\t\t}\n\t\tformat json\n\t}\n"));
+    }
+
+    #[test]
+    fn access_log_retention_follows_the_site_setting() {
+        let mut site = sona();
+        site.log_days = 7;
+        let c = render_caddyfile(&CaddyConfig { panel_host: None, adminer_host: None, sites: vec![site] });
+        assert!(c.contains("\t\t\troll_keep_for 168h\n"), "{c}");
     }
 
     #[test]
