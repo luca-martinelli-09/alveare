@@ -46,7 +46,7 @@
 	<div class="flex min-w-0 flex-col gap-1">
 		<h1 class="truncate text-2xl font-semibold tracking-tight">{template?.name ?? id}</h1>
 		<p class="text-muted-foreground text-sm">
-			<span class="font-mono">templates/{id}</span> · {template?.snapshot ? 'snapshot di un sito' : 'ricetta'} ·
+			<span class="font-mono">templates/{id}</span> · {template?.snapshot ? 'copia di un sito: file e database' : 'installazione: file e comandi'} ·
 			<code class="text-foreground">template.toml</code> descrive il template, <code class="text-foreground">files/</code> diventa la cartella del sito.
 		</p>
 	</div>

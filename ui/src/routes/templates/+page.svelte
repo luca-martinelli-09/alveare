@@ -50,7 +50,7 @@
 	}
 </script>
 
-<PageHeader title="Template" description="Il punto di partenza dei siti nuovi: file, dump facoltativo e comandi WP-CLI dopo la creazione.">
+<PageHeader title="Template" description="Il punto di partenza dei siti nuovi. Installazione: i file del template, poi i comandi (WordPress scaricato al momento). Copia di un sito: file e database salvati da un sito esistente.">
 	{#snippet actions()}
 		<Dialog.Root bind:open>
 			<Dialog.Trigger>
@@ -132,7 +132,7 @@
 				<Table.Row>
 					<Table.Head class="pl-4">Template</Table.Head>
 					<Table.Head class="hidden sm:table-cell">Tipo</Table.Head>
-					<Table.Head>Origine</Table.Head>
+					<Table.Head>Come crea i siti</Table.Head>
 					<Table.Head class="hidden pr-4 text-right md:table-cell">Comandi dopo la creazione</Table.Head>
 				</Table.Row>
 			</Table.Header>
@@ -147,7 +147,12 @@
 						</Table.Cell>
 						<Table.Cell class="hidden sm:table-cell">{kinds[t.kind] ?? t.kind}</Table.Cell>
 						<Table.Cell>
-							<Badge variant={t.snapshot ? 'secondary' : 'outline'}>{t.snapshot ? 'Snapshot di un sito' : 'Ricetta'}</Badge>
+							<Badge
+								variant={t.snapshot ? 'secondary' : 'outline'}
+								title={t.snapshot ? 'Copia file e database del sito da cui è stato salvato' : 'Parte dai file del template e installa con i comandi'}
+							>
+								{t.snapshot ? 'Copia di un sito' : 'Installazione'}
+							</Badge>
 						</Table.Cell>
 						<Table.Cell class="text-muted-foreground hidden pr-4 text-right md:table-cell">{t.steps || '–'}</Table.Cell>
 					</Table.Row>
