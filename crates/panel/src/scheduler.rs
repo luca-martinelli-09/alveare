@@ -27,6 +27,8 @@ pub enum Task {
     PanelBackup,
     RotateLogs,
     Integrity(i64),
+    /// Aggiornamenti di WordPress secondo la regola del sito, dopo il backup notturno.
+    NightlyUpdate(i64),
     /// Blocchi IP scaduti: si tolgono dal Caddyfile.
     ExpireBlocks,
     /// Restore di prova mensile su un dominio interno: un backup mai ripristinato non conta.
@@ -102,6 +104,12 @@ pub fn due(now: DateTime<Tz>, sites: &[SiteRef]) -> Vec<Task> {
         if h == 5 && m == (s.id * 7) % 60 {
             out.push(Task::Integrity(s.id));
         }
+        // 45 minuti dopo il backup del sito.
+        let (bh, bm) = crate::backup::backup_slot(s.id);
+        let after = bh * 60 + bm + 45;
+        if (h as u32, m as u32) == (after / 60, after % 60) {
+            out.push(Task::NightlyUpdate(s.id));
+        }
     }
     out
 }
@@ -138,6 +146,7 @@ pub async fn run<H: Host>(app: App<H>) {
                     Task::Integrity(id) => (id, "integrity"),
                     Task::RestoreTest(id) => (id, "restore-test"),
                     Task::ExpireBlocks => (0, "blocks"),
+                    Task::NightlyUpdate(id) => (id, "update"),
                     Task::RotateLogs => (0, "rotate"),
                     Task::Cleanup => (0, "cleanup"),
                 };
@@ -193,6 +202,20 @@ async fn execute<H: Host>(app: &App<H>, task: Task) -> anyhow::Result<()> {
         }
         Task::RestoreTest(_) => {}
         Task::Cleanup => cleanup(app).await?,
+        Task::NightlyUpdate(id) => {
+            let (ctx, auth, app2) = (app.ctx.clone(), app.auth.clone(), app.clone());
+            app.jobs
+                .spawn("wordpress.nightly", Some(id), None, move |mut log| async move {
+                    for change in crate::wordpress::nightly(&ctx, id, &mut log).await? {
+                        auth.audit(None, "wordpress.update", Some(id), &format!("automatico: {change}")).await?;
+                    }
+                    let site = ctx.store.site(id).await?;
+                    let st = crate::wordpress::status(&ctx, &site.slug).await?;
+                    crate::api::remember_updates(&app2, id, &st).await.map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                    Ok(log)
+                })
+                .await?;
+        }
         Task::ExpireBlocks => {
             if app.ctx.store.expire_blocks(chrono::Utc::now().timestamp()).await? > 0 {
                 flows::sync_caddy(&app.ctx).await?;
@@ -336,6 +359,17 @@ mod tests {
         assert_eq!(runs.len(), 2, "{runs:?}");
         assert!(runs.iter().all(|(d, h, _)| *d <= 28 && *h == 6), "dopo i backup notturni, mai oltre il 28: {runs:?}");
         assert_ne!(runs[0].0, runs[1].0, "siti diversi in giorni diversi");
+    }
+
+    #[test]
+    fn wordpress_updates_run_once_a_night_after_the_backup() {
+        let sites = [wp(1), SiteRef { id: 2, wordpress: false, active: true }];
+        let all: Vec<(u32, u32, Task)> = (0..24 * 60).flat_map(|i| due(at(i / 60, i % 60), &sites).into_iter().map(move |t| (i / 60, i % 60, t))).collect();
+        let updates: Vec<_> = all.iter().filter(|(_, _, t)| matches!(t, Task::NightlyUpdate(_))).collect();
+        assert_eq!(updates.len(), 1, "solo i siti WordPress");
+        let (bh, bm) = crate::backup::backup_slot(1);
+        let (h, m, _) = updates[0];
+        assert!((h * 60 + m) > bh * 60 + bm, "dopo il backup");
     }
 
     #[test]

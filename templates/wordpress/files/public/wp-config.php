@@ -36,16 +36,9 @@ if (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https') {
 define('DISABLE_WP_CRON', true);
 define('FS_METHOD', 'direct');
 
-switch ($env('ALVEARE_UPDATE_RULE', 'security')) {
-    case 'auto':
-        define('WP_AUTO_UPDATE_CORE', true);
-        break;
-    case 'manual':
-        define('AUTOMATIC_UPDATER_DISABLED', true);
-        break;
-    default:
-        define('WP_AUTO_UPDATE_CORE', 'minor');
-}
+// Gli aggiornamenti li fa il pannello di notte, dopo il backup e secondo la regola del sito
+// (ALVEARE_UPDATE_RULE), registrando le versioni nell'audit log: l'updater di WordPress è spento.
+define('AUTOMATIC_UPDATER_DISABLED', true);
 
 define('WP_DEBUG', $env('WP_DEBUG') === 'true');
 define('WP_DEBUG_LOG', $env('WP_DEBUG') === 'true');

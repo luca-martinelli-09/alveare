@@ -269,6 +269,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .merge(logs::routes::<H>())
         .merge(config::routes::<H>())
         .merge(blocks::routes::<H>())
+        .merge(wordpress::routes::<H>())
         .with_state(app)
 }
 
@@ -907,6 +908,8 @@ mod config;
 mod imports;
 mod logs;
 mod sites;
+mod wordpress;
+pub(crate) use wordpress::remember as remember_updates;
 
 #[cfg(test)]
 pub(crate) mod testkit;

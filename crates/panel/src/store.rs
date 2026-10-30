@@ -47,6 +47,7 @@ text_enum!(SiteKind { Wordpress = "wordpress", Php = "php", Laravel = "laravel" 
 text_enum!(SiteStatus { Creating = "creating", Active = "active", Suspended = "suspended", Error = "error", Deleting = "deleting" });
 text_enum!(DomainKind { Primary = "primary", Alias = "alias", Redirect = "redirect" });
 text_enum!(OverrideKind { Php = "php", Caddy = "caddy" });
+text_enum!(UpdateRule { Auto = "auto", Security = "security", Manual = "manual" });
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Override {
@@ -111,6 +112,7 @@ pub struct Site {
     pub template: String,
     pub status: SiteStatus,
     pub staging: bool,
+    pub update_rule: UpdateRule,
     pub log_retention_days: u32,
     pub settings: PhpSettingsRow,
 }
@@ -148,7 +150,7 @@ impl Site {
     }
 }
 
-const SITE_COLUMNS: &str = "id, slug, kind, template, status, staging, log_retention_days, memory_limit_mb, upload_max_mb, max_execution_time_s, max_children";
+const SITE_COLUMNS: &str = "id, slug, kind, template, status, staging, update_rule, log_retention_days, memory_limit_mb, upload_max_mb, max_execution_time_s, max_children";
 
 fn site_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Site> {
     let decode = |e: alveare_core::site::InvalidSlug| StoreError::Db(sqlx::Error::Decode(e.to_string().into()));
@@ -159,6 +161,7 @@ fn site_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Site> {
         template: r.try_get("template")?,
         status: r.try_get::<&str, _>("status")?.parse()?,
         staging: r.try_get("staging")?,
+        update_rule: r.try_get::<&str, _>("update_rule")?.parse()?,
         log_retention_days: r.try_get("log_retention_days")?,
         settings: PhpSettingsRow {
             memory_limit_mb: r.try_get("memory_limit_mb")?,
@@ -296,6 +299,11 @@ impl Store {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    pub async fn set_update_rule(&self, id: i64, rule: UpdateRule) -> Result<()> {
+        sqlx::query("UPDATE sites SET update_rule = ? WHERE id = ?").bind(rule.as_str()).bind(id).execute(&self.pool).await?;
         Ok(())
     }
 

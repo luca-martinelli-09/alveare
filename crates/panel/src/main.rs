@@ -16,6 +16,7 @@ mod secrets;
 mod store;
 mod template;
 mod ui;
+mod wordpress;
 #[cfg(test)]
 mod testing;
 

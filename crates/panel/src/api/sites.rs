@@ -30,6 +30,7 @@ struct UpdateSite {
     suspended: Option<bool>,
     staging: Option<bool>,
     log_retention_days: Option<u32>,
+    update_rule: Option<crate::store::UpdateRule>,
 }
 
 async fn update_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(r): Json<UpdateSite>) -> ApiResult<Response> {
@@ -58,6 +59,12 @@ async fn update_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m:
     if let Some(on) = r.staging {
         flows::set_staging(&app.ctx, id, on).await?;
         app.auth.audit(Some(user.id), if on { "site.staging.on" } else { "site.staging.off" }, Some(id), "").await?;
+    }
+    if let Some(rule) = r.update_rule {
+        let site = app.ctx.store.site(id).await?;
+        app.ctx.host.set_site_env(&site.slug, site.uid(), "ALVEARE_UPDATE_RULE", rule.as_str()).await?;
+        app.ctx.store.set_update_rule(id, rule).await?;
+        app.auth.audit(Some(user.id), "site.update_rule", Some(id), rule.as_str()).await?;
     }
     if let Some(days) = r.log_retention_days {
         if !(1..=365).contains(&days) {
