@@ -223,6 +223,9 @@ async fn cleanup<H: Host>(app: &App<H>) -> anyhow::Result<()> {
     let now = chrono::Utc::now().timestamp();
     let week = TRASH_DAYS * 86400;
     let mut removed = purge_older(&app.paths.trash, now, week)?;
+    removed += purge_older(&app.paths.exports, now, week)?;
+    app.ctx.store.expire_exports(now - week).await?;
+    removed += purge_stale_uploads(&app.paths.imports.join("tmp/uploads"), 86400)?;
     for site in app.ctx.store.sites().await? {
         let tmp = app.paths.tmp.join(site.slug.as_str());
         removed += purge_older(&tmp.join(".trash"), now, week)?;

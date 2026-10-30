@@ -8,6 +8,9 @@ pub(super) fn routes<H: Host>() -> Router<App<H>> {
     Router::new()
         .route("/api/sites/{id}", patch(update_site::<H>))
         .route("/api/sites/{id}/clone", post(clone_site::<H>))
+        .route("/api/sites/{id}/export", post(export_site::<H>))
+        .route("/api/sites/{id}/exports", get(list_exports::<H>))
+        .route("/api/exports/{token}", get(download_export::<H>))
         .route("/api/sites/{id}/domains", get(list_domains::<H>).post(add_domain::<H>))
         .route("/api/sites/{id}/domains/{hostname}", delete(remove_domain::<H>))
 }
@@ -69,6 +72,63 @@ async fn clone_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: 
         })
         .await?;
     Ok((StatusCode::ACCEPTED, Json(json!({ "job": job }))).into_response())
+}
+
+const EXPORT_DAYS: i64 = 7;
+
+async fn export_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    app.ctx.store.site(id).await?;
+    require_site(&app, &user, id, Need::Manage).await?;
+    let (ctx, auth, uid, dir) = (app.ctx.clone(), app.auth.clone(), user.id, app.paths.exports.clone());
+    let job = app
+        .jobs
+        .spawn("site.export", Some(id), Some(user.id), move |mut log| async move {
+            let export = flows::export_site(&ctx, id, &dir, now(), &mut log).await?;
+            auth.audit(Some(uid), "site.export", Some(id), &export.file).await?;
+            Ok(log)
+        })
+        .await?;
+    Ok((StatusCode::ACCEPTED, Json(json!({ "job": job }))).into_response())
+}
+
+async fn list_exports<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_site(&app, &user, id, Need::Manage).await?;
+    let cutoff = now() - EXPORT_DAYS * 86400;
+    let out: Vec<_> = app
+        .ctx
+        .store
+        .exports(id)
+        .await?
+        .into_iter()
+        .filter(|e| e.created_at > cutoff)
+        .map(|e| json!({ "token": e.token, "file": e.file, "size": e.size, "created_at": e.created_at, "expires_at": e.created_at + EXPORT_DAYS * 86400 }))
+        .collect();
+    Ok(Json(out).into_response())
+}
+
+/// Il link scade dopo 7 giorni e vale solo per chi gestisce il sito.
+async fn download_export<H: Host>(State(app): State<App<H>>, Path(token): Path<String>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    let export = app.ctx.store.export_by_token(&token).await?.ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "esportazione non trovata"))?;
+    require_site(&app, &user, export.site_id, Need::Manage).await?;
+    if export.created_at <= now() - EXPORT_DAYS * 86400 {
+        return Err(ApiError::new(StatusCode::GONE, "esportazione scaduta"));
+    }
+    let file = tokio::fs::File::open(app.paths.exports.join(&export.file)).await.map_err(|e| ApiError::from(FileError::Io(e)))?;
+    let len = file.metadata().await.map_err(internal)?.len();
+    app.auth.audit(Some(user.id), "site.export.download", Some(export.site_id), &export.file).await?;
+    let stream = tokio_util::io::ReaderStream::new(file);
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/gzip".to_string()),
+            (header::CONTENT_LENGTH, len.to_string()),
+            (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", export.file)),
+        ],
+        axum::body::Body::from_stream(stream),
+    )
+        .into_response())
 }
 
 async fn list_domains<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
@@ -242,6 +302,37 @@ mod tests {
         assert_eq!(detail["domains"][0]["hostname"], "prova.sona.it");
         let (_, audit, _) = call(&t, req("GET", &format!("/api/sites/{copy}/audit"), Some(&admin), None)).await;
         assert_eq!(audit[0]["action"], "site.clone");
+    }
+
+    #[tokio::test]
+    async fn manager_exports_and_downloads_until_expiry() {
+        let t = setup().await;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let id = create_site(&t, &admin, "sona.it").await;
+        let other = create_site(&t, &admin, "upupa.it").await;
+        let manager = user_with_role(&t, "g@example.org", id, Role::Manager).await;
+        let stranger = user_with_role(&t, "x@example.org", other, Role::Manager).await;
+        let (s, body, _) = call(&t, req("POST", &format!("/api/sites/{id}/export"), Some(&manager), None)).await;
+        assert_eq!(s, StatusCode::ACCEPTED, "{body}");
+        let job = wait_job(&t, body["job"].as_i64().unwrap()).await;
+        assert_eq!(job.status, "done", "{:?}", job.log);
+        // FakeHost non scrive l'archivio: lo crea il test dove l'host reale l'avrebbe messo.
+        let (_, list, _) = call(&t, req("GET", &format!("/api/sites/{id}/exports"), Some(&manager), None)).await;
+        let token = list[0]["token"].as_str().unwrap().to_string();
+        assert!(list[0]["expires_at"].as_i64().unwrap() > list[0]["created_at"].as_i64().unwrap());
+        std::fs::create_dir_all(&t.app.paths.exports).unwrap();
+        std::fs::write(t.app.paths.exports.join(list[0]["file"].as_str().unwrap()), b"archivio").unwrap();
+        let (s, _, h) = call(&t, req("GET", &format!("/api/exports/{token}"), Some(&manager), None)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert!(h["content-disposition"].to_str().unwrap().contains("sona_it.tar.gz"));
+        let (s, _, _) = call(&t, req("GET", &format!("/api/exports/{token}"), Some(&stranger), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        sqlx::query("UPDATE exports SET created_at = created_at - 8 * 86400").execute(t.app.ctx.store.pool()).await.unwrap();
+        let (s, _, _) = call(&t, req("GET", &format!("/api/exports/{token}"), Some(&manager), None)).await;
+        assert_eq!(s, StatusCode::GONE);
+        let (_, audit, _) = call(&t, req("GET", &format!("/api/sites/{id}/audit"), Some(&admin), None)).await;
+        let actions: Vec<&str> = audit.as_array().unwrap().iter().map(|a| a["action"].as_str().unwrap()).collect();
+        assert!(actions.contains(&"site.export") && actions.contains(&"site.export.download"), "{actions:?}");
     }
 
     #[tokio::test]

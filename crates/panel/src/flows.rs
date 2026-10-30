@@ -67,6 +67,9 @@ pub trait Host: Send + Sync + 'static {
     fn copy_site_files(&self, from: &Slug, to: &Slug, uid: u32) -> impl Future<Output = Result<()>> + Send;
     fn read_site_env(&self, slug: &Slug) -> impl Future<Output = Result<Vars>> + Send;
     fn write_site_env(&self, slug: &Slug, uid: u32, env: &Vars) -> impl Future<Output = Result<()>> + Send;
+    /// tar.gz con i file del sito (senza `.env`), `.env.example`, `database.sql` e `LEGGIMI.txt`;
+    /// restituisce la dimensione.
+    fn export_site(&self, slug: &Slug, db_name: &str, dest: &std::path::Path, env_example: &str, readme: &str) -> impl Future<Output = Result<u64>> + Send;
     /// Riscrive una chiave del .env del sito.
     fn set_site_env(&self, slug: &Slug, uid: u32, key: &str, value: &str) -> impl Future<Output = Result<()>> + Send;
 }
@@ -389,6 +392,64 @@ async fn import_steps<H: Host>(c: &Ctx<H>, req: &ImportSite, site: &Site, undo: 
     flush_object_cache(c, site, log).await;
     log.push(format!("sito importato: aggiungi {} al tunnel Cloudflare verso http://caddy:80", create.domain.as_str()));
     Ok(())
+}
+
+/// Valori del .env che non devono uscire dal server.
+fn is_secret(key: &str) -> bool {
+    ["PASSWORD", "KEY", "SALT", "SECRET", "TOKEN"].iter().any(|w| key.contains(w))
+}
+
+fn export_readme(domain: &str, slug: &str, kind: SiteKind) -> String {
+    let wp = kind == SiteKind::Wordpress;
+    format!(
+        "Esportazione di {domain} dal pannello Alveare ({date})\n\n\
+Contenuto\n\
+- {slug}/public/      file del sito (document root)\n\
+- {slug}/.env.example configurazione, con password e chiavi da impostare (DA_IMPOSTARE)\n\
+- {slug}/database.sql dump del database (MariaDB/MySQL, utf8mb4)\n\n\
+Requisiti\n\
+- PHP 8.5 (va bene anche 8.3 o successivo) con le estensioni {ext}\n\
+- MariaDB 10.6+ o MySQL 8+\n\
+- un server web con la document root su public/\n\n\
+Installazione altrove\n\
+1. Crea un database e un utente con tutti i permessi su quel database.\n\
+2. Importa il dump: mariadb -u UTENTE -p NOMEDB < database.sql\n\
+3. Copia la cartella sul server e rinomina .env.example in .env, accanto a public/.\n\
+4. Nel .env imposta DB_NAME, DB_USER, DB_PASSWORD, DB_HOST e i valori DA_IMPOSTARE{salts}.\n\
+   Il .env deve stare fuori dalla document root.\n\
+{wp_steps}",
+        date = chrono::Local::now().format("%d/%m/%Y %H:%M"),
+        ext = if wp { "gd o imagick, intl, zip, mysqli, opcache, exif (redis facoltativa)" } else { "richieste dall'applicazione" },
+        salts = if wp { " (chiavi e salt nuovi: https://api.wordpress.org/secret-key/1.1/salt/)" } else { "" },
+        wp_steps = if wp {
+            "5. Se il dominio cambia: wp search-replace '//vecchio.dominio' '//nuovo.dominio' --all-tables --skip-columns=guid\n\
+6. Senza Redis, togli wp-content/object-cache.php se presente.\n\
+7. Il cron è disattivato nel wp-config.php (DISABLE_WP_CRON): pianifica `wp cron event run --due-now` ogni 5 minuti.\n"
+        } else {
+            ""
+        },
+    )
+}
+
+/// Esportazione portabile del sito in `dir`, registrata con un token per il download (7 giorni).
+pub async fn export_site<H: Host>(c: &Ctx<H>, id: i64, dir: &std::path::Path, now: i64, log: &mut JobLog) -> Result<crate::store::Export> {
+    let site = c.store.site(id).await?;
+    let domain = c.store.domains(id).await?.into_iter().next().map(|(d, _)| d.as_str().to_string()).unwrap_or_default();
+    let mut env = c.host.read_site_env(&site.slug).await?;
+    for (k, v) in env.iter_mut() {
+        if is_secret(k) {
+            *v = "DA_IMPOSTARE".into();
+        }
+    }
+    let env_example = crate::template::env_file(&env)?;
+    let readme = export_readme(&domain, site.slug.as_str(), site.kind);
+    let db = c.db_creds(id).await?;
+    let file = format!("{now}-{}.tar.gz", site.slug.as_str());
+    let size = c.host.export_site(&site.slug, &db.name, &dir.join(&file), &env_example, &readme).await?;
+    let export = crate::store::Export { token: random_password(), site_id: id, file, size: size as i64, created_at: now };
+    c.store.add_export(&export).await?;
+    log.push(format!("esportazione pronta: {} ({} byte), scaricabile per 7 giorni", export.file, size));
+    Ok(export)
 }
 
 /// Database e cartelle di un sito appena registrato, con i passi per annullarli.
@@ -791,6 +852,24 @@ mod tests {
         assert_eq!(url_host("https://www.epops.it/blog\n").as_deref(), Some("www.epops.it"));
         assert_eq!(url_host("http://localhost:8080").as_deref(), Some("localhost"));
         assert_eq!(url_host("niente"), None);
+    }
+
+    #[tokio::test]
+    async fn export_strips_credentials_and_writes_a_readme() {
+        let c = ctx(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        let dir = tempfile::tempdir().unwrap();
+        let export = export_site(&c, site.id, dir.path(), 1_800_000_000, &mut JobLog::default()).await.unwrap();
+        assert_eq!(export.token.len(), 32);
+        assert_eq!(export.file, "1800000000-sona_it.tar.gz");
+        assert_eq!(c.host.calls(), ["read_site_env sona_it", format!("export_site sona_it sona_it {}", dir.path().join(&export.file).display()).as_str()]);
+        let (env, readme) = c.host.exported.lock().unwrap().clone().unwrap();
+        assert!(env.contains("DB_PASSWORD='DA_IMPOSTARE'") && env.contains("AUTH_KEY='DA_IMPOSTARE'") && env.contains("REDIS_PASSWORD='DA_IMPOSTARE'"), "{env}");
+        assert!(env.contains("DB_NAME='sona_it'") && env.contains("WP_HOME='https://sona.it'"));
+        assert!(readme.contains("PHP 8.5") && readme.contains("database.sql") && readme.contains("sona.it"));
+        let found = c.store.export_by_token(&export.token).await.unwrap().unwrap();
+        assert_eq!((found.site_id, found.size), (site.id, 1234));
     }
 
     #[tokio::test]

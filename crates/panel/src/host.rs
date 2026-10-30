@@ -41,6 +41,8 @@ pub struct Paths {
     pub redis: PathBuf,
     /// Area import: archivi e dump caricati dall'admin (`files/`), blocchi in arrivo (`tmp/`).
     pub imports: PathBuf,
+    /// Esportazioni dei siti, scaricabili per 7 giorni.
+    pub exports: PathBuf,
 }
 
 impl Paths {
@@ -61,6 +63,7 @@ impl Paths {
             backups: root.join("backups"),
             redis: root.join("redis"),
             imports: root.join("imports"),
+            exports: root.join("exports"),
         }
     }
 
@@ -581,6 +584,33 @@ impl Host for SystemHost {
         // Proprietario sistemato dopo, da install_template, insieme al resto del sito.
         let (public, archive) = (self.paths.sites.join(slug.as_str()).join("public"), archive.to_path_buf());
         tokio::task::spawn_blocking(move || crate::importer::import_files(&public, &archive)).await?
+    }
+
+    async fn export_site(&self, slug: &Slug, db_name: &str, dest: &Path, env_example: &str, readme: &str) -> Result<u64> {
+        let work = self.paths.backups.join(slug.as_str());
+        fs::create_dir_all(&work)?;
+        set_mode(&work, 0o700)?;
+        let dump = work.join("export.sql");
+        self.dump_to_file(db_name, &dump).await.context("dump del database")?;
+        let dir = dest.parent().context("destinazione senza cartella")?.to_path_buf();
+        let (site_dir, dest, prefix) = (self.paths.sites.join(slug.as_str()), dest.to_path_buf(), PathBuf::from(slug.as_str()));
+        let (env_example, readme, dump2) = (env_example.to_string(), readme.to_string(), dump.clone());
+        let result = tokio::task::spawn_blocking(move || {
+            fs::create_dir_all(&dir)?;
+            set_mode(&dir, 0o700)?;
+            let partial = dest.with_extension("partial");
+            let mut w = crate::archive::TarGzWriter::new(fs::File::create(&partial)?);
+            w.add_tree_except(&site_dir, &prefix, &[".env"])?;
+            w.add_bytes(&prefix.join(".env.example"), env_example.as_bytes())?;
+            w.add_file(&dump2, &prefix.join("database.sql"))?;
+            w.add_bytes(&prefix.join("LEGGIMI.txt"), readme.as_bytes())?;
+            w.finish()?;
+            fs::rename(&partial, &dest)?;
+            Ok::<_, anyhow::Error>(fs::metadata(&dest)?.len())
+        })
+        .await?;
+        let _ = fs::remove_file(&dump);
+        result
     }
 
     async fn copy_site_files(&self, from: &Slug, to: &Slug, uid: u32) -> Result<()> {

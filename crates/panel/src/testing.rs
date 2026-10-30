@@ -24,6 +24,8 @@ pub struct FakeHost {
     pub imported: Option<Imported>,
     /// Risposte di `wp` per argomenti precisi ("option get home" → "https://...").
     pub wp_replies: Vec<(&'static str, &'static str)>,
+    /// (.env.example, LEGGIMI.txt) dell'ultima esportazione.
+    pub exported: Mutex<Option<(String, String)>>,
 }
 
 impl FakeHost {
@@ -133,6 +135,11 @@ impl Host for FakeHost {
     async fn import_files(&self, slug: &Slug, _uid: u32, archive: &std::path::Path) -> anyhow::Result<Imported> {
         self.record("import_files", format!("{} {}", slug.as_str(), archive.display()))?;
         Ok(self.imported.clone().unwrap_or_default())
+    }
+    async fn export_site(&self, slug: &Slug, db_name: &str, dest: &std::path::Path, env_example: &str, readme: &str) -> anyhow::Result<u64> {
+        *self.exported.lock().unwrap() = Some((env_example.into(), readme.into()));
+        self.record("export_site", format!("{} {db_name} {}", slug.as_str(), dest.display()))?;
+        Ok(1234)
     }
     async fn copy_site_files(&self, from: &Slug, to: &Slug, _uid: u32) -> anyhow::Result<()> {
         self.record("copy_site_files", format!("{} {}", from.as_str(), to.as_str()))

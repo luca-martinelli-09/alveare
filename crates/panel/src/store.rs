@@ -57,6 +57,15 @@ pub struct Alert {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub struct Export {
+    pub token: String,
+    pub site_id: i64,
+    pub file: String,
+    pub size: i64,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct BackupRun {
     pub id: i64,
     pub started_at: String,
@@ -128,6 +137,10 @@ fn site_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Site> {
             max_children: r.try_get("max_children")?,
         },
     })
+}
+
+fn export_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Export> {
+    Ok(Export { token: r.try_get("token")?, site_id: r.try_get("site_id")?, file: r.try_get("file")?, size: r.try_get("size")?, created_at: r.try_get("created_at")? })
 }
 
 fn unique_violation(e: sqlx::Error, hostname: &Domain) -> StoreError {
@@ -427,6 +440,33 @@ impl Store {
     /// Slug con backup ma senza più un sito: i loro snapshot scadono dopo 30 giorni.
     pub async fn orphan_backup_slugs(&self) -> Result<Vec<String>> {
         Ok(sqlx::query_scalar("SELECT DISTINCT slug FROM backup_runs WHERE slug NOT IN (SELECT slug FROM sites)").fetch_all(&self.pool).await?)
+    }
+
+    pub async fn add_export(&self, e: &Export) -> Result<()> {
+        sqlx::query("INSERT INTO exports (token, site_id, file, size, created_at) VALUES (?, ?, ?, ?, ?)")
+            .bind(&e.token)
+            .bind(e.site_id)
+            .bind(&e.file)
+            .bind(e.size)
+            .bind(e.created_at)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn export_by_token(&self, token: &str) -> Result<Option<Export>> {
+        let r = sqlx::query("SELECT token, site_id, file, size, created_at FROM exports WHERE token = ?").bind(token).fetch_optional(&self.pool).await?;
+        r.map(|r| export_from_row(&r)).transpose()
+    }
+
+    pub async fn exports(&self, site_id: i64) -> Result<Vec<Export>> {
+        let rows = sqlx::query("SELECT token, site_id, file, size, created_at FROM exports WHERE site_id = ? ORDER BY created_at DESC").bind(site_id).fetch_all(&self.pool).await?;
+        rows.iter().map(export_from_row).collect()
+    }
+
+    /// Toglie le esportazioni create prima di `before`; i file li cancella la pulizia notturna.
+    pub async fn expire_exports(&self, before: i64) -> Result<u64> {
+        Ok(sqlx::query("DELETE FROM exports WHERE created_at < ?").bind(before).execute(&self.pool).await?.rows_affected())
     }
 
     pub async fn setting(&self, key: &str) -> Result<Option<String>> {
