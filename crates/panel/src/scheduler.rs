@@ -29,6 +29,8 @@ pub enum Task {
     Integrity(i64),
     /// Aggiornamenti di WordPress secondo la regola del sito, dopo il backup notturno.
     NightlyUpdate(i64),
+    /// Cron personalizzato arrivato alla sua ora.
+    CustomCron(i64),
     /// Blocchi IP scaduti: si tolgono dal Caddyfile.
     ExpireBlocks,
     /// Restore di prova mensile su un dominio interno: un backup mai ripristinato non conta.
@@ -136,7 +138,17 @@ pub async fn run<H: Host>(app: App<H>) {
             .iter()
             .map(|s| SiteRef { id: s.id, wordpress: s.kind == SiteKind::Wordpress, active: s.status == SiteStatus::Active })
             .collect();
-        for task in due(now, &refs) {
+        let mut tasks = due(now, &refs);
+        match app.ctx.store.crons(None).await {
+            Ok(crons) => tasks.extend(
+                crons
+                    .iter()
+                    .filter(|c| refs.iter().any(|s| s.id == c.site_id && s.active) && crate::crons::is_due(&c.expression, &now))
+                    .map(|c| Task::CustomCron(c.id)),
+            ),
+            Err(e) => tracing::error!("scheduler: lettura dei cron: {e}"),
+        }
+        for task in tasks {
             let (app, busy) = (app.clone(), busy.clone());
             tokio::spawn(async move {
                 let key = match task {
@@ -147,6 +159,8 @@ pub async fn run<H: Host>(app: App<H>) {
                     Task::RestoreTest(id) => (id, "restore-test"),
                     Task::ExpireBlocks => (0, "blocks"),
                     Task::NightlyUpdate(id) => (id, "update"),
+                    // Il lock impedisce esecuzioni sovrapposte dello stesso cron.
+                    Task::CustomCron(id) => (id, "custom-cron"),
                     Task::RotateLogs => (0, "rotate"),
                     Task::Cleanup => (0, "cleanup"),
                 };
@@ -215,6 +229,9 @@ async fn execute<H: Host>(app: &App<H>, task: Task) -> anyhow::Result<()> {
                     Ok(log)
                 })
                 .await?;
+        }
+        Task::CustomCron(id) => {
+            flows::run_cron(&app.ctx, id).await?;
         }
         Task::ExpireBlocks => {
             if app.ctx.store.expire_blocks(chrono::Utc::now().timestamp()).await? > 0 {

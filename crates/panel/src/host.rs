@@ -310,22 +310,29 @@ pub async fn redis_acl_load(addr: &str, admin_password: &str) -> Result<()> {
     Ok(())
 }
 
-/// GET / con `Host` e, se serve, Basic auth: solo lo stato HTTP. Come dietro Cloudflare,
-/// con X-Forwarded-Proto https, così WordPress non risponde con un redirect a https.
-pub async fn http_probe(addr: &str, host: &Domain, auth: Option<(&str, &str)>, timeout: Duration) -> Result<u16> {
+/// GET con `Host` e, se serve, Basic auth: stato HTTP e inizio del corpo (max 4 KB). Come dietro
+/// Cloudflare, con X-Forwarded-Proto https, così WordPress non risponde con un redirect a https.
+pub async fn http_get(addr: &str, host: &Domain, path: &str, auth: Option<(&str, &str)>, timeout: Duration) -> Result<(u16, String)> {
     use base64::Engine;
     let call = async {
         let mut stream = tokio::net::TcpStream::connect(addr).await.with_context(|| format!("connessione a {addr}"))?;
         let auth = auth
             .map(|(u, p)| format!("Authorization: Basic {}\r\n", base64::engine::general_purpose::STANDARD.encode(format!("{u}:{p}"))))
             .unwrap_or_default();
-        let req = format!("GET / HTTP/1.1\r\nHost: {}\r\nX-Forwarded-Proto: https\r\nUser-Agent: alveare-probe\r\n{auth}Connection: close\r\n\r\n", host.as_str());
+        let req = format!("GET {path} HTTP/1.1\r\nHost: {}\r\nX-Forwarded-Proto: https\r\nUser-Agent: alveare\r\n{auth}Connection: close\r\n\r\n", host.as_str());
         stream.write_all(req.as_bytes()).await?;
-        let mut line = String::new();
-        BufReader::new(stream).read_line(&mut line).await?;
-        line.split(' ').nth(1).and_then(|c| c.parse().ok()).with_context(|| format!("risposta non HTTP: {}", line.trim()))
+        let mut buf = Vec::new();
+        stream.take(64 * 1024).read_to_end(&mut buf).await?;
+        let text = String::from_utf8_lossy(&buf);
+        let status = text.split(' ').nth(1).and_then(|c| c.parse().ok()).with_context(|| format!("risposta non HTTP: {}", text.lines().next().unwrap_or_default()))?;
+        let body: String = text.split_once("\r\n\r\n").map_or("", |(_, b)| b).chars().take(4096).collect();
+        Ok((status, body))
     };
     tokio::time::timeout(timeout, call).await.context("il sito non ha risposto in tempo")?
+}
+
+pub async fn http_probe(addr: &str, host: &Domain, auth: Option<(&str, &str)>, timeout: Duration) -> Result<u16> {
+    http_get(addr, host, "/", auth, timeout).await.map(|(s, _)| s)
 }
 
 pub struct SystemHost {
@@ -722,6 +729,17 @@ impl Host for SystemHost {
 
     async fn probe(&self, host: &Domain, auth: Option<(&str, &str)>) -> Result<u16> {
         http_probe(&self.caddy_http, host, auth, Duration::from_secs(30)).await
+    }
+
+    async fn http_get(&self, host: &Domain, path: &str, auth: Option<(&str, &str)>, timeout_s: u32) -> Result<(u16, String)> {
+        http_get(&self.caddy_http, host, path, auth, Duration::from_secs(u64::from(timeout_s))).await
+    }
+
+    async fn php(&self, slug: &Slug, args: &[String], timeout_s: u32) -> Result<(bool, String)> {
+        // Il timeout lo applica l'agente; il pannello aspetta un minuto in più.
+        let cmd = Command::Php { slug: slug.clone(), args: args.to_vec(), timeout_s };
+        let resp = agent_call(&self.paths.agent, &cmd, Duration::from_secs(u64::from(timeout_s) + 60)).await?;
+        Ok((resp.ok, resp.output))
     }
 
     async fn copy_site_files(&self, from: &Slug, to: &Slug, uid: u32) -> Result<()> {

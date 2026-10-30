@@ -83,6 +83,10 @@ pub trait Host: Send + Sync + 'static {
     fn store_template(&self, slug: &Slug, name: &Slug, manifest: &crate::template::Manifest, sql_file: &str) -> impl Future<Output = Result<()>> + Send;
     /// GET / di un sito attraverso Caddy (con la password dello staging se serve): lo stato HTTP.
     fn probe(&self, host: &Domain, auth: Option<(&str, &str)>) -> impl Future<Output = Result<u16>> + Send;
+    /// GET di una pagina del sito attraverso Caddy: stato e inizio della risposta.
+    fn http_get(&self, host: &Domain, path: &str, auth: Option<(&str, &str)>, timeout_s: u32) -> impl Future<Output = Result<(u16, String)>> + Send;
+    /// Uno script PHP del sito con la CLI (anche artisan): (riuscito, output).
+    fn php(&self, slug: &Slug, args: &[String], timeout_s: u32) -> impl Future<Output = Result<(bool, String)>> + Send;
     /// Riscrive una chiave del .env del sito.
     fn set_site_env(&self, slug: &Slug, uid: u32, key: &str, value: &str) -> impl Future<Output = Result<()>> + Send;
 }
@@ -193,6 +197,36 @@ impl<H: Host> Ctx<H> {
 pub async fn sync_caddy<H: Host>(c: &Ctx<H>) -> Result<()> {
     let global = c.store.current_override(None, OverrideKind::Caddy).await?.map(|o| o.content);
     c.host.sync_caddy(&c.store.caddy_sites().await?, global.as_deref()).await
+}
+
+/// Esegue un cron personalizzato e ne registra l'esito; un fallimento apre un avviso, il primo
+/// successo lo chiude. `Ok(false)` vuol dire che il comando è fallito, non il pannello.
+pub async fn run_cron<H: Host>(c: &Ctx<H>, cron_id: i64) -> Result<bool> {
+    let cron = c.store.cron(cron_id).await?;
+    let site = c.store.site(cron.site_id).await?;
+    let domains: Vec<Domain> = c.store.domains(site.id).await?.into_iter().map(|(d, _)| d).collect();
+    let run = c.store.cron_started(cron_id).await?;
+    let kind = cron.kind.parse::<crate::crons::CronKind>().map_err(Invalid)?;
+    let outcome = match crate::crons::prepare(kind, &cron.command, &domains) {
+        Err(e) => Ok((false, e)),
+        Ok(crate::crons::Action::Wp(args)) => c.host.wp_output(&site.slug, &args).await,
+        Ok(crate::crons::Action::Php(args)) => c.host.php(&site.slug, &args, cron.timeout_s).await,
+        Ok(crate::crons::Action::Http { host, path }) => {
+            let password = staging_password(c, site.id).await?;
+            let auth = password.as_deref().map(|p| ("staging", p));
+            c.host.http_get(&host, &path, auth, cron.timeout_s).await.map(|(status, body)| ((200..400).contains(&status), format!("HTTP {status}\n{body}")))
+        }
+    };
+    let (ok, output) = outcome.unwrap_or_else(|e| (false, format!("{e:#}")));
+    c.store.cron_finished(run, ok, &output).await?;
+    let alert = format!("cron-{cron_id}");
+    if ok {
+        c.store.resolve_alerts(site.id, &alert).await?;
+    } else {
+        let tail: String = output.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+        c.store.raise_alert(Some(site.id), &alert, &format!("cron \"{}\" fallito:\n{tail}", cron.command)).await?;
+    }
+    Ok(ok)
 }
 
 /// Una modifica rifiutata dalla validazione: la UI la mostra così com'è (400).
@@ -1426,6 +1460,34 @@ mod tests {
         assert!(set_php_global(&c, "disable_functions =", Some(1)).await.unwrap_err().downcast_ref::<Invalid>().is_some());
         set_php_global(&c, "; note\nmax_input_vars = 3000\n", Some(1)).await.unwrap();
         assert_eq!(c.host.calls(), ["write_php_global max_input_vars = 3000", "sync_php users= pools="]);
+    }
+
+    #[tokio::test]
+    async fn custom_crons_run_per_kind_and_alert_on_failure() {
+        let c = ctx(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        c.store.set_staging(site.id, Some((&c.key.encrypt("pw"), "$2b$x"))).await.unwrap();
+        let wp = c.store.add_cron(site.id, "* * * * *", "wp", "cache flush", 600).await.unwrap();
+        let php = c.store.add_cron(site.id, "* * * * *", "artisan", "php artisan schedule:run", 120).await.unwrap();
+        let http = c.store.add_cron(site.id, "* * * * *", "http", "https://sona.it/wp-cron.php", 30).await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        for id in [wp, php, http] {
+            assert!(run_cron(&c, id).await.unwrap());
+        }
+        assert_eq!(
+            c.host.calls(),
+            ["wp sona_it cache flush", "php sona_it artisan schedule:run (120 s)", "http_get sona.it /wp-cron.php staging:"]
+        );
+        assert_eq!(c.store.cron_runs(http, 5).await.unwrap()[0].ok, Some(true));
+
+        let c = Ctx { host: FakeHost { probe_status: Some(500), ..Default::default() }, ..c };
+        assert!(!run_cron(&c, http).await.unwrap());
+        let alerts = c.store.open_alerts(None).await.unwrap();
+        assert_eq!(alerts[0].kind, format!("cron-{http}"));
+        assert!(c.store.cron_runs(http, 1).await.unwrap()[0].output.contains("500"));
+        let c = Ctx { host: FakeHost::default(), ..c };
+        assert!(run_cron(&c, http).await.unwrap());
+        assert!(c.store.open_alerts(None).await.unwrap().is_empty(), "risolto al primo successo");
     }
 
     #[tokio::test]

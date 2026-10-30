@@ -4,6 +4,7 @@ mod auth;
 mod backup;
 mod budget;
 mod config;
+mod crons;
 mod database;
 mod files;
 mod flows;

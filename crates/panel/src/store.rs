@@ -68,6 +68,30 @@ pub struct Alert {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub struct CronJob {
+    pub id: i64,
+    pub site_id: i64,
+    pub expression: String,
+    pub kind: String,
+    pub command: String,
+    pub timeout_s: u32,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CronRun {
+    pub id: i64,
+    pub cron_id: i64,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub ok: Option<bool>,
+    pub output: String,
+}
+
+/// Output di un'esecuzione: abbastanza per capire l'errore, non per riempire il database.
+const CRON_OUTPUT_MAX: usize = 16 * 1024;
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct IpBlock {
     pub id: i64,
     pub site_id: Option<i64>,
@@ -555,6 +579,91 @@ impl Store {
             .unwrap_or_default())
     }
 
+    pub async fn add_cron(&self, site_id: i64, expression: &str, kind: &str, command: &str, timeout_s: u32) -> Result<i64> {
+        Ok(sqlx::query_scalar("INSERT INTO cron_jobs (site_id, expression, kind, command, timeout_s) VALUES (?, ?, ?, ?, ?) RETURNING id")
+            .bind(site_id)
+            .bind(expression)
+            .bind(kind)
+            .bind(command)
+            .bind(timeout_s)
+            .fetch_one(&self.pool)
+            .await?)
+    }
+
+    /// Cron di un sito; `None`: tutti quelli attivi (per lo scheduler).
+    pub async fn crons(&self, site_id: Option<i64>) -> Result<Vec<CronJob>> {
+        let q = "SELECT id, site_id, expression, kind, command, timeout_s, active FROM cron_jobs";
+        let rows = match site_id {
+            Some(id) => sqlx::query(&format!("{q} WHERE site_id = ? ORDER BY id")).bind(id).fetch_all(&self.pool).await?,
+            None => sqlx::query(&format!("{q} WHERE active = 1 ORDER BY id")).fetch_all(&self.pool).await?,
+        };
+        rows.iter()
+            .map(|r| {
+                Ok(CronJob {
+                    id: r.try_get("id")?,
+                    site_id: r.try_get("site_id")?,
+                    expression: r.try_get("expression")?,
+                    kind: r.try_get("kind")?,
+                    command: r.try_get("command")?,
+                    timeout_s: r.try_get("timeout_s")?,
+                    active: r.try_get("active")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn cron(&self, id: i64) -> Result<CronJob> {
+        let site: i64 = sqlx::query_scalar("SELECT site_id FROM cron_jobs WHERE id = ?").bind(id).fetch_optional(&self.pool).await?.ok_or(StoreError::NotFound)?;
+        self.crons(Some(site)).await?.into_iter().find(|c| c.id == id).ok_or(StoreError::NotFound)
+    }
+
+    pub async fn set_cron_active(&self, id: i64, active: bool) -> Result<()> {
+        sqlx::query("UPDATE cron_jobs SET active = ? WHERE id = ?").bind(active).bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn delete_cron(&self, id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM cron_jobs WHERE id = ?").bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn cron_started(&self, cron_id: i64) -> Result<i64> {
+        Ok(sqlx::query_scalar("INSERT INTO cron_runs (cron_id) VALUES (?) RETURNING id").bind(cron_id).fetch_one(&self.pool).await?)
+    }
+
+    /// Chiude un'esecuzione e tiene solo le ultime 50 di quel cron.
+    pub async fn cron_finished(&self, run: i64, ok: bool, output: &str) -> Result<()> {
+        let mut text = output.to_string();
+        if text.len() > CRON_OUTPUT_MAX {
+            let cut = (0..=CRON_OUTPUT_MAX).rev().find(|i| text.is_char_boundary(*i)).unwrap_or(0);
+            text.truncate(cut);
+            text.push_str("\n… output troncato");
+        }
+        sqlx::query("UPDATE cron_runs SET finished_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), ok = ?, output = ? WHERE id = ?")
+            .bind(ok)
+            .bind(&text)
+            .bind(run)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM cron_runs WHERE cron_id = (SELECT cron_id FROM cron_runs WHERE id = ?) AND id NOT IN (SELECT id FROM cron_runs WHERE cron_id = (SELECT cron_id FROM cron_runs WHERE id = ?) ORDER BY id DESC LIMIT 50)")
+            .bind(run)
+            .bind(run)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn cron_runs(&self, cron_id: i64, limit: i64) -> Result<Vec<CronRun>> {
+        let rows = sqlx::query("SELECT id, cron_id, started_at, finished_at, ok, output FROM cron_runs WHERE cron_id = ? ORDER BY id DESC LIMIT ?")
+            .bind(cron_id)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| Ok(CronRun { id: r.try_get("id")?, cron_id: r.try_get("cron_id")?, started_at: r.try_get("started_at")?, finished_at: r.try_get("finished_at")?, ok: r.try_get("ok")?, output: r.try_get("output")? }))
+            .collect()
+    }
+
     pub async fn add_block(&self, site_id: Option<i64>, cidr: &str, expires_at: Option<i64>, by: Option<i64>, now: i64) -> Result<i64> {
         Ok(sqlx::query_scalar("INSERT INTO ip_blocks (site_id, cidr, expires_at, created_by, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id")
             .bind(site_id)
@@ -823,6 +932,26 @@ mod tests {
         assert_eq!(s.expire_blocks(999).await.unwrap(), 0);
         assert_eq!(s.expire_blocks(1000).await.unwrap(), 1);
         assert_eq!(s.caddy_sites().await.unwrap()[0].blocked, ["203.0.113.0/24"]);
+    }
+
+    #[tokio::test]
+    async fn cron_runs_keep_only_the_last_fifty() {
+        let s = store().await;
+        let a = s.create_site(&new_site("a.it")).await.unwrap();
+        let id = s.add_cron(a.id, "*/5 * * * *", "wp", "cache flush", 600).await.unwrap();
+        for i in 0..55 {
+            let run = s.cron_started(id).await.unwrap();
+            s.cron_finished(run, i % 2 == 0, &format!("run {i}")).await.unwrap();
+        }
+        let runs = s.cron_runs(id, 100).await.unwrap();
+        assert_eq!(runs.len(), 50);
+        assert_eq!(runs[0].output, "run 54");
+        let big = s.cron_started(id).await.unwrap();
+        s.cron_finished(big, true, &"è".repeat(20_000)).await.unwrap();
+        assert!(s.cron_runs(id, 1).await.unwrap()[0].output.ends_with("output troncato"));
+        s.set_cron_active(id, false).await.unwrap();
+        assert!(s.crons(None).await.unwrap().is_empty(), "lo scheduler vede solo quelli attivi");
+        assert_eq!(s.cron(id).await.unwrap().active, false);
     }
 
     #[tokio::test]

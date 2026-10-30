@@ -270,6 +270,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .merge(config::routes::<H>())
         .merge(blocks::routes::<H>())
         .merge(wordpress::routes::<H>())
+        .merge(crons::routes::<H>())
         .with_state(app)
 }
 
@@ -905,6 +906,7 @@ async fn get_job<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Met
 
 mod blocks;
 mod config;
+mod crons;
 mod imports;
 mod logs;
 mod sites;
