@@ -14,7 +14,7 @@ use tokio::io::AsyncRead;
 use crate::backup::{Retention, Snapshot};
 use crate::database::TableInfo;
 use crate::secrets::{random_password, SecretKey};
-use crate::store::{NewSite, Override, OverrideKind, Site, SiteKind, SiteStatus, Store};
+use crate::store::{DomainKind, NewSite, Override, OverrideKind, Site, SiteKind, SiteStatus, Store};
 use crate::template::Vars;
 
 /// Per quanto la password admin di un sito nuovo resta leggibile (una volta) nel pannello.
@@ -969,6 +969,41 @@ async fn flush_object_cache<H: Host>(c: &Ctx<H>, site: &Site, log: &mut JobLog) 
     }
 }
 
+/// Un alias o redirect del sito diventa il dominio principale; il vecchio resta come redirect 301.
+/// Prima backup, poi indirizzi del sito (.env e, per WordPress, search-replace nel database),
+/// solo alla fine il cambio nel pannello e in Caddy: se un passo fallisce il sito resta com'era.
+pub async fn make_primary<H: Host>(c: &Ctx<H>, site_id: i64, host: &Domain, log: &mut JobLog) -> Result<()> {
+    let site = c.store.site(site_id).await?;
+    let domains = c.store.domains(site_id).await?;
+    let old = domains.iter().find(|(_, k)| *k == DomainKind::Primary).map(|(d, _)| d.clone()).context("il sito non ha un dominio principale")?;
+    if !domains.iter().any(|(d, k)| d == host && *k != DomainKind::Primary) {
+        bail!(Invalid(format!("{} non è un alias o un redirect di questo sito", host.as_str())));
+    }
+    if c.backups {
+        backup_site(c, site_id, log).await.context("backup prima del cambio di dominio")?;
+    }
+    let url = c.url_of(host);
+    match site.kind {
+        SiteKind::Wordpress => {
+            for key in ["WP_HOME", "WP_SITEURL"] {
+                c.host.set_site_env(&site.slug, site.uid(), key, &url).await?;
+            }
+            let (from, to) = (format!("//{}", old.as_str()), format!("//{}", host.as_str()));
+            let out = c.host.wp(&site.slug, &["search-replace", &from, &to, "--all-tables", "--skip-columns=guid"].map(String::from)).await?;
+            log.push(format!("search-replace {from} → {to}: {}", out.lines().last().unwrap_or_default()));
+        }
+        SiteKind::Laravel => c.host.set_site_env(&site.slug, site.uid(), "APP_URL", &url).await?,
+        SiteKind::Php => {}
+    }
+    c.store.set_primary(site_id, host).await?;
+    sync_caddy(c).await?;
+    if site.kind == SiteKind::Wordpress {
+        flush_object_cache(c, &site, log).await;
+    }
+    log.push(format!("{} è il dominio principale; {} rimanda lì", host.as_str(), old.as_str()));
+    Ok(())
+}
+
 /// Import di un dump: prima un dump di sicurezza in tmp/<slug>, poi l'import e,
 /// se richiesto, `wp search-replace` (rispetta i dati serializzati di WordPress).
 pub async fn import_database<H: Host>(
@@ -1326,6 +1361,25 @@ mod tests {
             ]
         );
         assert_eq!(c.store.site(site.id).await.unwrap().status, SiteStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn an_alias_becomes_the_primary_domain_of_a_wordpress_site() {
+        let c = ctx(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        let nuovo = Domain::parse("nuovo-sona.it").unwrap();
+        assert!(make_primary(&c, site.id, &nuovo, &mut JobLog::default()).await.is_err(), "non è un dominio del sito");
+        c.store.add_domain(site.id, &nuovo, DomainKind::Alias).await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        make_primary(&c, site.id, &nuovo, &mut JobLog::default()).await.unwrap();
+        let calls = c.host.calls();
+        let at = |prefix: &str| calls.iter().position(|x| x.starts_with(prefix)).unwrap_or_else(|| panic!("manca {prefix}: {calls:?}"));
+        assert!(at("wp sona_it search-replace //sona.it //nuovo-sona.it --all-tables --skip-columns=guid") < at("sync_caddy"));
+        assert_eq!(c.host.env.lock().unwrap()["SITE_ENV WP_HOME"], "https://nuovo-sona.it");
+        assert_eq!(c.host.env.lock().unwrap()["SITE_ENV WP_SITEURL"], "https://nuovo-sona.it");
+        let doms = c.store.domains(site.id).await.unwrap();
+        assert!(doms.contains(&(nuovo.clone(), DomainKind::Primary)) && doms.contains(&(Domain::parse("sona.it").unwrap(), DomainKind::Redirect)), "{doms:?}");
+        assert!(make_primary(&c, site.id, &nuovo, &mut JobLog::default()).await.is_err(), "è già il principale");
     }
 
     #[tokio::test]

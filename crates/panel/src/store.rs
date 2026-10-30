@@ -380,6 +380,24 @@ impl Store {
         Ok(())
     }
 
+    /// Un alias o redirect del sito diventa il principale; il vecchio principale diventa un redirect
+    /// (i link vecchi continuano a funzionare). Restituisce il vecchio principale.
+    pub async fn set_primary(&self, site_id: i64, hostname: &Domain) -> Result<Domain> {
+        let mut tx = self.pool.begin().await?;
+        let ok: Option<String> = sqlx::query_scalar("SELECT kind FROM domains WHERE site_id = ? AND hostname = ? AND kind != 'primary'")
+            .bind(site_id)
+            .bind(hostname.as_str())
+            .fetch_optional(&mut *tx)
+            .await?;
+        ok.ok_or(StoreError::NotFound)?;
+        let old: String = sqlx::query_scalar("SELECT hostname FROM domains WHERE site_id = ? AND kind = 'primary'").bind(site_id).fetch_one(&mut *tx).await?;
+        // Prima si declassa il vecchio: l'indice ammette un solo principale per sito.
+        sqlx::query("UPDATE domains SET kind = 'redirect' WHERE site_id = ? AND kind = 'primary'").bind(site_id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE domains SET kind = 'primary' WHERE site_id = ? AND hostname = ?").bind(site_id).bind(hostname.as_str()).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Domain::parse(&old).map_err(|_| StoreError::NotFound)
+    }
+
     /// Toglie un alias o un redirect del sito; il dominio principale non si tocca.
     pub async fn remove_domain(&self, site_id: i64, hostname: &Domain) -> Result<()> {
         let done = sqlx::query("DELETE FROM domains WHERE site_id = ? AND hostname = ? AND kind != 'primary'")
@@ -960,6 +978,21 @@ mod tests {
         assert_eq!(b.uid(), 20002);
         assert_eq!(a.status, SiteStatus::Creating);
         assert_eq!(s.domains(a.id).await.unwrap(), vec![(d("sona.it"), DomainKind::Primary)]);
+    }
+
+    #[tokio::test]
+    async fn a_domain_of_the_site_becomes_primary_and_the_old_one_redirects() {
+        let s = store().await;
+        let a = s.create_site(&new_site("sona.it")).await.unwrap();
+        let b = s.create_site(&new_site("upupa.it")).await.unwrap();
+        s.add_domain(a.id, &d("nuovo-sona.it"), DomainKind::Alias).await.unwrap();
+        assert_eq!(s.set_primary(a.id, &d("nuovo-sona.it")).await.unwrap(), d("sona.it"));
+        let mut doms = s.domains(a.id).await.unwrap();
+        doms.sort_by_key(|(h, _)| h.as_str().to_string());
+        assert_eq!(doms, vec![(d("nuovo-sona.it"), DomainKind::Primary), (d("sona.it"), DomainKind::Redirect)]);
+        assert!(matches!(s.set_primary(a.id, &d("upupa.it")).await, Err(StoreError::NotFound)), "dominio di un altro sito");
+        assert!(matches!(s.set_primary(b.id, &d("mai-visto.it")).await, Err(StoreError::NotFound)));
+        assert_eq!(s.domains(b.id).await.unwrap(), vec![(d("upupa.it"), DomainKind::Primary)], "l'altro sito non cambia");
     }
 
     #[tokio::test]

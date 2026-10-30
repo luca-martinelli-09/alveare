@@ -8,6 +8,10 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import JobLog from '$lib/components/app/job-log.svelte';
+	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
+	import { askConfirm } from '$lib/ask.svelte';
 	import { api, errorMessage } from '$lib/api';
 	import { session } from '$lib/session.svelte';
 	import { toast } from 'svelte-sonner';
@@ -28,6 +32,24 @@
 			hostname = '';
 			adding = false;
 			onchange();
+		} catch (err) {
+			toast.error(errorMessage(err));
+		}
+	}
+
+	let promoting = $state<{ host: string; job: number } | null>(null);
+	const primary = $derived(detail.domains.find((d) => d.kind === 'primary')?.hostname);
+
+	async function makePrimary(h: string) {
+		const wp = detail.site.kind === 'wordpress';
+		const ok = await askConfirm({
+			title: `Rendere ${h} il dominio principale?`,
+			description: `${primary} diventa un redirect 301 verso ${h}, così i link vecchi funzionano ancora.${wp ? ' Gli indirizzi nel database di WordPress passano al nuovo dominio (search-replace), dopo un backup.' : ''}`,
+			confirmLabel: 'Rendi principale'
+		});
+		if (!ok) return;
+		try {
+			promoting = { host: h, job: (await api.post<{ job: number }>(`${base}/${encodeURIComponent(h)}/primary`)).job };
 		} catch (err) {
 			toast.error(errorMessage(err));
 		}
@@ -54,7 +76,19 @@
 			{#snippet label()}<a class="font-medium underline-offset-4 hover:underline" href={d.url} target="_blank" rel="noreferrer">{d.hostname}</a>{/snippet}
 			<Badge variant="outline">{kinds[d.kind]}</Badge>
 			{#if session.user?.is_admin && d.kind !== 'primary'}
-				<Button variant="outline" size="sm" onclick={() => remove(d.hostname)}>Togli</Button>
+				<DropdownMenu.Root>
+					<DropdownMenu.Trigger>
+						{#snippet child({ props })}
+							<Button variant="ghost" size="icon-sm" aria-label={`Azioni su ${d.hostname}`} {...props}><EllipsisIcon /></Button>
+						{/snippet}
+					</DropdownMenu.Trigger>
+					<DropdownMenu.Content align="end">
+						<DropdownMenu.Group>
+							<DropdownMenu.Item onclick={() => makePrimary(d.hostname)}>Rendi principale</DropdownMenu.Item>
+							<DropdownMenu.Item variant="destructive" onclick={() => remove(d.hostname)}>Togli</DropdownMenu.Item>
+						</DropdownMenu.Group>
+					</DropdownMenu.Content>
+				</DropdownMenu.Root>
 			{/if}
 		</SettingRow>
 	{/each}
@@ -89,5 +123,17 @@
 				</Dialog.Footer>
 			</Field.FieldGroup>
 		</form>
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root open={promoting !== null} onOpenChange={(o) => !o && (promoting = null)}>
+	<Dialog.Content class="sm:max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>Cambio del dominio principale</Dialog.Title>
+			<Dialog.Description>{promoting?.host} diventa il dominio principale.</Dialog.Description>
+		</Dialog.Header>
+		{#if promoting}
+			<JobLog id={promoting.job} ondone={(j) => j.status === 'done' && (toast.success(`${promoting?.host} è il dominio principale`), (promoting = null), onchange())} />
+		{/if}
 	</Dialog.Content>
 </Dialog.Root>

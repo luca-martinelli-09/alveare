@@ -19,6 +19,7 @@ pub(super) fn routes<H: Host>() -> Router<App<H>> {
         .route("/api/exports/{token}", get(download_export::<H>))
         .route("/api/sites/{id}/domains", get(list_domains::<H>).post(add_domain::<H>))
         .route("/api/sites/{id}/domains/{hostname}", delete(remove_domain::<H>))
+        .route("/api/sites/{id}/domains/{hostname}/primary", post(make_primary::<H>))
 }
 
 pub(super) fn staging_json(password: Option<String>) -> serde_json::Value {
@@ -350,12 +351,52 @@ async fn remove_domain<H: Host>(State(app): State<App<H>>, Path((id, hostname)):
     Ok(Json(json!({})).into_response())
 }
 
+/// Un alias o redirect diventa il dominio principale (job: backup e search-replace possono durare).
+async fn make_primary<H: Host>(State(app): State<App<H>>, Path((id, hostname)): Path<(i64, String)>, m: Method, h: HeaderMap) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    require_admin(&user)?;
+    let host = Domain::parse(&hostname).map_err(|_| ApiError::bad_request("hostname non valido"))?;
+    if !app.ctx.store.domains(id).await?.iter().any(|(d, k)| *d == host && *k != DomainKind::Primary) {
+        return Err(ApiError::bad_request("si rende principale solo un alias o un redirect del sito"));
+    }
+    let (ctx, auth, uid) = (app.ctx.clone(), app.auth.clone(), user.id);
+    let job = app
+        .jobs
+        .spawn("site.primary", Some(id), Some(user.id), move |mut log| async move {
+            flows::make_primary(&ctx, id, &host, &mut log).await?;
+            auth.audit(Some(uid), "domain.primary", Some(id), host.as_str()).await?;
+            Ok(log)
+        })
+        .await?;
+    Ok((StatusCode::ACCEPTED, Json(json!({ "job": job }))).into_response())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::testkit::*;
     use crate::auth::Role;
     use axum::http::StatusCode;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn admins_make_an_alias_the_primary_domain() {
+        let t = setup().await;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let id = create_site(&t, &admin, "sona.it").await;
+        let manager = user_with_role(&t, "g@example.org", id, Role::Manager).await;
+        call(&t, req("POST", &format!("/api/sites/{id}/domains"), Some(&admin), Some(json!({"hostname": "nuovo-sona.it", "kind": "alias"})))).await;
+        let url = format!("/api/sites/{id}/domains/nuovo-sona.it/primary");
+        let (s, _, _) = call(&t, req("POST", &url, Some(&manager), None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/domains/sona.it/primary"), Some(&admin), None)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "è già il principale");
+        let (s, body, _) = call(&t, req("POST", &url, Some(&admin), None)).await;
+        assert_eq!(s, StatusCode::ACCEPTED, "{body}");
+        let job = wait_job(&t, body["job"].as_i64().unwrap()).await;
+        assert_eq!(job.status, "done", "{:?}", job.log);
+        let (_, doms, _) = call(&t, req("GET", &format!("/api/sites/{id}/domains"), Some(&admin), None)).await;
+        assert_eq!(doms[0], json!({"hostname": "nuovo-sona.it", "kind": "primary"}));
+    }
 
     #[tokio::test]
     async fn manager_suspends_and_resumes_and_it_is_audited() {
