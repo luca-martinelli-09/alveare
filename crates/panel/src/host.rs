@@ -381,6 +381,11 @@ const REDIS_GID: u32 = 999;
 /// users.acl nella cartella dati di Redis: contiene solo hash SHA-256 delle password.
 pub fn write_redis_acl(p: &Paths, admin_sha256: &str, users: &[alveare_core::redis::RedisUser]) -> Result<()> {
     fs::create_dir_all(&p.redis)?;
+    // Redis (gruppo REDIS_GID) ci salva gli snapshot: senza scrittura blocca le scritture dei siti.
+    set_mode(&p.redis, 0o770)?;
+    if unsafe { libc::geteuid() } == 0 {
+        lchown(&p.redis, Some(0), Some(REDIS_GID))?;
+    }
     let path = p.redis.join("users.acl");
     write_atomic(&path, &alveare_core::redis::render_acl(admin_sha256, users))?;
     set_mode(&path, 0o640)?;
@@ -1265,6 +1270,16 @@ mod tests {
             s.write_all(resp.as_bytes()).await.unwrap();
             String::from_utf8_lossy(&buf[..n]).into_owned()
         })
+    }
+
+    #[test]
+    fn redis_can_write_its_snapshots_but_not_the_acl() {
+        let t = tempfile::tempdir().unwrap();
+        let p = Paths::under(t.path());
+        write_redis_acl(&p, "abc", &[]).unwrap();
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&p.redis), 0o770, "cartella scrivibile dal gruppo redis: dump.rdb");
+        assert_eq!(mode(&p.redis.join("users.acl")), 0o640, "l'ACL resta in sola lettura per redis");
     }
 
     #[tokio::test]

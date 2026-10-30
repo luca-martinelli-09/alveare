@@ -91,7 +91,9 @@ services:
     networks: [hosting, control]
     image: redis:8
     # Cache: memoria fissa, si scarta il meno usato. L'ACL (un utente per sito) la scrive il pannello.
-    command: ["redis-server", "--aclfile", "/data/users.acl", "--maxmemory", "${REDIS_MAXMEMORY:-256mb}", "--maxmemory-policy", "allkeys-lru"]
+    # Se lo snapshot su disco fallisce (disco pieno) Redis continua ad accettare scritture: fermarle
+    # farebbe cadere tutti i siti con la object cache attiva.
+    command: ["redis-server", "--aclfile", "/data/users.acl", "--maxmemory", "${REDIS_MAXMEMORY:-256mb}", "--maxmemory-policy", "allkeys-lru", "--stop-writes-on-bgsave-error", "no"]
     volumes:
       - ./data/redis:/data
     depends_on:
