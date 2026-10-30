@@ -37,7 +37,7 @@ Funzioni facoltative, tutte dal `.env` (vedi `.env.example`):
 
 | Cosa | Come |
 | --- | --- |
-| Inviti e reset della password via email | `PANEL_SMTP_FROM` (+ credenziali SES dei siti o `PANEL_SMTP_*`) |
+| Inviti e reset della password via email | `PANEL_SMTP_HOST`, `_USER`, `_PASSWORD`, `_FROM`: un utente IAM di SES suo, non quello dei siti (che ogni sito può leggere) |
 | Avvisi su Telegram | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` |
 | Tunnel e regole WAF/rate limit via API | `CLOUDFLARE_<ETICHETTA>_API_TOKEN`, `_ACCOUNT_ID`, `_TUNNEL_ID` |
 | Metriche per Grafana | `ALVEARE_METRICS_TOKEN`, poi Prometheus su `/metrics`; dashboard in `docs/grafana/alveare.json` |

@@ -86,8 +86,8 @@ impl Config {
             Some(v) => v.parse().context("ALVEARE_DISK_ALERT_MB: un numero di MB")?,
             None => 10 * 1024,
         };
-        // Le credenziali SES dei siti (SITE_ENV_SMTP_*) valgono anche per il pannello, salvo override.
-        let smtp_get = |k: &str| get(&format!("PANEL_SMTP_{k}")).or_else(|| get(&format!("SITE_ENV_SMTP_{k}")));
+        // Credenziali proprie: quelle dei siti (SITE_ENV_SMTP_*) sono leggibili da ogni sito.
+        let smtp_get = |k: &str| get(&format!("PANEL_SMTP_{k}"));
         let smtp = match (smtp_get("HOST"), smtp_get("USER"), smtp_get("PASSWORD"), get("PANEL_SMTP_FROM")) {
             (Some(host), Some(user), Some(password), Some(from)) => Some(crate::mailer::Smtp {
                 host,
@@ -200,13 +200,16 @@ mod tests {
     }
 
     #[test]
-    fn panel_smtp_reuses_site_credentials_and_needs_a_sender() {
-        let ses = [("SITE_ENV_SMTP_HOST", "email-smtp.eu-west-1.amazonaws.com"), ("SITE_ENV_SMTP_USER", "u"), ("SITE_ENV_SMTP_PASSWORD", "p")];
-        assert!(Config::from_vars(vars(&ses)).unwrap().smtp.is_none(), "senza mittente niente email");
-        let mut with_from = ses.to_vec();
+    fn panel_smtp_has_its_own_credentials_and_needs_a_sender() {
+        // Le credenziali dei siti stanno nel .env di ogni sito: il pannello non le usa.
+        let ses = [("SITE_ENV_SMTP_HOST", "email-smtp.eu-west-1.amazonaws.com"), ("SITE_ENV_SMTP_USER", "u"), ("SITE_ENV_SMTP_PASSWORD", "p"), ("PANEL_SMTP_FROM", "Alveare <pannello@esempio.it>")];
+        assert!(Config::from_vars(vars(&ses)).unwrap().smtp.is_none());
+        let own = [("PANEL_SMTP_HOST", "email-smtp.eu-west-1.amazonaws.com"), ("PANEL_SMTP_USER", "pu"), ("PANEL_SMTP_PASSWORD", "pp")];
+        assert!(Config::from_vars(vars(&own)).unwrap().smtp.is_none(), "senza mittente niente email");
+        let mut with_from = own.to_vec();
         with_from.push(("PANEL_SMTP_FROM", "Alveare <pannello@esempio.it>"));
         let smtp = Config::from_vars(vars(&with_from)).unwrap().smtp.unwrap();
-        assert_eq!((smtp.host.as_str(), smtp.port, smtp.user.as_str()), ("email-smtp.eu-west-1.amazonaws.com", 587, "u"));
+        assert_eq!((smtp.host.as_str(), smtp.port, smtp.user.as_str()), ("email-smtp.eu-west-1.amazonaws.com", 587, "pu"));
     }
 
     #[test]
