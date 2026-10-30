@@ -2,6 +2,7 @@
 //! Il tempo arriva come parametro (`now`, secondi Unix) così le scadenze sono testabili.
 pub mod invites;
 pub mod passkeys;
+pub mod profile;
 pub mod sessions;
 
 use argon2::password_hash::phc::PasswordHash;
@@ -29,6 +30,10 @@ pub enum AuthError {
     WeakPassword,
     #[error("passaggio non consentito in questo stato della sessione")]
     WrongStage,
+    #[error("email già usata da un altro utente")]
+    Taken,
+    #[error("serve almeno un amministratore")]
+    LastAdmin,
     #[error(transparent)]
     Db(#[from] sqlx::Error),
     #[error("{0}")]

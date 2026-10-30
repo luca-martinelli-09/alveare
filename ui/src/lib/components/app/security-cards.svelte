@@ -9,7 +9,7 @@
 	import { createPasskey, passkeysSupported } from '$lib/passkey';
 	import { toast } from 'svelte-sonner';
 
-	let { refresh = 0 }: { refresh?: number } = $props();
+	let { refresh = 0, part = 'all' }: { refresh?: number; part?: 'all' | 'security' | 'tokens' } = $props();
 	type Passkey = { id: number; name: string; created_at: number; last_used: number | null };
 	type Sess = { id: string; created_at: number; last_used: number; ip: string; user_agent: string; current: boolean };
 	type Tok = { id: number; name: string; expires_at: number; last_used: number | null };
@@ -56,6 +56,7 @@
 	const when = (t: number | null) => (t ? new Date(t * 1000).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' }) : '–');
 </script>
 
+{#if part !== 'tokens'}
 <SettingsSection title="Passkey" description="Accesso senza password: impronta, volto o PIN del dispositivo valgono come secondo fattore.">
 	{#each passkeys.passkeys as p (p.id)}
 		<SettingRow label={p.name} help={`Usata ${when(p.last_used)}`}>
@@ -85,7 +86,9 @@
 	{/if}
 </SettingsSection>
 
-{#if tokens.length}
+{/if}
+
+{#if part !== 'security' && tokens.length}
 	<SettingsSection title="I tuoi token API">
 		{#each tokens as t (t.id)}
 			<SettingRow label={t.name} help={`Scade ${when(t.expires_at)} · usato ${when(t.last_used)}`}>

@@ -170,6 +170,7 @@ impl From<AuthError> for ApiError {
             AuthError::Locked => Self::new(StatusCode::TOO_MANY_REQUESTS, e.to_string()),
             AuthError::WeakPassword => Self::bad_request(e.to_string()),
             AuthError::WrongStage => Self::new(StatusCode::CONFLICT, e.to_string()),
+            AuthError::Taken | AuthError::LastAdmin => Self::new(StatusCode::CONFLICT, e.to_string()),
             AuthError::Db(_) | AuthError::Internal(_) => internal(e),
         }
     }
@@ -322,6 +323,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .merge(account::routes::<H>())
         .merge(passkeys::routes::<H>())
         .merge(templates::routes::<H>())
+        .merge(users::routes::<H>())
         .merge(apps::routes::<H>())
         .with_state(app)
 }
@@ -1137,6 +1139,7 @@ mod logs;
 mod passkeys;
 mod sites;
 mod templates;
+mod users;
 mod wordpress;
 pub(crate) use wordpress::remember as remember_updates;
 

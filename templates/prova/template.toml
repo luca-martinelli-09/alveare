@@ -1,0 +1,6 @@
+# App Laravel: il codice arriva con il deploy da git (Deploy nel pannello). Il .env lo scrive
+# il pannello nella cartella del sito, che è la root dell'app; public/ è la document root.
+name = "Prova"
+kind = "laravel"
+render = []
+post_create = []

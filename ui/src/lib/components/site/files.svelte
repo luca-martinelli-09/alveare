@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Maximize2Icon from '@lucide/svelte/icons/maximize-2';
 	import Minimize2Icon from '@lucide/svelte/icons/minimize-2';
+	import XIcon from '@lucide/svelte/icons/x';
 	import * as Breadcrumb from '$lib/components/ui/breadcrumb';
 	import HouseIcon from '@lucide/svelte/icons/house';
 	import { askConfirm, askText } from '$lib/ask.svelte';
@@ -222,12 +223,18 @@
 </div>
 
 <Dialog.Root open={editing !== null} onOpenChange={(o) => !o && ((editing = null), (fullscreen = false))}>
-	<Dialog.Content class={fullscreen ? 'flex h-svh max-h-svh w-screen max-w-none flex-col rounded-none sm:max-w-none' : 'sm:max-w-5xl'}>
-		<Dialog.Header class="flex-row items-center gap-2 pr-8">
+	<Dialog.Content
+		showCloseButton={false}
+		class={fullscreen
+			? 'inset-0 flex h-dvh w-full max-w-none translate-x-0 translate-y-0 flex-col gap-4 rounded-none p-4 ring-0 sm:max-w-none'
+			: 'sm:max-w-5xl'}
+	>
+		<Dialog.Header class="flex-row items-center gap-2 space-y-0">
 			<Dialog.Title class="min-w-0 flex-1 truncate font-mono text-sm">{editing?.path}</Dialog.Title>
 			<Button variant="ghost" size="icon-sm" aria-label={fullscreen ? 'Riduci' : 'Tutto schermo'} title={fullscreen ? 'Riduci' : 'Tutto schermo'} onclick={() => (fullscreen = !fullscreen)}>
 				{#if fullscreen}<Minimize2Icon />{:else}<Maximize2Icon />{/if}
 			</Button>
+			<Button variant="ghost" size="icon-sm" aria-label="Chiudi" title="Chiudi" onclick={() => ((editing = null), (fullscreen = false))}><XIcon /></Button>
 		</Dialog.Header>
 		{#if editing}
 			<CodeEditor bind:value={editing.content} filename={editing.path} class={fullscreen ? 'min-h-0 flex-1' : 'h-[60vh]'} />

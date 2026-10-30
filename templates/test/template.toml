@@ -1,0 +1,5 @@
+name = "Test"
+kind = "php"
+render = []
+post_create = []
+sql_domain = "template.local"

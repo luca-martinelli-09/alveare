@@ -1,5 +1,6 @@
 <script lang="ts">
 	// Editor CodeMirror con evidenziazione scelta dall'estensione del file.
+	import { untrack } from 'svelte';
 	import { EditorView, basicSetup } from 'codemirror';
 	import { php } from '@codemirror/lang-php';
 	import { javascript } from '@codemirror/lang-javascript';
@@ -58,7 +59,8 @@
 	$effect(() => {
 		const view = new EditorView({
 			parent: host,
-			doc: value,
+			// untrack: il contenuto iniziale non deve far ricreare l'editor a ogni tasto (perderebbe il focus).
+			doc: untrack(() => value),
 			extensions: [
 				theme,
 				syntaxHighlighting(highlight),
