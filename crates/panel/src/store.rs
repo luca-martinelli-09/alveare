@@ -46,6 +46,16 @@ macro_rules! text_enum {
 text_enum!(SiteKind { Wordpress = "wordpress", Php = "php", Laravel = "laravel" });
 text_enum!(SiteStatus { Creating = "creating", Active = "active", Suspended = "suspended", Error = "error", Deleting = "deleting" });
 text_enum!(DomainKind { Primary = "primary", Alias = "alias", Redirect = "redirect" });
+text_enum!(OverrideKind { Php = "php", Caddy = "caddy" });
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Override {
+    pub id: i64,
+    pub version: i64,
+    pub content: String,
+    pub author_id: Option<i64>,
+    pub created_at: String,
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Alert {
@@ -141,6 +151,12 @@ fn site_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Site> {
     })
 }
 
+const OVERRIDE_COLUMNS: &str = "id, version, content, author_id, created_at";
+
+fn override_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Override> {
+    Ok(Override { id: r.try_get("id")?, version: r.try_get("version")?, content: r.try_get("content")?, author_id: r.try_get("author_id")?, created_at: r.try_get("created_at")? })
+}
+
 fn export_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Export> {
     Ok(Export { token: r.try_get("token")?, site_id: r.try_get("site_id")?, file: r.try_get("file")?, size: r.try_get("size")?, created_at: r.try_get("created_at")? })
 }
@@ -153,7 +169,7 @@ fn unique_violation(e: sqlx::Error, hostname: &Domain) -> StoreError {
 }
 
 fn to_php(s: Site) -> SitePhp {
-    SitePhp { uid: s.uid(), settings: (&s.settings).into(), slug: s.slug }
+    SitePhp { uid: s.uid(), settings: (&s.settings).into(), slug: s.slug, extra: vec![] }
 }
 
 #[derive(Clone)]
@@ -449,6 +465,58 @@ impl Store {
         Ok(sqlx::query_scalar("SELECT DISTINCT slug FROM backup_runs WHERE slug NOT IN (SELECT slug FROM sites)").fetch_all(&self.pool).await?)
     }
 
+    pub async fn add_override(&self, site_id: Option<i64>, kind: OverrideKind, content: &str, author: Option<i64>) -> Result<Override> {
+        let mut tx = self.pool.begin().await?;
+        let next: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) + 1 FROM config_overrides WHERE site_id IS ? AND kind = ?")
+            .bind(site_id)
+            .bind(kind.as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+        let id: i64 = sqlx::query_scalar("INSERT INTO config_overrides (site_id, kind, content, version, author_id) VALUES (?, ?, ?, ?, ?) RETURNING id")
+            .bind(site_id)
+            .bind(kind.as_str())
+            .bind(content)
+            .bind(next)
+            .bind(author)
+            .fetch_one(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        self.override_by_id(id).await
+    }
+
+    async fn override_by_id(&self, id: i64) -> Result<Override> {
+        let r = sqlx::query(&format!("SELECT {OVERRIDE_COLUMNS} FROM config_overrides WHERE id = ?")).bind(id).fetch_one(&self.pool).await?;
+        override_from_row(&r)
+    }
+
+    pub async fn current_override(&self, site_id: Option<i64>, kind: OverrideKind) -> Result<Option<Override>> {
+        Ok(self.override_history(site_id, kind).await?.into_iter().next())
+    }
+
+    /// Dalla più recente.
+    pub async fn override_history(&self, site_id: Option<i64>, kind: OverrideKind) -> Result<Vec<Override>> {
+        let rows = sqlx::query(&format!("SELECT {OVERRIDE_COLUMNS} FROM config_overrides WHERE site_id IS ? AND kind = ? ORDER BY version DESC"))
+            .bind(site_id)
+            .bind(kind.as_str())
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(override_from_row).collect()
+    }
+
+    /// Solo per annullare una versione appena salvata che la validazione ha rifiutato.
+    pub async fn remove_override(&self, id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM config_overrides WHERE id = ?").bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    async fn php_extra(&self, site_id: i64) -> Result<Vec<String>> {
+        Ok(self
+            .current_override(Some(site_id), OverrideKind::Php)
+            .await?
+            .and_then(|o| alveare_core::php::parse_extra(&o.content).ok())
+            .unwrap_or_default())
+    }
+
     pub async fn add_export(&self, e: &Export) -> Result<()> {
         sqlx::query("INSERT INTO exports (token, site_id, file, size, created_at) VALUES (?, ?, ?, ?, ?)")
             .bind(&e.token)
@@ -504,6 +572,7 @@ impl Store {
             let of = |k: DomainKind| domains.iter().filter(|(_, dk)| *dk == k).map(|(d, _)| d.clone()).collect::<Vec<_>>();
             let primary = of(DomainKind::Primary).into_iter().next().ok_or(StoreError::NotFound)?;
             let staging_hash: Option<String> = sqlx::query_scalar("SELECT staging_hash FROM sites WHERE id = ?").bind(site.id).fetch_one(&self.pool).await?;
+            let extra = self.current_override(Some(site.id), OverrideKind::Caddy).await?.map(|o| o.content);
             out.push(CaddySite {
                 slug: site.slug,
                 primary,
@@ -512,6 +581,7 @@ impl Store {
                 suspended: site.status == SiteStatus::Suspended,
                 staging_hash,
                 log_days: site.log_retention_days,
+                extra,
             });
         }
         Ok(out)
@@ -519,18 +589,22 @@ impl Store {
 
     /// Tutti i siti con file su disco: servono a passwd e group.
     pub async fn php_sites(&self) -> Result<Vec<SitePhp>> {
-        Ok(self.sites().await?.into_iter().map(to_php).collect())
+        self.with_extra(self.sites().await?).await
     }
 
     /// Siti con un pool FPM attivo: non sospesi né in eliminazione.
     pub async fn pooled_sites(&self) -> Result<Vec<SitePhp>> {
-        Ok(self
-            .sites()
-            .await?
-            .into_iter()
-            .filter(|s| !matches!(s.status, SiteStatus::Suspended | SiteStatus::Deleting))
-            .map(to_php)
-            .collect())
+        let sites = self.sites().await?.into_iter().filter(|s| !matches!(s.status, SiteStatus::Suspended | SiteStatus::Deleting)).collect();
+        self.with_extra(sites).await
+    }
+
+    async fn with_extra(&self, sites: Vec<Site>) -> Result<Vec<SitePhp>> {
+        let mut out = Vec::new();
+        for s in sites {
+            let extra = self.php_extra(s.id).await?;
+            out.push(SitePhp { extra, ..to_php(s) });
+        }
+        Ok(out)
     }
 }
 
@@ -624,6 +698,27 @@ mod tests {
         s.set_staging(b.id, None).await.unwrap();
         assert!(!s.site(b.id).await.unwrap().staging);
         assert!(s.caddy_sites().await.unwrap()[1].staging_hash.is_none());
+    }
+
+    #[tokio::test]
+    async fn overrides_are_versioned_per_site_and_global() {
+        let s = store().await;
+        let a = s.create_site(&new_site("a.it")).await.unwrap();
+        assert!(s.current_override(Some(a.id), OverrideKind::Php).await.unwrap().is_none());
+        assert_eq!(s.add_override(Some(a.id), OverrideKind::Php, "php_value[a] = 1", Some(7)).await.unwrap().version, 1);
+        let v2 = s.add_override(Some(a.id), OverrideKind::Php, "php_value[a] = 2", Some(7)).await.unwrap();
+        assert_eq!(v2.version, 2);
+        assert_eq!(s.add_override(None, OverrideKind::Php, "memory_limit = 1G", None).await.unwrap().version, 1, "il globale ha la sua numerazione");
+        let cur = s.current_override(Some(a.id), OverrideKind::Php).await.unwrap().unwrap();
+        assert_eq!((cur.version, cur.content.as_str(), cur.author_id), (2, "php_value[a] = 2", Some(7)));
+        let history = s.override_history(Some(a.id), OverrideKind::Php).await.unwrap();
+        assert_eq!(history.iter().map(|o| o.version).collect::<Vec<_>>(), [2, 1]);
+        assert!(s.current_override(Some(a.id), OverrideKind::Caddy).await.unwrap().is_none());
+        // Le direttive attive finiscono nel pool.
+        let php = s.php_sites().await.unwrap();
+        assert_eq!(php[0].extra, ["php_value[a] = 2"]);
+        s.remove_override(v2.id).await.unwrap();
+        assert_eq!(s.current_override(Some(a.id), OverrideKind::Php).await.unwrap().unwrap().version, 1);
     }
 
     #[tokio::test]

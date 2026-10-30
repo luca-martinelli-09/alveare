@@ -164,7 +164,10 @@ impl From<FileError> for ApiError {
 
 impl From<anyhow::Error> for ApiError {
     fn from(e: anyhow::Error) -> Self {
-        internal(e)
+        match e.downcast_ref::<flows::Invalid>() {
+            Some(invalid) => Self::bad_request(invalid.0.clone()),
+            None => internal(e),
+        }
     }
 }
 
@@ -261,6 +264,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .merge(sites::routes::<H>())
         .merge(imports::routes::<H>())
         .merge(logs::routes::<H>())
+        .merge(config::routes::<H>())
         .with_state(app)
 }
 
@@ -884,6 +888,7 @@ async fn get_job<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Met
     Ok(Json(job).into_response())
 }
 
+mod config;
 mod imports;
 mod logs;
 mod sites;

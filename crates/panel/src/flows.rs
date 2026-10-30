@@ -14,7 +14,7 @@ use tokio::io::AsyncRead;
 use crate::backup::{Retention, Snapshot};
 use crate::database::TableInfo;
 use crate::secrets::{random_password, SecretKey};
-use crate::store::{NewSite, Site, SiteKind, SiteStatus, Store};
+use crate::store::{NewSite, Override, OverrideKind, Site, SiteKind, SiteStatus, Store};
 use crate::template::Vars;
 
 const WP_SALT_KEYS: [&str; 8] =
@@ -37,7 +37,12 @@ pub trait Host: Send + Sync + 'static {
     fn install_template(&self, slug: &Slug, uid: u32, template: &str, vars: &Vars, env: &Vars) -> impl Future<Output = Result<Installed>> + Send;
     /// Rigenera passwd, group e pool; restituisce i file di pool rifiutati.
     fn sync_php(&self, users: &[SitePhp], pools: &[SitePhp]) -> impl Future<Output = Result<Vec<String>>> + Send;
-    fn sync_caddy(&self, sites: &[CaddySite]) -> impl Future<Output = Result<()>> + Send;
+    /// Carica il Caddyfile dei siti (con l'override globale) via Admin API: tutto o niente.
+    fn sync_caddy(&self, sites: &[CaddySite], global: Option<&str>) -> impl Future<Output = Result<()>> + Send;
+    /// `POST /adapt`: il JSON di un Caddyfile, senza caricarlo.
+    fn caddy_adapt(&self, caddyfile: &str) -> impl Future<Output = Result<serde_json::Value>> + Send;
+    /// Scrive l'override globale di PHP (conf.d/zz-custom.ini); il reload lo fa `sync_php`.
+    fn write_php_global(&self, ini: &str) -> impl Future<Output = Result<()>> + Send;
     fn wp(&self, slug: &Slug, args: &[String]) -> impl Future<Output = Result<String>> + Send;
     /// Come `wp`, ma un'uscita con errore non è un errore: (riuscito, output).
     fn wp_output(&self, slug: &Slug, args: &[String]) -> impl Future<Output = Result<(bool, String)>> + Send;
@@ -186,7 +191,77 @@ impl<H: Host> Ctx<H> {
 
 /// Rigenera e ricarica il Caddyfile dallo stato.
 pub async fn sync_caddy<H: Host>(c: &Ctx<H>) -> Result<()> {
-    c.host.sync_caddy(&c.store.caddy_sites().await?).await
+    let global = c.store.current_override(None, OverrideKind::Caddy).await?.map(|o| o.content);
+    c.host.sync_caddy(&c.store.caddy_sites().await?, global.as_deref()).await
+}
+
+/// Una modifica rifiutata dalla validazione: la UI la mostra così com'è (400).
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct Invalid(pub String);
+
+/// Direttive PHP extra di un sito (admin): validate, provate con `php-fpm -t`, tolte se FPM le rifiuta.
+pub async fn set_php_override<H: Host>(c: &Ctx<H>, site_id: i64, content: &str, author: Option<i64>) -> Result<Override> {
+    let site = c.store.site(site_id).await?;
+    alveare_core::php::parse_extra(content).map_err(Invalid)?;
+    let saved = c.store.add_override(Some(site_id), OverrideKind::Php, content, author).await?;
+    if let Err(e) = check_own_pool(c, &site).await {
+        c.store.remove_override(saved.id).await?;
+        c.sync_php().await?;
+        return Err(Invalid(format!("php-fpm ha rifiutato le direttive: {e:#}")).into());
+    }
+    Ok(saved)
+}
+
+/// Override globale di PHP: scritto in conf.d e attivato con il reload di FPM.
+pub async fn set_php_global<H: Host>(c: &Ctx<H>, content: &str, author: Option<i64>) -> Result<Override> {
+    let lines = alveare_core::php::parse_global_ini(content).map_err(Invalid)?;
+    let previous = c.store.current_override(None, OverrideKind::Php).await?;
+    let saved = c.store.add_override(None, OverrideKind::Php, content, author).await?;
+    let applied = async {
+        c.host.write_php_global(&lines.join("\n")).await?;
+        c.sync_php().await
+    }
+    .await;
+    if let Err(e) = applied {
+        c.store.remove_override(saved.id).await?;
+        let old = previous.map(|o| alveare_core::php::parse_global_ini(&o.content).unwrap_or_default().join("\n")).unwrap_or_default();
+        c.host.write_php_global(&old).await?;
+        c.sync_php().await?;
+        return Err(Invalid(format!("PHP non ha accettato la configurazione: {e:#}")).into());
+    }
+    Ok(saved)
+}
+
+/// Override di Caddy, del sito o globale: `/adapt` per la sintassi, controllo del JSON per
+/// l'isolamento, poi `/load`. Se qualcosa non va la versione salvata si toglie e non resta nulla.
+pub async fn set_caddy_override<H: Host>(c: &Ctx<H>, site_id: Option<i64>, content: &str, author: Option<i64>) -> Result<Override> {
+    let site = match site_id {
+        Some(id) => Some(c.store.site(id).await?),
+        None => None,
+    };
+    let saved = c.store.add_override(site_id, OverrideKind::Caddy, content, author).await?;
+    let checked = async {
+        let global = c.store.current_override(None, OverrideKind::Caddy).await?.map(|o| o.content);
+        let sites: Vec<CaddySite> = match &site {
+            Some(s) => c.store.caddy_sites().await?.into_iter().filter(|x| x.slug == s.slug).map(|x| CaddySite { suspended: false, ..x }).collect(),
+            None => vec![],
+        };
+        let text = alveare_core::caddy::render_caddyfile(&alveare_core::caddy::CaddyConfig { panel_host: None, adminer_host: None, sites, global_extra: global });
+        let json = c.host.caddy_adapt(&text).await.map_err(|e| Invalid(format!("Caddy: {e:#}")))?;
+        let violations = alveare_core::caddy::adapted_violations(&json, site.as_ref().map(|s| &s.slug));
+        if !violations.is_empty() {
+            return Err(Invalid(format!("override rifiutato, romperebbe l'isolamento: {}", violations.join("; "))).into());
+        }
+        sync_caddy(c).await.map_err(|e| anyhow::Error::from(Invalid(format!("Caddy ha rifiutato la configurazione: {e:#}"))))
+    }
+    .await;
+    if let Err(e) = checked {
+        c.store.remove_override(saved.id).await?;
+        let _ = sync_caddy(c).await;
+        return Err(e);
+    }
+    Ok(saved)
 }
 
 pub async fn redis_users(store: &Store, key: &SecretKey) -> Result<Vec<RedisUser>> {
@@ -1273,6 +1348,57 @@ mod tests {
         let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
         assert!(test_restore(&c, site.id, &mut JobLog::default()).await.is_err());
         assert_eq!(c.store.open_alerts(None).await.unwrap()[0].kind, "restore-test");
+    }
+
+    #[tokio::test]
+    async fn php_override_is_validated_applied_and_reverted_if_fpm_refuses() {
+        let c = ctx(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        let err = set_php_override(&c, site.id, "php_admin_value[open_basedir] = /", Some(1)).await.unwrap_err();
+        assert!(err.downcast_ref::<Invalid>().is_some(), "{err:#}");
+        assert!(c.store.current_override(Some(site.id), OverrideKind::Php).await.unwrap().is_none());
+        set_php_override(&c, site.id, "php_value[max_input_vars] = 5000", Some(1)).await.unwrap();
+        assert_eq!(c.store.php_sites().await.unwrap()[0].extra, ["php_value[max_input_vars] = 5000"]);
+
+        let c = ctx(FakeHost { reject_pool: true, ..Default::default() }).await;
+        let site = c.store.create_site(&NewSite { primary: Domain::parse("x.it").unwrap(), kind: SiteKind::Wordpress, template: "wordpress".into() }).await.unwrap();
+        let err = set_php_override(&c, site.id, "php_value[memory_limit] = tanto", Some(1)).await.unwrap_err();
+        assert!(err.downcast_ref::<Invalid>().is_some());
+        assert!(c.store.current_override(Some(site.id), OverrideKind::Php).await.unwrap().is_none(), "versione rifiutata tolta");
+    }
+
+    #[tokio::test]
+    async fn caddy_override_is_checked_on_the_adapted_json_and_reverted() {
+        let bad = serde_json::json!({"routes": [{"handle": [{"handler": "vars", "root": "/etc"}]}]});
+        let c = ctx(FakeHost { adapted: std::sync::Mutex::new(Some(bad)), ..Default::default() }).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        let err = set_caddy_override(&c, Some(site.id), "root * /etc", Some(1)).await.unwrap_err();
+        assert!(err.to_string().contains("/etc"), "{err}");
+        assert!(c.store.current_override(Some(site.id), OverrideKind::Caddy).await.unwrap().is_none());
+        *c.host.adapted.lock().unwrap() = None;
+        c.host.calls.lock().unwrap().clear();
+        set_caddy_override(&c, Some(site.id), "header X-Prova 1", Some(1)).await.unwrap();
+        assert_eq!(c.host.calls(), ["caddy_adapt", "sync_caddy sona_it"]);
+        assert_eq!(c.store.caddy_sites().await.unwrap()[0].extra.as_deref(), Some("header X-Prova 1"));
+        set_caddy_override(&c, None, "(sicurezza) {\n\theader X-Frame-Options DENY\n}", Some(1)).await.unwrap();
+        assert!(c.host.caddy_global.lock().unwrap().as_deref().unwrap().contains("sicurezza"));
+    }
+
+    #[tokio::test]
+    async fn caddy_refusing_the_config_reverts_the_override() {
+        let c = ctx(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        let c = Ctx { host: FakeHost::failing("sync_caddy"), ..c };
+        assert!(set_caddy_override(&c, Some(site.id), "header X 1", Some(1)).await.is_err());
+        assert!(c.store.current_override(Some(site.id), OverrideKind::Caddy).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn global_php_ini_is_validated_written_and_reloaded() {
+        let c = ctx(FakeHost::default()).await;
+        assert!(set_php_global(&c, "disable_functions =", Some(1)).await.unwrap_err().downcast_ref::<Invalid>().is_some());
+        set_php_global(&c, "; note\nmax_input_vars = 3000\n", Some(1)).await.unwrap();
+        assert_eq!(c.host.calls(), ["write_php_global max_input_vars = 3000", "sync_php users= pools="]);
     }
 
     #[tokio::test]

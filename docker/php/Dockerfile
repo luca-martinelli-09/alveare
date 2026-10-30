@@ -35,5 +35,8 @@ COPY docker/php/fpm.conf /usr/local/etc/php-fpm.d/alveare.conf
 COPY docker/php/php.ini /usr/local/etc/php/conf.d/alveare.ini
 COPY --from=agent /src/target/release/php-agent /usr/local/bin/php-agent
 
+# Override globale del pannello (conf.d/zz-custom.ini), dopo le impostazioni dell'immagine.
+ENV PHP_INI_SCAN_DIR=/usr/local/etc/php/conf.d:/srv/php/conf.d
+
 STOPSIGNAL SIGTERM
 CMD ["php-agent"]

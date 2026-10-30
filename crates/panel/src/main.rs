@@ -32,7 +32,7 @@ use crate::auth::Auth;
 use crate::config::Config;
 use crate::flows::Ctx;
 use crate::host::{agent_call, caddy_load, write_php_files, Paths, SystemHost};
-use crate::store::Store;
+use crate::store::{OverrideKind, Store};
 
 const HEALTH_ADDR: &str = "127.0.0.1:8080";
 
@@ -132,7 +132,14 @@ async fn write_state_to_disk(store: &Store, paths: &Paths, cfg: &Config) -> Resu
         panel_host: cfg.panel_host.clone(),
         adminer_host: cfg.adminer_host.clone(),
         sites: store.caddy_sites().await?,
+        global_extra: store.current_override(None, OverrideKind::Caddy).await?.map(|o| o.content),
     });
+    let php_global = match store.current_override(None, OverrideKind::Php).await? {
+        Some(o) => alveare_core::php::parse_global_ini(&o.content).unwrap_or_default().join("\n"),
+        None => String::new(),
+    };
+    std::fs::create_dir_all(&paths.php_conf)?;
+    std::fs::write(paths.php_conf.join("zz-custom.ini"), format!("; Override globale dal pannello Alveare: non modificare a mano.\n{php_global}\n"))?;
     std::fs::write(paths.caddy.join("Caddyfile"), caddyfile).context("scrittura del Caddyfile")
 }
 

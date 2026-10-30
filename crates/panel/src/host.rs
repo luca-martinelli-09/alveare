@@ -31,6 +31,8 @@ pub struct Paths {
     pub trash: PathBuf,
     pub php_etc: PathBuf,
     pub pools: PathBuf,
+    /// Override globale di PHP, letto da PHP_INI_SCAN_DIR.
+    pub php_conf: PathBuf,
     pub staging: PathBuf,
     pub templates: PathBuf,
     pub caddy: PathBuf,
@@ -54,6 +56,7 @@ impl Paths {
             trash: root.join("trash"),
             php_etc: root.join("php/etc"),
             pools: root.join("php/pools"),
+            php_conf: root.join("php/conf.d"),
             staging: root.join("php/staging"),
             templates: root.join("templates"),
             caddy: root.join("caddy"),
@@ -227,11 +230,11 @@ pub async fn agent_call(socket: &Path, cmd: &Command, timeout: Duration) -> Resu
     tokio::time::timeout(timeout, call).await.context("l'agente non ha risposto in tempo")?
 }
 
-/// POST /load all'Admin API di Caddy sul socket Unix: valida e applica, oppure rifiuta tutto.
-pub async fn caddy_load(socket: &Path, caddyfile: &str) -> Result<()> {
+/// POST all'Admin API di Caddy sul socket Unix; restituisce il corpo se lo stato è 200.
+async fn caddy_request(socket: &Path, path: &str, caddyfile: &str) -> Result<String> {
     let mut stream = UnixStream::connect(socket).await.with_context(|| format!("connessione a Caddy ({})", socket.display()))?;
     let head = format!(
-        "POST /load HTTP/1.1\r\nHost: caddy\r\nContent-Type: text/caddyfile\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "POST {path} HTTP/1.1\r\nHost: caddy\r\nContent-Type: text/caddyfile\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         caddyfile.len()
     );
     stream.write_all(head.as_bytes()).await?;
@@ -239,11 +242,31 @@ pub async fn caddy_load(socket: &Path, caddyfile: &str) -> Result<()> {
     let mut resp = String::new();
     tokio::time::timeout(Duration::from_secs(30), stream.read_to_string(&mut resp)).await.context("Caddy non ha risposto")??;
     let status = resp.split(' ').nth(1).unwrap_or_default();
+    let body = resp.split_once("\r\n\r\n").map_or("", |(_, b)| b);
     if status != "200" {
-        let body = resp.split_once("\r\n\r\n").map_or("", |(_, b)| b);
         bail!("Caddy ha rifiutato la configurazione ({status}): {body}");
     }
-    Ok(())
+    Ok(dechunk(body))
+}
+
+/// Il corpo può arrivare in chunked encoding: si ricompone.
+fn dechunk(body: &str) -> String {
+    let mut out = String::new();
+    let mut rest = body;
+    loop {
+        let Some((size, after)) = rest.split_once("\r\n") else { return body.to_string() };
+        let Ok(n) = usize::from_str_radix(size.trim(), 16) else { return body.to_string() };
+        if n == 0 || after.len() < n {
+            return if out.is_empty() && n != 0 { body.to_string() } else { out };
+        }
+        out.push_str(&after[..n]);
+        rest = after[n..].trim_start_matches("\r\n");
+    }
+}
+
+/// POST /load all'Admin API di Caddy sul socket Unix: valida e applica, oppure rifiuta tutto.
+pub async fn caddy_load(socket: &Path, caddyfile: &str) -> Result<()> {
+    caddy_request(socket, "/load", caddyfile).await.map(drop)
 }
 
 fn sql_safe(s: &str) -> Result<&str> {
@@ -417,12 +440,28 @@ impl Host for SystemHost {
         Ok(report.rejected.into_iter().map(|(name, _)| name).collect())
     }
 
-    async fn sync_caddy(&self, sites: &[CaddySite]) -> Result<()> {
-        let text = render_caddyfile(&CaddyConfig { panel_host: self.panel_host.clone(), adminer_host: self.adminer_host.clone(), sites: sites.to_vec() });
+    async fn sync_caddy(&self, sites: &[CaddySite], global: Option<&str>) -> Result<()> {
+        let text = render_caddyfile(&CaddyConfig {
+            panel_host: self.panel_host.clone(),
+            adminer_host: self.adminer_host.clone(),
+            sites: sites.to_vec(),
+            global_extra: global.map(String::from),
+        });
         fs::create_dir_all(&self.paths.caddy)?;
         caddy_load(&self.paths.caddy_admin, &text).await?;
         // Su disco solo una config che Caddy ha accettato: è quella usata al riavvio.
         write_atomic(&self.paths.caddy.join("Caddyfile"), &text)
+    }
+
+    async fn caddy_adapt(&self, caddyfile: &str) -> Result<serde_json::Value> {
+        let body = caddy_request(&self.paths.caddy_admin, "/adapt", caddyfile).await?;
+        let v: serde_json::Value = serde_json::from_str(&body).context("risposta di /adapt non valida")?;
+        Ok(v.get("result").cloned().unwrap_or(v))
+    }
+
+    async fn write_php_global(&self, ini: &str) -> Result<()> {
+        fs::create_dir_all(&self.paths.php_conf)?;
+        write_atomic(&self.paths.php_conf.join("zz-custom.ini"), &format!("; Override globale dal pannello Alveare: non modificare a mano.\n{ini}\n"))
     }
 
     async fn wp(&self, slug: &Slug, args: &[String]) -> Result<String> {
@@ -743,7 +782,7 @@ mod tests {
     }
 
     fn php(s: &str, uid: u32) -> SitePhp {
-        SitePhp { slug: slug(s), uid, settings: PhpSettings::default() }
+        SitePhp { slug: slug(s), uid, settings: PhpSettings::default(), extra: vec![] }
     }
 
     #[tokio::test]
@@ -762,6 +801,12 @@ mod tests {
         assert_eq!(status, 503);
         assert!(request.contains("Host: sona.it\r\n") && request.contains("X-Forwarded-Proto: https\r\n"));
         assert!(request.contains("Authorization: Basic c3RhZ2luZzpwdw==\r\n"), "{request}");
+    }
+
+    #[test]
+    fn chunked_bodies_are_reassembled() {
+        assert_eq!(dechunk("5\r\nciao \r\n5\r\nmondo\r\n0\r\n\r\n"), "ciao mondo");
+        assert_eq!(dechunk("{\"a\":1}"), "{\"a\":1}");
     }
 
     #[test]

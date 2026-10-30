@@ -17,6 +17,8 @@ pub struct CaddySite {
     pub staging_hash: Option<String>,
     /// Giorni di conservazione degli access log ruotati.
     pub log_days: u32,
+    /// Override dell'admin dentro il blocco del sito (header, redirect, cache, blocchi di path).
+    pub extra: Option<String>,
 }
 
 const MAINTENANCE_PAGE: &str = "<!doctype html><html lang=\"it\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sito in manutenzione</title><body style=\"font-family:system-ui;text-align:center;padding:4rem 1rem\"><h1>Sito in manutenzione</h1><p>Torniamo online a breve.</p></body></html>";
@@ -26,6 +28,8 @@ pub struct CaddyConfig {
     /// Da proteggere con Cloudflare Access, come il pannello.
     pub adminer_host: Option<Domain>,
     pub sites: Vec<CaddySite>,
+    /// Override globale: snippet riusabili dai siti, dopo le opzioni globali.
+    pub global_extra: Option<String>,
 }
 
 /// Caddyfile completo dallo stato: nessuna modifica incrementale, così non può divergere.
@@ -41,6 +45,9 @@ pub fn render_caddyfile(cfg: &CaddyConfig) -> String {
 }}
 "
     );
+    if let Some(extra) = cfg.global_extra.as_deref().filter(|e| !e.trim().is_empty()) {
+        write!(out, "\n# override globale\n{}\n", extra.trim_end()).unwrap();
+    }
     if let Some(host) = &cfg.panel_host {
         write!(out, "\nhttp://{} {{\n\treverse_proxy panel:8080 {{\n\t\theader_up X-Real-IP {{client_ip}}\n\t}}\n}}\n", host.as_str()).unwrap();
     }
@@ -73,6 +80,12 @@ fn render_site(out: &mut String, site: &CaddySite) {
         )
         .unwrap();
     } else {
+        let extra = site
+            .extra
+            .as_deref()
+            .filter(|e| !e.trim().is_empty())
+            .map(|e| format!("\t# override del sito\n{}", e.trim_end().lines().map(|l| format!("\t{l}\n")).collect::<String>()))
+            .unwrap_or_default();
         let staging = site
             .staging_hash
             .as_ref()
@@ -93,7 +106,7 @@ fn render_site(out: &mut String, site: &CaddySite) {
 	}}
 {staging}	@uploads_php path_regexp (?i)^/wp-content/uploads/.*\\.ph(p[0-9]?|tml|ar)$
 	respond @uploads_php 403
-	php_fastcgi unix/{socket} {{
+{extra}	php_fastcgi unix/{socket} {{
 		env REMOTE_ADDR {{client_ip}}
 	}}
 	file_server
@@ -106,6 +119,51 @@ fn render_site(out: &mut String, site: &CaddySite) {
     }
     for r in &site.redirects {
         write!(out, "\nhttp://{} {{\n\tredir https://{}{{uri}} permanent\n}}\n", r.as_str(), site.primary.as_str()).unwrap();
+    }
+}
+
+/// Controlla il JSON di `/adapt`: radici, socket e file di log devono essere quelli del sito
+/// (`slug`), o per l'override globale (`None`) mai i socket PHP dei siti né radici fuori da /srv/sites.
+pub fn adapted_violations(json: &serde_json::Value, slug: Option<&Slug>) -> Vec<String> {
+    let mut out = Vec::new();
+    walk(json, slug, &mut out);
+    out
+}
+
+fn walk(v: &serde_json::Value, slug: Option<&Slug>, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::Object(map) => {
+            for (k, child) in map {
+                if let Some(text) = child.as_str() {
+                    check_value(k, text, slug, out);
+                }
+                walk(child, slug, out);
+            }
+        }
+        serde_json::Value::Array(items) => items.iter().for_each(|i| walk(i, slug, out)),
+        _ => {}
+    }
+}
+
+fn check_value(key: &str, v: &str, slug: Option<&Slug>, out: &mut Vec<String>) {
+    let site_dir = slug.map(|s| format!("{SITES_DIR}/{}/", s.as_str()));
+    let ok = match key {
+        "root" => match &site_dir {
+            Some(dir) => format!("{v}/").starts_with(dir.as_str()),
+            None => v.starts_with(&format!("{SITES_DIR}/")),
+        },
+        "dial" => match slug {
+            Some(s) => v == format!("unix/{}", socket_path(s)),
+            None => !v.starts_with(&format!("unix/{SOCKET_DIR}/")),
+        },
+        "filename" => match slug {
+            Some(s) => v.starts_with(&format!("{LOGS_DIR}/{}/", s.as_str())),
+            None => v.starts_with(&format!("{LOGS_DIR}/")),
+        },
+        _ => true,
+    };
+    if !ok {
+        out.push(format!("{key} non ammesso: {v}"));
     }
 }
 
@@ -127,11 +185,41 @@ mod tests {
             suspended: false,
             staging_hash: None,
             log_days: 30,
+            extra: None,
         }
     }
 
     fn cfg() -> CaddyConfig {
-        CaddyConfig { panel_host: Some(d("pannello.example.org")), adminer_host: None, sites: vec![sona()] }
+        CaddyConfig { panel_host: Some(d("pannello.example.org")), adminer_host: None, sites: vec![sona()], global_extra: None }
+    }
+
+    #[test]
+    fn site_and_global_overrides_land_in_their_blocks() {
+        let mut site = sona();
+        site.extra = Some("header Cache-Control \"max-age=3600\"\nimport sicurezza".into());
+        let c = render_caddyfile(&CaddyConfig { panel_host: None, adminer_host: None, sites: vec![site], global_extra: Some("(sicurezza) {\n\theader X-Frame-Options DENY\n}".into()) });
+        let global = c.find("\n(sicurezza) {\n\theader X-Frame-Options DENY\n}\n").expect("snippet globale");
+        let block = c.find("http://sona.it, http://comune-sona.it {").unwrap();
+        assert!(global < block, "gli snippet globali prima dei siti");
+        let snippet = c.find("\t# override del sito\n\theader Cache-Control \"max-age=3600\"\n\timport sicurezza\n").expect("snippet del sito");
+        assert!(block < snippet && snippet < c.find("\tphp_fastcgi").unwrap());
+    }
+
+    #[test]
+    fn adapted_json_with_foreign_root_socket_or_log_is_flagged() {
+        let json: serde_json::Value = serde_json::from_str(include_str!("../testdata/adapted_override.json")).unwrap();
+        let sona = Slug::parse("sona_it").unwrap();
+        let v = adapted_violations(&json, Some(&sona));
+        assert_eq!(v.len(), 2, "{v:?}");
+        assert!(v.iter().any(|x| x.contains("/etc")));
+        assert!(v.iter().any(|x| x.contains("upupa_it.sock")));
+        let clean = serde_json::json!({"apps": {"http": {"servers": {"s": {"routes": [{"handle": [{"handler": "vars", "root": "/srv/sites/sona_it/public"}, {"upstreams": [{"dial": "unix//run/php/sona_it.sock"}]}]}]}}}}, "logging": {"logs": {"l": {"writer": {"filename": "/srv/logs/sona_it/access.log"}}}}});
+        assert!(adapted_violations(&clean, Some(&sona)).is_empty());
+        let bad_log = serde_json::json!({"logging": {"logs": {"l": {"writer": {"filename": "/srv/sites/upupa_it/public/x.php"}}}}});
+        assert_eq!(adapted_violations(&bad_log, Some(&sona)).len(), 1);
+        // Globale: niente socket dei siti, radici solo sotto /srv/sites.
+        let global = serde_json::json!({"upstreams": [{"dial": "unix//run/php/sona_it.sock"}, {"dial": "example.org:443"}], "root": "/srv/sites/x/public"});
+        assert_eq!(adapted_violations(&global, None).len(), 1);
     }
 
     #[test]
@@ -184,7 +272,7 @@ mod tests {
     fn access_log_retention_follows_the_site_setting() {
         let mut site = sona();
         site.log_days = 7;
-        let c = render_caddyfile(&CaddyConfig { panel_host: None, adminer_host: None, sites: vec![site] });
+        let c = render_caddyfile(&CaddyConfig { panel_host: None, adminer_host: None, global_extra: None, sites: vec![site] });
         assert!(c.contains("\t\t\troll_keep_for 168h\n"), "{c}");
     }
 
@@ -198,7 +286,7 @@ mod tests {
     fn suspended_site_answers_503_and_never_reaches_php() {
         let mut site = sona();
         site.suspended = true;
-        let c = render_caddyfile(&CaddyConfig { panel_host: None, adminer_host: None, sites: vec![site] });
+        let c = render_caddyfile(&CaddyConfig { panel_host: None, adminer_host: None, global_extra: None, sites: vec![site] });
         let block = &c[c.find("http://sona.it, http://comune-sona.it {").unwrap()..];
         let block = &block[..block.find("\n}\n").unwrap()];
         assert!(block.contains("\theader Retry-After 3600\n"));
@@ -213,7 +301,7 @@ mod tests {
     fn staging_site_asks_for_password_and_is_not_indexed() {
         let mut site = sona();
         site.staging_hash = Some("$2b$10$abc".into());
-        let c = render_caddyfile(&CaddyConfig { panel_host: None, adminer_host: None, sites: vec![site] });
+        let c = render_caddyfile(&CaddyConfig { panel_host: None, adminer_host: None, global_extra: None, sites: vec![site] });
         assert!(c.contains("\tbasic_auth {\n\t\tstaging $2b$10$abc\n\t}\n"));
         assert!(c.contains("\theader X-Robots-Tag \"noindex, nofollow\"\n"));
         assert!(!render_caddyfile(&cfg()).contains("basic_auth"));
@@ -233,8 +321,8 @@ mod tests {
         other.primary = d("aaa.it");
         other.aliases.clear();
         other.redirects.clear();
-        let a = CaddyConfig { panel_host: None, adminer_host: None, sites: vec![sona(), other.clone()] };
-        let b = CaddyConfig { panel_host: None, adminer_host: None, sites: vec![other, sona()] };
+        let a = CaddyConfig { panel_host: None, adminer_host: None, global_extra: None, sites: vec![sona(), other.clone()] };
+        let b = CaddyConfig { panel_host: None, adminer_host: None, global_extra: None, sites: vec![other, sona()] };
         assert_eq!(render_caddyfile(&a), render_caddyfile(&b));
     }
 }

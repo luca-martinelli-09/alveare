@@ -15,6 +15,7 @@ fn main() {
             suspended: false,
             staging_hash: None,
             log_days: 30,
+            extra: None,
         }, CaddySite {
             slug: Slug::parse("prove_sona_it").unwrap(),
             primary: d("prove.sona.it"),
@@ -23,6 +24,7 @@ fn main() {
             suspended: false,
             staging_hash: Some("$2a$14$BkqIzVh37faSU/dIkEUdy.mS7peZY5xDpdqsI7SPhnPuQ0V223JNi".into()),
             log_days: 7,
+            extra: Some("header Cache-Control \"max-age=60\"\nimport sicurezza".into()),
         }, CaddySite {
             slug: Slug::parse("chiuso_it").unwrap(),
             primary: d("chiuso.it"),
@@ -31,7 +33,9 @@ fn main() {
             suspended: true,
             staging_hash: None,
             log_days: 30,
+            extra: None,
         }],
+        global_extra: Some("(sicurezza) {\n\theader X-Frame-Options DENY\n}".into()),
     };
     print!("{}", render_caddyfile(&cfg));
 }

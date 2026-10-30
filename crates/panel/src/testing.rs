@@ -29,6 +29,10 @@ pub struct FakeHost {
     pub stored_manifest: Mutex<Option<crate::template::Manifest>>,
     /// Stato HTTP restituito da `probe` (default 200).
     pub probe_status: Option<u16>,
+    /// JSON restituito da `caddy_adapt` (default `{}`).
+    pub adapted: Mutex<Option<serde_json::Value>>,
+    /// Override globale dell'ultimo `sync_caddy`.
+    pub caddy_global: Mutex<Option<String>>,
 }
 
 impl FakeHost {
@@ -80,8 +84,16 @@ impl Host for FakeHost {
         self.record("sync_php", format!("users={} pools={}", slugs(users.iter().map(|u| &u.slug)), slugs(pools.iter().map(|p| &p.slug))))?;
         Ok(if self.reject_pool { pools.iter().map(|p| format!("{}.conf", p.slug.as_str())).collect() } else { vec![] })
     }
-    async fn sync_caddy(&self, sites: &[CaddySite]) -> anyhow::Result<()> {
+    async fn sync_caddy(&self, sites: &[CaddySite], global: Option<&str>) -> anyhow::Result<()> {
+        *self.caddy_global.lock().unwrap() = global.map(String::from);
         self.record("sync_caddy", slugs(sites.iter().map(|s| &s.slug)))
+    }
+    async fn caddy_adapt(&self, _caddyfile: &str) -> anyhow::Result<serde_json::Value> {
+        self.record("caddy_adapt", String::new())?;
+        Ok(self.adapted.lock().unwrap().clone().unwrap_or_else(|| serde_json::json!({})))
+    }
+    async fn write_php_global(&self, ini: &str) -> anyhow::Result<()> {
+        self.record("write_php_global", ini.to_string())
     }
     async fn wp(&self, slug: &Slug, args: &[String]) -> anyhow::Result<String> {
         self.record("wp", format!("{} {}", slug.as_str(), args.join(" ")))?;

@@ -29,6 +29,67 @@ pub struct SitePhp {
     pub slug: Slug,
     pub uid: u32,
     pub settings: PhpSettings,
+    /// Direttive extra dell'admin, già validate da `parse_extra`.
+    pub extra: Vec<String>,
+}
+
+/// Valori che reggono l'isolamento tra siti: nessun override li tocca.
+const PROTECTED_INI: [&str; 9] =
+    ["open_basedir", "disable_functions", "disable_classes", "error_log", "session.save_path", "upload_tmp_dir", "sys_temp_dir", "user_dir", "doc_root"];
+
+/// Override globale `conf.d/zz-custom.ini`: solo `chiave = valore`, mai i valori che reggono
+/// l'isolamento (nemmeno quelli di opcache che separano gli script dei siti).
+pub fn parse_global_ini(text: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+        let (name, value) = line.split_once('=').ok_or_else(|| format!("riga non valida: {line}"))?;
+        let (name, value) = (name.trim(), value.trim());
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'.') {
+            return Err(format!("nome non valido: {name}"));
+        }
+        if PROTECTED_INI.contains(&name) || name.starts_with("opcache.validate_") || name == "opcache.restrict_api" {
+            return Err(format!("{name} non si può cambiare: protegge l'isolamento tra i siti"));
+        }
+        if value.len() > 512 || value.contains('\0') {
+            return Err(format!("valore non valido per {name}"));
+        }
+        out.push(format!("{name} = {value}"));
+    }
+    Ok(out)
+}
+
+/// Direttive extra del pool: solo `php_value`, `php_admin_value`, `php_flag`, `php_admin_flag`,
+/// mai sui valori protetti. Commenti e righe vuote si scartano.
+pub fn parse_extra(text: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+        let (head, value) = line.split_once('=').ok_or_else(|| format!("manca '=': {line}"))?;
+        let head = head.trim();
+        let (kind, name) = head.strip_suffix(']').and_then(|h| h.split_once('[')).ok_or_else(|| format!("direttiva non ammessa: {line}"))?;
+        if !["php_value", "php_admin_value", "php_flag", "php_admin_flag"].contains(&kind) {
+            return Err(format!("direttiva non ammessa: {line}"));
+        }
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'.') {
+            return Err(format!("nome non valido: {name}"));
+        }
+        if PROTECTED_INI.contains(&name) {
+            return Err(format!("{name} non si può cambiare: protegge l'isolamento tra i siti"));
+        }
+        let value = value.trim();
+        if value.len() > 512 || value.contains(['\0', '\r']) {
+            return Err(format!("valore non valido per {name}"));
+        }
+        out.push(format!("{kind}[{name}] = {value}"));
+    }
+    Ok(out)
 }
 
 pub fn socket_path(slug: &Slug) -> String {
@@ -65,7 +126,8 @@ php_admin_value[memory_limit] = {memory_limit_mb}M
 php_value[upload_max_filesize] = {upload_max_mb}M
 php_value[post_max_size] = {upload_max_mb}M
 php_value[max_execution_time] = {max_execution_time_s}
-"
+{extra}",
+        extra = site.extra.iter().map(|l| format!("{l}\n")).collect::<String>(),
     )
 }
 
@@ -100,7 +162,44 @@ mod tests {
     use crate::site::Slug;
 
     fn site() -> SitePhp {
-        SitePhp { slug: Slug::parse("sona_it").unwrap(), uid: 20001, settings: PhpSettings::default() }
+        SitePhp { slug: Slug::parse("sona_it").unwrap(), uid: 20001, settings: PhpSettings::default(), extra: vec![] }
+    }
+
+    #[test]
+    fn global_ini_accepts_plain_settings_only() {
+        assert_eq!(parse_global_ini("; nota\nmax_input_vars = 3000\nopcache.memory_consumption=256\n").unwrap(), ["max_input_vars = 3000", "opcache.memory_consumption = 256"]);
+        for bad in ["disable_functions =", "open_basedir = /", "opcache.validate_root = 0", "opcache.validate_permission=0", "[sezione]", "senza uguale", "Max_Input = 1"] {
+            assert!(parse_global_ini(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn extra_directives_come_last_so_they_win() {
+        let mut s = site();
+        s.extra = vec!["php_value[max_input_vars] = 5000".into()];
+        let p = render_pool(&s);
+        assert!(p.ends_with("php_value[max_input_vars] = 5000\n"), "{p}");
+    }
+
+    #[test]
+    fn only_safe_php_directives_are_accepted() {
+        for ok in ["php_value[max_input_vars] = 5000", "php_admin_flag[display_errors] = off", "php_admin_value[opcache.memory_consumption]=256", "  ; commento", ""] {
+            assert!(parse_extra(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "php_admin_value[open_basedir] = /",
+            "php_admin_value[disable_functions] = ",
+            "PHP_VALUE[OPEN_BASEDIR] = /",
+            "user = root",
+            "listen = /run/php/altro.sock",
+            "chroot = /",
+            "php_value[error_log] = /srv/sites/altro/x",
+            "php_value[x] = a\nuser = root",
+            "php_value[a b] = 1",
+        ] {
+            assert!(parse_extra(bad).is_err(), "accettata: {bad:?}");
+        }
+        assert_eq!(parse_extra("; nota\nphp_value[a] = 1\n").unwrap(), vec!["php_value[a] = 1"]);
     }
 
     #[test]
