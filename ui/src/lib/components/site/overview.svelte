@@ -3,17 +3,17 @@
 	import * as Card from '$lib/components/ui/card';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import JobLog from '$lib/components/app/job-log.svelte';
 	import { api, errorMessage } from '$lib/api';
 	import { session } from '$lib/session.svelte';
 	import { toast } from 'svelte-sonner';
+	import DomainsCard from './domains-card.svelte';
+	import StateCard from './state-card.svelte';
 	import type { SiteDetail } from './types';
 
-	let { detail }: { detail: SiteDetail } = $props();
+	let { detail, onchange }: { detail: SiteDetail; onchange: () => void } = $props();
 	let deleting = $state<number | null>(null);
-	const kinds = { primary: 'principale', alias: 'alias', redirect: 'redirect' };
 
 	async function remove() {
 		try {
@@ -25,20 +25,10 @@
 </script>
 
 <div class="grid gap-4 pt-4 md:grid-cols-2">
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>Domini</Card.Title>
-			<Card.Description>Ogni hostname va aggiunto al tunnel Cloudflare verso http://caddy:80.</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-2">
-			{#each detail.domains as d (d.hostname)}
-				<div class="flex items-center justify-between">
-					<a class="underline-offset-4 hover:underline" href={`https://${d.hostname}`} target="_blank" rel="noreferrer">{d.hostname}</a>
-					<Badge variant="outline">{kinds[d.kind]}</Badge>
-				</div>
-			{/each}
-		</Card.Content>
-	</Card.Root>
+	<DomainsCard {detail} {onchange} />
+	{#if detail.can_manage}
+		<StateCard {detail} {onchange} />
+	{/if}
 	<Card.Root>
 		<Card.Header>
 			<Card.Title>PHP</Card.Title>

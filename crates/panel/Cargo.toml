@@ -12,6 +12,7 @@ argon2 = "0.6.0"
 async-compression = { version = "0.4.51", features = ["tokio", "gzip"] }
 axum = "0.8.9"
 base64 = "0.23.1"
+bcrypt = "0.19.3"
 cap-std = "4.0.3"
 chrono = { version = "0.4.45", features = ["serde"] }
 chrono-tz = "0.10.4"

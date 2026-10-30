@@ -73,6 +73,7 @@ async fn main() -> Result<()> {
     };
     let app = App::new(ctx, auth, paths.templates.clone(), cfg.secure_cookie)
         .with_adminer(cfg.adminer_host.clone())
+        .with_reserved_hosts(cfg.panel_host.iter().chain(&cfg.adminer_host).cloned().collect())
         .with_recovery(cfg.recovery.clone());
     remind_recovery_kit(&app).await?;
     tokio::spawn(apply_when_ready(app.clone()));

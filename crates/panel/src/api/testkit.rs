@@ -8,7 +8,6 @@ pub(crate) use axum::http::Request;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-
 pub(crate) struct T {
     pub app: App<FakeHost>,
     pub _templates: tempfile::TempDir,
@@ -106,3 +105,10 @@ pub(crate) fn with_cookie(method: &str, uri: &str, cookie: &str, csrf: bool, bod
     }
 }
 
+
+/// Un utente non admin con quel ruolo sul sito.
+pub(crate) async fn user_with_role(t: &T, email: &str, site: i64, role: crate::auth::Role) -> String {
+    let (uid, token) = token_for(t, email, false).await;
+    t.app.auth.assign_site(uid, site, role).await.unwrap();
+    token
+}

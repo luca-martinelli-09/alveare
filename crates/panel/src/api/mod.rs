@@ -36,6 +36,8 @@ pub struct App<H> {
     pub adminer_host: Option<Domain>,
     /// Valori del kit di ripristino (chiave del pannello, repository e password di restic).
     pub recovery: Vec<(String, String)>,
+    /// Hostname del pannello e di Adminer: nessun sito può usarli.
+    pub reserved_hosts: Vec<Domain>,
 }
 
 impl<H> Clone for App<H> {
@@ -51,6 +53,7 @@ impl<H> Clone for App<H> {
             uploads: self.uploads.clone(),
             adminer_host: self.adminer_host.clone(),
             recovery: self.recovery.clone(),
+            reserved_hosts: self.reserved_hosts.clone(),
         }
     }
 }
@@ -58,7 +61,7 @@ impl<H> Clone for App<H> {
 impl<H: Host> App<H> {
     pub fn new(ctx: Ctx<H>, auth: Auth, templates: PathBuf, secure_cookie: bool) -> Self {
         let jobs = Jobs::new(ctx.store.pool().clone());
-        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None, recovery: vec![] }
+        Self { ctx: Arc::new(ctx), auth, jobs, templates, secure_cookie, paths: Paths::production(), chown: true, uploads: Default::default(), adminer_host: None, recovery: vec![], reserved_hosts: vec![] }
     }
 
     pub fn with_recovery(self, recovery: Vec<(String, String)>) -> Self {
@@ -68,6 +71,18 @@ impl<H: Host> App<H> {
     pub fn recovery_kit(&self) -> String {
         let pairs: Vec<(&str, &str)> = self.recovery.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         crate::backup::recovery_kit(&pairs)
+    }
+
+    pub fn with_reserved_hosts(self, reserved_hosts: Vec<Domain>) -> Self {
+        Self { reserved_hosts, ..self }
+    }
+
+    /// 409 se l'hostname è del pannello o di Adminer.
+    fn check_not_reserved(&self, host: &Domain) -> ApiResult<()> {
+        if self.reserved_hosts.contains(host) {
+            return Err(ApiError::new(StatusCode::CONFLICT, format!("{} è riservato al pannello", host.as_str())));
+        }
+        Ok(())
     }
 
     pub fn with_adminer(self, adminer_host: Option<Domain>) -> Self {
@@ -244,6 +259,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/admin/recovery-kit", get(recovery_kit::<H>))
         .route("/api/alerts", get(list_alerts::<H>))
         .route("/api/jobs/{id}", get(get_job::<H>))
+        .merge(sites::routes::<H>())
         .with_state(app)
 }
 
@@ -445,6 +461,7 @@ async fn create_site<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap
     let user = caller(&app, &m, &h).await?;
     require_admin(&user)?;
     let domain = Domain::parse(&r.domain).map_err(|_| ApiError::bad_request("dominio non valido"))?;
+    app.check_not_reserved(&domain)?;
     let template = load_template(&app.templates, &r.template)?;
     let req = CreateSite {
         domain,
@@ -473,7 +490,8 @@ async fn get_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Me
     let site = app.ctx.store.site(id).await?;
     let domains: Vec<_> = app.ctx.store.domains(id).await?.into_iter().map(|(d, k)| json!({ "hostname": d.as_str(), "kind": k })).collect();
     let can_manage = app.auth.can(&user, id, Need::Manage).await?;
-    Ok(Json(json!({ "site": site, "domains": domains, "can_manage": can_manage })).into_response())
+    let staging = if can_manage { sites::staging_json(flows::staging_password(&app.ctx, id).await?) } else { serde_json::Value::Null };
+    Ok(Json(json!({ "site": site, "domains": domains, "can_manage": can_manage, "staging": staging })).into_response())
 }
 
 async fn delete_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap) -> ApiResult<Response> {
@@ -884,6 +902,8 @@ async fn get_job<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Met
     }
     Ok(Json(job).into_response())
 }
+
+mod sites;
 
 #[cfg(test)]
 pub(crate) mod testkit;

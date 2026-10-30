@@ -45,7 +45,7 @@
 			<Tabs.Trigger value="backups">Backup</Tabs.Trigger>
 			<Tabs.Trigger value="activity">Attività</Tabs.Trigger>
 		</Tabs.List>
-		<Tabs.Content value="overview"><Overview {detail} /></Tabs.Content>
+		<Tabs.Content value="overview"><Overview {detail} onchange={load} /></Tabs.Content>
 		{#if detail.can_manage}
 			<Tabs.Content value="files"><Files {id} /></Tabs.Content>
 			<Tabs.Content value="database"><Database {id} /></Tabs.Content>

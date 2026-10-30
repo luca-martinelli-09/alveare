@@ -12,6 +12,22 @@ fn main() {
             primary: d("sona.it"),
             aliases: vec![d("comune-sona.it")],
             redirects: vec![d("www.sona.it")],
+            suspended: false,
+            staging_hash: None,
+        }, CaddySite {
+            slug: Slug::parse("prove_sona_it").unwrap(),
+            primary: d("prove.sona.it"),
+            aliases: vec![],
+            redirects: vec![],
+            suspended: false,
+            staging_hash: Some("$2a$14$BkqIzVh37faSU/dIkEUdy.mS7peZY5xDpdqsI7SPhnPuQ0V223JNi".into()),
+        }, CaddySite {
+            slug: Slug::parse("chiuso_it").unwrap(),
+            primary: d("chiuso.it"),
+            aliases: vec![],
+            redirects: vec![d("www.chiuso.it")],
+            suspended: true,
+            staging_hash: None,
         }],
     };
     print!("{}", render_caddyfile(&cfg));

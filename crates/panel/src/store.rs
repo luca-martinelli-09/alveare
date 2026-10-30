@@ -81,6 +81,7 @@ pub struct Site {
     pub kind: SiteKind,
     pub template: String,
     pub status: SiteStatus,
+    pub staging: bool,
     pub settings: PhpSettingsRow,
 }
 
@@ -109,7 +110,7 @@ impl Site {
     }
 }
 
-const SITE_COLUMNS: &str = "id, slug, kind, template, status, memory_limit_mb, upload_max_mb, max_execution_time_s, max_children";
+const SITE_COLUMNS: &str = "id, slug, kind, template, status, staging, memory_limit_mb, upload_max_mb, max_execution_time_s, max_children";
 
 fn site_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Site> {
     let decode = |e: alveare_core::site::InvalidSlug| StoreError::Db(sqlx::Error::Decode(e.to_string().into()));
@@ -119,6 +120,7 @@ fn site_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Site> {
         kind: r.try_get::<&str, _>("kind")?.parse()?,
         template: r.try_get("template")?,
         status: r.try_get::<&str, _>("status")?.parse()?,
+        staging: r.try_get("staging")?,
         settings: PhpSettingsRow {
             memory_limit_mb: r.try_get("memory_limit_mb")?,
             upload_max_mb: r.try_get("upload_max_mb")?,
@@ -223,6 +225,23 @@ impl Store {
         Ok(())
     }
 
+    /// `Some((password cifrata, hash bcrypt))` attiva la protezione dello staging, `None` la toglie.
+    pub async fn set_staging(&self, id: i64, protection: Option<(&[u8], &str)>) -> Result<()> {
+        let (enc, hash) = protection.unzip();
+        sqlx::query("UPDATE sites SET staging = ?, staging_password_enc = ?, staging_hash = ? WHERE id = ?")
+            .bind(enc.is_some())
+            .bind(enc)
+            .bind(hash)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn staging_password(&self, id: i64) -> Result<Option<Vec<u8>>> {
+        Ok(sqlx::query_scalar("SELECT staging_password_enc FROM sites WHERE id = ?").bind(id).fetch_one(&self.pool).await?)
+    }
+
     pub async fn add_domain(&self, site_id: i64, hostname: &Domain, kind: DomainKind) -> Result<()> {
         sqlx::query("INSERT INTO domains (site_id, hostname, kind) VALUES (?, ?, ?)")
             .bind(site_id)
@@ -231,6 +250,19 @@ impl Store {
             .execute(&self.pool)
             .await
             .map_err(|e| unique_violation(e, hostname))?;
+        Ok(())
+    }
+
+    /// Toglie un alias o un redirect del sito; il dominio principale non si tocca.
+    pub async fn remove_domain(&self, site_id: i64, hostname: &Domain) -> Result<()> {
+        let done = sqlx::query("DELETE FROM domains WHERE site_id = ? AND hostname = ? AND kind != 'primary'")
+            .bind(site_id)
+            .bind(hostname.as_str())
+            .execute(&self.pool)
+            .await?;
+        if done.rows_affected() == 0 {
+            return Err(StoreError::NotFound);
+        }
         Ok(())
     }
 
@@ -413,14 +445,22 @@ impl Store {
         Ok(())
     }
 
-    /// Siti serviti da Caddy: solo quelli attivi.
+    /// Siti serviti da Caddy: attivi, o sospesi con la pagina di manutenzione.
     pub async fn caddy_sites(&self) -> Result<Vec<CaddySite>> {
         let mut out = Vec::new();
-        for site in self.sites().await?.into_iter().filter(|s| s.status == SiteStatus::Active) {
+        for site in self.sites().await?.into_iter().filter(|s| matches!(s.status, SiteStatus::Active | SiteStatus::Suspended)) {
             let domains = self.domains(site.id).await?;
             let of = |k: DomainKind| domains.iter().filter(|(_, dk)| *dk == k).map(|(d, _)| d.clone()).collect::<Vec<_>>();
             let primary = of(DomainKind::Primary).into_iter().next().ok_or(StoreError::NotFound)?;
-            out.push(CaddySite { slug: site.slug, primary, aliases: of(DomainKind::Alias), redirects: of(DomainKind::Redirect) });
+            let staging_hash: Option<String> = sqlx::query_scalar("SELECT staging_hash FROM sites WHERE id = ?").bind(site.id).fetch_one(&self.pool).await?;
+            out.push(CaddySite {
+                slug: site.slug,
+                primary,
+                aliases: of(DomainKind::Alias),
+                redirects: of(DomainKind::Redirect),
+                suspended: site.status == SiteStatus::Suspended,
+                staging_hash,
+            });
         }
         Ok(out)
     }
@@ -512,6 +552,26 @@ mod tests {
         assert_eq!(sites[0].primary, d("sona.it"));
         assert_eq!(sites[0].aliases, vec![d("comune-sona.it")]);
         assert_eq!(sites[0].redirects, vec![d("www.sona.it")]);
+    }
+
+    #[tokio::test]
+    async fn suspended_and_staging_sites_reach_caddy_with_their_mode() {
+        let s = store().await;
+        let a = s.create_site(&new_site("a.it")).await.unwrap();
+        let b = s.create_site(&new_site("b.it")).await.unwrap();
+        s.set_status(a.id, SiteStatus::Suspended).await.unwrap();
+        s.set_status(b.id, SiteStatus::Active).await.unwrap();
+        s.set_staging(b.id, Some((b"cifrata", "$2b$10$x"))).await.unwrap();
+        let sites = s.caddy_sites().await.unwrap();
+        assert_eq!(sites.len(), 2);
+        assert!(sites[0].suspended && sites[0].staging_hash.is_none());
+        assert!(!sites[1].suspended);
+        assert_eq!(sites[1].staging_hash.as_deref(), Some("$2b$10$x"));
+        assert!(s.site(b.id).await.unwrap().staging);
+        assert_eq!(s.staging_password(b.id).await.unwrap().as_deref(), Some(&b"cifrata"[..]));
+        s.set_staging(b.id, None).await.unwrap();
+        assert!(!s.site(b.id).await.unwrap().staging);
+        assert!(s.caddy_sites().await.unwrap()[1].staging_hash.is_none());
     }
 
     #[tokio::test]

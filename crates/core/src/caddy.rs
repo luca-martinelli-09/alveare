@@ -11,7 +11,13 @@ pub struct CaddySite {
     pub primary: Domain,
     pub aliases: Vec<Domain>,
     pub redirects: Vec<Domain>,
+    /// Pagina di manutenzione al posto del sito: file e database restano intatti.
+    pub suspended: bool,
+    /// Hash bcrypt della password dello staging (utente `staging`).
+    pub staging_hash: Option<String>,
 }
+
+const MAINTENANCE_PAGE: &str = "<!doctype html><html lang=\"it\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sito in manutenzione</title><body style=\"font-family:system-ui;text-align:center;padding:4rem 1rem\"><h1>Sito in manutenzione</h1><p>Torniamo online a breve.</p></body></html>";
 
 pub struct CaddyConfig {
     pub panel_host: Option<Domain>,
@@ -57,9 +63,22 @@ fn render_site(out: &mut String, site: &CaddySite) {
     let s = site.slug.as_str();
     let hosts: Vec<String> =
         std::iter::once(&site.primary).chain(&site.aliases).map(|d| format!("http://{}", d.as_str())).collect();
-    write!(
-        out,
-        "
+    let hosts = hosts.join(", ");
+    if site.suspended {
+        write!(
+            out,
+            "\n{hosts} {{\n\theader Retry-After 3600\n\theader Content-Type \"text/html; charset=utf-8\"\n\trespond `{MAINTENANCE_PAGE}` 503\n}}\n"
+        )
+        .unwrap();
+    } else {
+        let staging = site
+            .staging_hash
+            .as_ref()
+            .map(|h| format!("\tbasic_auth {{\n\t\tstaging {h}\n\t}}\n\theader X-Robots-Tag \"noindex, nofollow\"\n"))
+            .unwrap_or_default();
+        write!(
+            out,
+            "
 {hosts} {{
 	root * {SITES_DIR}/{s}/public
 	log {{
@@ -70,7 +89,7 @@ fn render_site(out: &mut String, site: &CaddySite) {
 		}}
 		format json
 	}}
-	@uploads_php path_regexp (?i)^/wp-content/uploads/.*\\.ph(p[0-9]?|tml|ar)$
+{staging}	@uploads_php path_regexp (?i)^/wp-content/uploads/.*\\.ph(p[0-9]?|tml|ar)$
 	respond @uploads_php 403
 	php_fastcgi unix/{socket} {{
 		env REMOTE_ADDR {{client_ip}}
@@ -78,10 +97,10 @@ fn render_site(out: &mut String, site: &CaddySite) {
 	file_server
 }}
 ",
-        hosts = hosts.join(", "),
-        socket = socket_path(&site.slug),
-    )
-    .unwrap();
+            socket = socket_path(&site.slug),
+        )
+        .unwrap();
+    }
     for r in &site.redirects {
         write!(out, "\nhttp://{} {{\n\tredir https://{}{{uri}} permanent\n}}\n", r.as_str(), site.primary.as_str()).unwrap();
     }
@@ -102,6 +121,8 @@ mod tests {
             primary: d("sona.it"),
             aliases: vec![d("comune-sona.it")],
             redirects: vec![d("www.sona.it")],
+            suspended: false,
+            staging_hash: None,
         }
     }
 
@@ -159,6 +180,31 @@ mod tests {
     fn redirect_domains_point_to_primary_over_https() {
         let c = render_caddyfile(&cfg());
         assert!(c.contains("\nhttp://www.sona.it {\n\tredir https://sona.it{uri} permanent\n}\n"));
+    }
+
+    #[test]
+    fn suspended_site_answers_503_and_never_reaches_php() {
+        let mut site = sona();
+        site.suspended = true;
+        let c = render_caddyfile(&CaddyConfig { panel_host: None, adminer_host: None, sites: vec![site] });
+        let block = &c[c.find("http://sona.it, http://comune-sona.it {").unwrap()..];
+        let block = &block[..block.find("\n}\n").unwrap()];
+        assert!(block.contains("\theader Retry-After 3600\n"));
+        assert!(block.contains("\trespond `"), "{block}");
+        assert!(block.contains("` 503"));
+        assert!(!block.contains("php_fastcgi") && !block.contains("file_server"));
+        // Anche sospeso, il www continua a puntare al dominio principale.
+        assert!(c.contains("\nhttp://www.sona.it {\n\tredir https://sona.it{uri} permanent\n}\n"));
+    }
+
+    #[test]
+    fn staging_site_asks_for_password_and_is_not_indexed() {
+        let mut site = sona();
+        site.staging_hash = Some("$2b$10$abc".into());
+        let c = render_caddyfile(&CaddyConfig { panel_host: None, adminer_host: None, sites: vec![site] });
+        assert!(c.contains("\tbasic_auth {\n\t\tstaging $2b$10$abc\n\t}\n"));
+        assert!(c.contains("\theader X-Robots-Tag \"noindex, nofollow\"\n"));
+        assert!(!render_caddyfile(&cfg()).contains("basic_auth"));
     }
 
     #[test]

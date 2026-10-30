@@ -124,12 +124,17 @@ impl<H: Host> Ctx<H> {
     }
 
     async fn sync_caddy(&self) -> Result<()> {
-        self.host.sync_caddy(&self.store.caddy_sites().await?).await
+        sync_caddy(self).await
     }
 
     async fn sync_redis(&self) -> Result<()> {
         self.host.sync_redis(&redis_users(&self.store, &self.key).await?).await
     }
+}
+
+/// Rigenera e ricarica il Caddyfile dallo stato.
+pub async fn sync_caddy<H: Host>(c: &Ctx<H>) -> Result<()> {
+    c.host.sync_caddy(&c.store.caddy_sites().await?).await
 }
 
 pub async fn redis_users(store: &Store, key: &SecretKey) -> Result<Vec<RedisUser>> {
@@ -367,6 +372,44 @@ pub async fn restore_site<H: Host>(c: &Ctx<H>, site_id: i64, snapshot: &str, mod
     Ok(())
 }
 
+/// Sospende o riattiva: alla sospensione prima la pagina di manutenzione, poi via il pool;
+/// alla riattivazione prima il pool, così Caddy non manda mai richieste a un socket assente.
+pub async fn set_suspended<H: Host>(c: &Ctx<H>, id: i64, suspended: bool) -> Result<()> {
+    let site = c.store.site(id).await?;
+    let (from, to) = if suspended { (SiteStatus::Active, SiteStatus::Suspended) } else { (SiteStatus::Suspended, SiteStatus::Active) };
+    if site.status != from {
+        bail!("il sito è {:?}, non {:?}", site.status, from);
+    }
+    c.store.set_status(id, to).await?;
+    if suspended {
+        c.sync_caddy().await?;
+        c.sync_php().await?;
+    } else {
+        c.sync_php().await?;
+        c.sync_caddy().await?;
+    }
+    Ok(())
+}
+
+/// Attiva (restituendo la password, utente `staging`) o toglie la protezione dello staging.
+pub async fn set_staging<H: Host>(c: &Ctx<H>, id: i64, on: bool) -> Result<Option<String>> {
+    c.store.site(id).await?;
+    let password = on.then(random_password);
+    match &password {
+        Some(p) => {
+            let hash = bcrypt::hash(p, bcrypt::DEFAULT_COST)?;
+            c.store.set_staging(id, Some((&c.key.encrypt(p), &hash))).await?;
+        }
+        None => c.store.set_staging(id, None).await?,
+    }
+    c.sync_caddy().await?;
+    Ok(password)
+}
+
+pub async fn staging_password<H>(c: &Ctx<H>, id: i64) -> Result<Option<String>> {
+    Ok(c.store.staging_password(id).await?.map(|enc| c.key.decrypt(&enc)).transpose()?)
+}
+
 /// Elimina un sito. Va solo avanti: se si ferma, il sito resta in `deleting` e si può rilanciare.
 pub async fn delete_site<H: Host>(c: &Ctx<H>, id: i64, log: &mut JobLog) -> Result<()> {
     let site = c.store.site(id).await?;
@@ -537,6 +580,46 @@ mod tests {
         );
         let runs = c.store.backup_runs(site.id, 10).await.unwrap();
         assert_eq!((runs[0].status.as_str(), runs[0].snapshot_id.as_deref()), ("done", Some("abcdef12")));
+    }
+
+    #[tokio::test]
+    async fn suspend_swaps_route_for_maintenance_and_drops_the_pool() {
+        let c = ctx(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        set_suspended(&c, site.id, true).await.unwrap();
+        assert_eq!(c.host.calls(), ["sync_caddy sona_it", "sync_php users=sona_it pools="]);
+        assert_eq!(c.store.site(site.id).await.unwrap().status, SiteStatus::Suspended);
+        assert!(c.store.caddy_sites().await.unwrap()[0].suspended);
+        c.host.calls.lock().unwrap().clear();
+        set_suspended(&c, site.id, false).await.unwrap();
+        // Prima il pool, poi la route: alla riattivazione PHP deve già rispondere.
+        assert_eq!(c.host.calls(), ["sync_php users=sona_it pools=sona_it", "sync_caddy sona_it"]);
+        assert_eq!(c.store.site(site.id).await.unwrap().status, SiteStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn only_active_or_suspended_sites_change_state() {
+        let c = ctx(FakeHost::default()).await;
+        let site = c.store.create_site(&NewSite { primary: Domain::parse("x.it").unwrap(), kind: SiteKind::Wordpress, template: "wordpress".into() }).await.unwrap();
+        assert!(set_suspended(&c, site.id, true).await.is_err());
+        assert_eq!(c.store.site(site.id).await.unwrap().status, SiteStatus::Creating);
+    }
+
+    #[tokio::test]
+    async fn staging_protection_uses_a_bcrypt_password_shown_to_managers() {
+        let c = ctx(FakeHost::default()).await;
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        c.host.calls.lock().unwrap().clear();
+        let password = set_staging(&c, site.id, true).await.unwrap().unwrap();
+        assert_eq!(password.len(), 32);
+        let hash = c.store.caddy_sites().await.unwrap()[0].staging_hash.clone().unwrap();
+        assert!(bcrypt::verify(&password, &hash).unwrap());
+        assert_eq!(staging_password(&c, site.id).await.unwrap().as_deref(), Some(password.as_str()));
+        assert_eq!(c.host.calls(), ["sync_caddy sona_it"]);
+        assert!(set_staging(&c, site.id, false).await.unwrap().is_none());
+        assert!(c.store.caddy_sites().await.unwrap()[0].staging_hash.is_none());
+        assert!(staging_password(&c, site.id).await.unwrap().is_none());
     }
 
     #[tokio::test]
