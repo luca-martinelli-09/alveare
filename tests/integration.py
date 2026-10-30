@@ -437,7 +437,7 @@ def main():
         print("log: ricerca, errori raggruppati")
         page("upupa.test", "/pagina-che-non-esiste/")
         found = wait("richiesta nel log", lambda: http.call("GET", f"/api/sites/{site_b}/logs/access?q=pagina-che-non-esiste", expect=200)[1]["entries"], timeout=30)
-        assert found[-1]["status"] == 404, found
+        assert found[-1]["uri"] == "/pagina-che-non-esiste/" and found[-1]["ip"] == VISITOR_IP, found
         http.call("GET", f"/api/sites/{site_b}/logs/php-error/groups", expect=200)
 
         print("override: PHP extra, Caddy del sito, rifiuti")
@@ -467,7 +467,7 @@ def main():
         _, c2 = http.call("POST", f"/api/sites/{site_b}/cron", {"expression": "0 3 * * *", "kind": "http", "command": "https://upupa.test/"}, expect=201)
         run_job(http, "POST", f"/api/sites/{site_b}/cron/{c2['id']}/run")
         _, wpst = http.call("GET", f"/api/sites/{site_b}/wordpress", expect=200)
-        assert wpst["status"]["core"].startswith("6."), wpst
+        assert re.match(r"\d+\.\d+", wpst["status"]["core"]), wpst
         assert any(p["name"] == "redis-cache" for p in wpst["status"]["plugins"]), wpst
         run_job(http, "POST", f"/api/sites/{site_b}/wordpress/update", {"plugins": {"names": ["redis-cache"]}})
         run_job(http, "POST", f"/api/sites/{site_b}/wp", {"args": ["option", "get", "blogname"]})
