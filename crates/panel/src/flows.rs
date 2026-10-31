@@ -597,6 +597,13 @@ fn random_salt() -> String {
     Alphanumeric.sample_string(&mut rand::rng(), 64)
 }
 
+/// Mittente proposto: no-reply@ sul dominio senza "www.". Gli altri sottodomini restano: capire qual è
+/// il dominio principale in ogni caso (.co.uk e simili) richiederebbe la lista dei suffissi pubblici.
+fn default_sender(domain: &Domain) -> String {
+    let d = domain.as_str();
+    format!("no-reply@{}", d.strip_prefix("www.").unwrap_or(d))
+}
+
 /// (variabili del template, contenuto del `.env`)
 fn site_vars<H>(c: &Ctx<H>, req: &CreateSite, site: &Site, db: &DbCreds, redis_password: &str) -> (Vars, Vars) {
     let url = c.url_of(&req.domain);
@@ -616,7 +623,7 @@ fn site_vars<H>(c: &Ctx<H>, req: &CreateSite, site: &Site, db: &DbCreds, redis_p
         ("REDIS_USERNAME".into(), site.slug.as_str().into()),
         ("REDIS_PASSWORD".into(), redis_password.into()),
         ("REDIS_PREFIX".into(), format!("{}:", site.slug.as_str())),
-        ("SMTP_FROM".into(), format!("noreply@{}", req.domain.as_str())),
+        ("SMTP_FROM".into(), default_sender(&req.domain)),
         // Il .env usa apici singoli: "Pro Loco d'Arco" diventa "Pro Loco d’Arco".
         ("SMTP_FROM_NAME".into(), req.title.replace('\'', "’").replace(['\n', '\r'], " ")),
     ]);
@@ -1639,6 +1646,14 @@ mod tests {
         assert_eq!(env["WP_SITEURL"], "http://prova.localhost:8080");
     }
 
+    #[test]
+    fn default_sender_drops_www_but_keeps_other_subdomains() {
+        let from = |d: &str| default_sender(&Domain::parse(d).unwrap());
+        assert_eq!(from("www.viadellupupa.it"), "no-reply@viadellupupa.it");
+        assert_eq!(from("sona.it"), "no-reply@sona.it");
+        assert_eq!(from("blog.sona.it"), "no-reply@blog.sona.it");
+    }
+
     #[tokio::test]
     async fn db_password_is_stored_encrypted_and_written_to_env() {
         let c = ctx(FakeHost::default()).await;
@@ -1653,7 +1668,7 @@ mod tests {
         assert_eq!(env["AUTH_KEY"].len(), 64);
         assert_ne!(env["AUTH_KEY"], env["AUTH_SALT"]);
         assert!(!env.contains_key("ADMIN_PASSWORD"), "la password admin non va nel .env");
-        assert_eq!(env["SMTP_FROM"], "noreply@sona.it");
+        assert_eq!(env["SMTP_FROM"], "no-reply@sona.it");
         assert_eq!(env["SMTP_FROM_NAME"], "Sona");
         assert_eq!(env["REDIS_USERNAME"], "sona_it");
         assert_eq!(env["REDIS_PREFIX"], "sona_it:");
