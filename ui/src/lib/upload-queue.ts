@@ -3,8 +3,9 @@ export type UploadItem = {
 	id: string;
 	name: string;
 	size: number;
-	/** skipped: c'era già un file con quel nome e l'utente ha scelto di non sostituirlo. */
-	status: 'waiting' | 'uploading' | 'done' | 'error' | 'skipped';
+	/** conflict: c'è già un file con quel nome, si aspetta la risposta (gli altri intanto vanno avanti).
+	 *  skipped: l'utente ha scelto di non sostituirlo. */
+	status: 'waiting' | 'uploading' | 'conflict' | 'done' | 'error' | 'skipped';
 	/** Da 0 a 1. */
 	progress: number;
 	error: string | null;
@@ -22,9 +23,9 @@ export function summary(items: UploadItem[]) {
 		done: count('done'),
 		failed: count('error'),
 		skipped: count('skipped'),
-		waiting: count('waiting'),
+		waiting: count('waiting') + count('conflict'),
 		current: items.find((i) => i.status === 'uploading') ?? null,
 		percent,
-		finished: count('waiting') === 0 && count('uploading') === 0
+		finished: count('waiting') + count('uploading') + count('conflict') === 0
 	};
 }

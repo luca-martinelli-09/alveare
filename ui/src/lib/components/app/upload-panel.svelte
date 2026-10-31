@@ -13,6 +13,7 @@
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import ClockIcon from '@lucide/svelte/icons/clock';
 	import CircleMinusIcon from '@lucide/svelte/icons/circle-minus';
+	import CircleHelpIcon from '@lucide/svelte/icons/circle-question-mark';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Label } from '$lib/components/ui/label';
@@ -61,6 +62,7 @@
 							{#if i.status === 'done'}<CircleCheckIcon class="text-success" />
 							{:else if i.status === 'error'}<CircleAlertIcon class="text-destructive" />
 							{:else if i.status === 'skipped'}<CircleMinusIcon class="text-muted-foreground" />
+							{:else if i.status === 'conflict'}<CircleHelpIcon class="text-warning" />
 							{:else if i.status === 'uploading'}<Spinner />
 							{:else}<ClockIcon class="text-muted-foreground" />{/if}
 						</span>
@@ -71,7 +73,7 @@
 							{:else if i.status === 'error'}
 								<p class="text-destructive truncate text-xs" title={i.error ?? undefined}>{i.error}</p>
 							{:else}
-								<p class="text-muted-foreground text-xs">{formatBytes(i.size)}{i.status === 'waiting' ? ' · in attesa' : i.status === 'skipped' ? ' · saltato, c\'era già' : ''}</p>
+								<p class="text-muted-foreground text-xs">{formatBytes(i.size)}{{ waiting: ' · in attesa', conflict: ' · c\'è già: sostituire?', skipped: ' · saltato, c\'era già' }[i.status as string] ?? ''}</p>
 							{/if}
 						</div>
 					</li>

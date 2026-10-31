@@ -24,3 +24,8 @@ test('finita quando nessuno è in attesa o in corso; coda vuota a 0%', () => {
 	assert.deepEqual({ ...summary([]) }, { total: 0, done: 0, failed: 0, skipped: 0, waiting: 0, current: null, percent: 0, finished: true });
 	assert.equal(summary([item('vuoto', 0, 'done', 1)]).percent, 100, 'file da 0 byte: conta come fatto');
 });
+
+test('un file in attesa di risposta tiene aperta la coda e conta fra quelli in attesa', () => {
+	const s = summary([item('a', 10, 'done', 1), item('b', 10, 'conflict')]);
+	assert.deepEqual({ waiting: s.waiting, finished: s.finished }, { waiting: 1, finished: false });
+});
