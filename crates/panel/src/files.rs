@@ -401,10 +401,20 @@ impl SiteFiles {
 
     /// Upload a blocchi: i pezzi si ricompongono in tmp/<slug>/uploads/<id> e il file finito
     /// si sposta al suo posto. I blocchi possono arrivare in qualunque ordine e ripetersi.
-    pub fn upload_start(&self, dest: &str, size: u64) -> Result<UploadInfo> {
+    /// `overwrite`: se c'è già un file con quel nome lo sostituisce; senza, AlreadyExists (il pannello chiede).
+    /// Una cartella non si sostituisce mai con un file.
+    pub fn upload_start(&self, dest: &str, size: u64, overwrite: bool) -> Result<UploadInfo> {
         let dest_rel = rel(dest)?;
         if is_protected(&dest_rel) {
             return Err(FileError::Protected);
+        }
+        if let Ok(m) = self.root.symlink_metadata(&dest_rel) {
+            if m.is_dir() {
+                return Err(FileError::BadUpload("c'è già una cartella con questo nome"));
+            }
+            if !overwrite {
+                return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists).into());
+            }
         }
         if size > UPLOAD_LIMIT {
             return Err(FileError::BadUpload("file oltre 10 GB"));
@@ -690,7 +700,7 @@ mod tests {
     fn chunked_upload_in_any_order_lands_at_destination() {
         let (_t, p, f) = site();
         let content = data(CHUNK as usize + 1000);
-        let up = f.upload_start("public/video/clip.mp4", content.len() as u64).unwrap();
+        let up = f.upload_start("public/video/clip.mp4", content.len() as u64, true).unwrap();
         assert_eq!(up.chunks, 2);
         let s = f.upload_chunk(&up.id, 1, &content[CHUNK as usize..]).unwrap();
         assert_eq!((s.received.clone(), s.complete), (vec![1], false));
@@ -704,7 +714,7 @@ mod tests {
     fn upload_status_allows_resuming() {
         let (_t, _p, f) = site();
         let content = data(CHUNK as usize * 2 + 5);
-        let up = f.upload_start("public/a.bin", content.len() as u64).unwrap();
+        let up = f.upload_start("public/a.bin", content.len() as u64, true).unwrap();
         f.upload_chunk(&up.id, 0, &content[..CHUNK as usize]).unwrap();
         assert_eq!(f.upload_status(&up.id).unwrap().received, [0]);
     }
@@ -712,7 +722,7 @@ mod tests {
     #[test]
     fn upload_rejects_wrong_chunks_and_bad_ids() {
         let (_t, _p, f) = site();
-        let up = f.upload_start("public/a.bin", 10).unwrap();
+        let up = f.upload_start("public/a.bin", 10, true).unwrap();
         assert!(f.upload_chunk(&up.id, 0, b"corto").is_err());
         assert!(f.upload_chunk(&up.id, 1, b"0123456789").is_err());
         assert!(f.upload_chunk("../../etc", 0, b"0123456789").is_err());
@@ -720,11 +730,23 @@ mod tests {
     }
 
     #[test]
+    fn upload_over_an_existing_file_only_when_asked_and_never_over_a_folder() {
+        let (_t, _p, f) = site();
+        f.write("public/logo.png", b"vecchio").unwrap();
+        let err = f.upload_start("public/logo.png", 5, false).unwrap_err();
+        assert!(matches!(err, FileError::Io(ref e) if e.kind() == std::io::ErrorKind::AlreadyExists), "{err:?}");
+        assert!(f.upload_start("public/logo.png", 5, true).is_ok(), "sostituisci");
+        assert!(f.upload_start("public/nuovo.png", 5, false).is_ok(), "un file nuovo non chiede niente");
+        f.mkdir("public/tema").unwrap();
+        assert!(matches!(f.upload_start("public/tema", 5, true), Err(FileError::BadUpload(_))), "una cartella non si sostituisce con un file");
+    }
+
+    #[test]
     fn upload_destination_must_stay_in_site() {
         let (_t, _p, f) = site();
-        assert!(f.upload_start("../fuori.bin", 10).is_err());
-        assert!(f.upload_start(".env", 10).is_err());
-        assert!(f.upload_start("public/x", UPLOAD_LIMIT + 1).is_err());
+        assert!(f.upload_start("../fuori.bin", 10, true).is_err());
+        assert!(f.upload_start(".env", 10, true).is_err());
+        assert!(f.upload_start("public/x", UPLOAD_LIMIT + 1, true).is_err());
     }
 
     #[test]

@@ -893,13 +893,16 @@ async fn file_op<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, m
 struct UploadReq {
     path: String,
     size: u64,
+    /// Sostituisce un file con lo stesso nome; il file manager manda false e chiede all'utente.
+    #[serde(default = "yes")]
+    overwrite: bool,
 }
 
 async fn upload_start<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, m: Method, h: HeaderMap, Json(r): Json<UploadReq>) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
     let files = files_for(&app, &user, &t).await?;
     let path = r.path.clone();
-    let info = blocking(move || files.upload_start(&path, r.size)).await?;
+    let info = blocking(move || files.upload_start(&path, r.size, r.overwrite)).await?;
     app.auth.audit(Some(user.id), "file.upload", t.site(), &t.detail(&r.path)).await?;
     Ok((StatusCode::CREATED, Json(info)).into_response())
 }

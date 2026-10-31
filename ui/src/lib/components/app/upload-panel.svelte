@@ -12,14 +12,25 @@
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import ClockIcon from '@lucide/svelte/icons/clock';
+	import CircleMinusIcon from '@lucide/svelte/icons/circle-minus';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import { Label } from '$lib/components/ui/label';
+
+	// Risposta alla domanda "c'è già": con la spunta vale per il resto del caricamento.
+	let all = $state(false);
+	function answer(replace: boolean) {
+		uploads.conflict?.resolve({ replace, all });
+		all = false;
+	}
 
 	const s = $derived(summary(uploads.items));
 	const title = $derived(
 		!s.finished
 			? `Caricamento: ${s.done} di ${s.total}`
-			: s.failed
-				? `${s.done} caricati, ${s.failed} non riusciti`
-				: `${s.done} ${s.done === 1 ? 'file caricato' : 'file caricati'}`
+			: [`${s.done} ${s.done === 1 ? 'caricato' : 'caricati'}`, s.skipped && `${s.skipped} ${s.skipped === 1 ? 'saltato' : 'saltati'}`, s.failed && `${s.failed} non riusciti`]
+					.filter(Boolean)
+					.join(', ')
 	);
 </script>
 
@@ -49,6 +60,7 @@
 						<span class="flex size-4 shrink-0 items-center justify-center [&_svg]:size-4">
 							{#if i.status === 'done'}<CircleCheckIcon class="text-success" />
 							{:else if i.status === 'error'}<CircleAlertIcon class="text-destructive" />
+							{:else if i.status === 'skipped'}<CircleMinusIcon class="text-muted-foreground" />
 							{:else if i.status === 'uploading'}<Spinner />
 							{:else}<ClockIcon class="text-muted-foreground" />{/if}
 						</span>
@@ -59,7 +71,7 @@
 							{:else if i.status === 'error'}
 								<p class="text-destructive truncate text-xs" title={i.error ?? undefined}>{i.error}</p>
 							{:else}
-								<p class="text-muted-foreground text-xs">{formatBytes(i.size)}{i.status === 'waiting' ? ' · in attesa' : ''}</p>
+								<p class="text-muted-foreground text-xs">{formatBytes(i.size)}{i.status === 'waiting' ? ' · in attesa' : i.status === 'skipped' ? ' · saltato, c\'era già' : ''}</p>
 							{/if}
 						</div>
 					</li>
@@ -68,3 +80,24 @@
 		{/if}
 	</section>
 {/if}
+
+<Dialog.Root open={uploads.conflict !== null} onOpenChange={(o) => !o && answer(false)}>
+	<Dialog.Content class="sm:max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>Il file esiste già</Dialog.Title>
+			<Dialog.Description>
+				<span class="text-foreground font-mono break-all">{uploads.conflict?.name}</span> c'è già in questa cartella. Lo sostituisci con quello che stai caricando?
+			</Dialog.Description>
+		</Dialog.Header>
+		{#if (uploads.conflict?.others ?? 0) > 0}
+			<div class="flex items-center gap-2">
+				<Checkbox id="conflict-all" bind:checked={all} />
+				<Label for="conflict-all" class="font-normal">Applica a tutti gli altri file di questo caricamento che esistono già</Label>
+			</div>
+		{/if}
+		<Dialog.Footer>
+			<Button variant="ghost" onclick={() => answer(false)}>Salta</Button>
+			<Button variant="primary" onclick={() => answer(true)}>Sostituisci</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>

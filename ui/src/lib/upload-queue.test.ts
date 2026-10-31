@@ -13,8 +13,14 @@ test('conta fatti, errori, in attesa e il file in corso; percentuale pesata sui 
 	);
 });
 
+test('i saltati contano a parte e non pesano sulla percentuale', () => {
+	const s = summary([item('a', 100, 'done', 1), item('b', 100, 'skipped'), item('c', 100, 'uploading', 0.5)]);
+	assert.deepEqual({ done: s.done, skipped: s.skipped, percent: s.percent, finished: s.finished }, { done: 1, skipped: 1, percent: 75, finished: false });
+	assert.equal(summary([item('b', 100, 'skipped')]).finished, true);
+});
+
 test('finita quando nessuno è in attesa o in corso; coda vuota a 0%', () => {
 	assert.equal(summary([item('a', 10, 'done', 1), item('b', 10, 'error')]).finished, true);
-	assert.deepEqual({ ...summary([]) }, { total: 0, done: 0, failed: 0, waiting: 0, current: null, percent: 0, finished: true });
+	assert.deepEqual({ ...summary([]) }, { total: 0, done: 0, failed: 0, skipped: 0, waiting: 0, current: null, percent: 0, finished: true });
 	assert.equal(summary([item('vuoto', 0, 'done', 1)]).percent, 100, 'file da 0 byte: conta come fatto');
 });

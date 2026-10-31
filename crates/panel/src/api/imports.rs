@@ -60,7 +60,7 @@ async fn upload_start<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMa
     let user = caller(&app, &m, &h).await?;
     let name = flat_name(&r.path)?.to_string();
     let files = area(&app, &user).await?;
-    let info = blocking(move || files.upload_start(&name, r.size)).await?;
+    let info = blocking(move || files.upload_start(&name, r.size, true)).await?;
     app.auth.audit(Some(user.id), "import.upload", None, &r.path).await?;
     Ok((StatusCode::CREATED, Json(info)).into_response())
 }
