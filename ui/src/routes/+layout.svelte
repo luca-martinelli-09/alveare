@@ -10,6 +10,7 @@
 	import { Spinner } from '$lib/components/ui/spinner';
 	import AppSidebar from '$lib/components/app/app-sidebar.svelte';
 	import CommandPalette from '$lib/components/app/command-palette.svelte';
+	import UploadPanel from '$lib/components/app/upload-panel.svelte';
 	import AskDialog from '$lib/components/app/ask-dialog.svelte';
 	import { palette } from '$lib/palette.svelte';
 	import SearchIcon from '@lucide/svelte/icons/search';
@@ -64,6 +65,7 @@
 <ModeWatcher />
 <Toaster />
 <AskDialog />
+<UploadPanel />
 
 {#if isLogin}
 	{@render children()}

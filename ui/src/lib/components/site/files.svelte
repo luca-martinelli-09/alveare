@@ -8,14 +8,15 @@
 	import * as Table from '$lib/components/ui/table';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import * as ContextMenu from '$lib/components/ui/context-menu';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import CodeEditor from '$lib/components/app/code-editor.svelte';
 	import TrashDialog from './trash-dialog.svelte';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import { api, errorMessage, formatBytes } from '$lib/api';
-	import { uploadTo } from '$lib/upload';
-	import { entriesOf, filesFromEntries, type Dropped } from '$lib/dropped';
+	import { enqueue } from '$lib/uploads.svelte';
+	import { entriesOf, filesFromEntries } from '$lib/dropped';
 	import { toast } from 'svelte-sonner';
 	import { cn } from '$lib/utils';
 	import FolderIcon from '@lucide/svelte/icons/folder';
@@ -36,7 +37,6 @@
 	let fullscreen = $state(false);
 	let trashOpen = $state(false);
 	let saving = $state(false);
-	let progress = $state<number | null>(null);
 	let picker: HTMLInputElement;
 	let folderPicker: HTMLInputElement;
 
@@ -179,26 +179,9 @@
 
 	// Da una cartella ogni file porta il percorso relativo ("tema/css/a.css"): il server crea le sottocartelle.
 	// Le cartelle vuote il browser non le elenca, quindi non arrivano.
-	async function upload(files: FileList | null) {
-		await uploadAll([...(files ?? [])].map((file) => ({ file, path: file.webkitRelativePath || file.name })), path);
+	function upload(files: FileList | null) {
+		enqueue(`${base}/files/uploads`, [...(files ?? [])].map((file) => ({ file, path: file.webkitRelativePath || file.name })), path, load);
 		picker.value = folderPicker.value = '';
-	}
-
-	// Ogni file con il suo percorso relativo dentro `dir`: il server crea le sottocartelle.
-	async function uploadAll(list: Dropped[], dir: string) {
-		let failed = 0;
-		for (const [i, { file, path: rel }] of list.entries()) {
-			try {
-				progress = 0;
-				await uploadTo(`${base}/files/uploads`, dir ? `${dir}/${rel}` : rel, file, (f) => (progress = (i + f) / list.length));
-			} catch (e) {
-				failed++;
-				toast.error(`${rel}: ${errorMessage(e)}`);
-			}
-		}
-		if (list.length && !failed) toast.success(list.length === 1 ? `${list[0].file.name} caricato` : `${list.length} file caricati`);
-		progress = null;
-		await load();
 	}
 
 	// File e cartelle trascinati dal computer: sulla lista vanno nella cartella aperta, su una riga cartella dentro quella.
@@ -209,11 +192,11 @@
 		ev.stopPropagation();
 		dropping = false;
 		over = null;
-		if (!ev.dataTransfer || progress !== null) return;
+		if (!ev.dataTransfer) return;
 		// Entry e file vanno letti subito: dopo il primo await il browser svuota il DataTransfer.
 		const entries = entriesOf(ev.dataTransfer);
 		const plain = [...ev.dataTransfer.files].map((file) => ({ file, path: file.name }));
-		await uploadAll(entries.length ? await filesFromEntries(entries) : plain, dir);
+		enqueue(`${base}/files/uploads`, entries.length ? await filesFromEntries(entries) : plain, dir, load);
 	}
 </script>
 
@@ -274,17 +257,9 @@
 				</DropdownMenu.Content>
 			</DropdownMenu.Root>
 			<DropdownMenu.Root>
-				<DropdownMenu.Trigger disabled={progress !== null}>
+				<DropdownMenu.Trigger>
 					{#snippet child({ props })}
-						<Button size="sm" {...props}>
-							{#if progress !== null}
-								<Spinner data-icon="inline-start" />
-								{Math.round(progress * 100)}%
-							{:else}
-								<UploadIcon data-icon="inline-start" />
-								Carica
-							{/if}
-						</Button>
+						<Button size="sm" {...props}><UploadIcon data-icon="inline-start" /> Carica</Button>
 					{/snippet}
 				</DropdownMenu.Trigger>
 				<DropdownMenu.Content align="end">
@@ -311,8 +286,12 @@
 		</Table.Header>
 		<Table.Body>
 			{#each entries as e (e.name)}
+				<ContextMenu.Root>
+				<ContextMenu.Trigger>
+				{#snippet child({ props })}
 				<Table.Row
-					class={cn('data-[drop=true]:bg-accent', dragging === join(e.name) && 'opacity-50')}
+					{...props}
+					class={cn('data-[drop=true]:bg-accent data-[state=open]:bg-muted', dragging === join(e.name) && 'opacity-50')}
 					{...dragSource(join(e.name))}
 					{...e.is_dir ? dropTarget(join(e.name)) : {}}
 				>
@@ -332,29 +311,46 @@
 									<Button variant="ghost" size="icon-sm" {...props} aria-label="Azioni"><EllipsisIcon /></Button>
 								{/snippet}
 							</DropdownMenu.Trigger>
-							<DropdownMenu.Content align="end">
-								<DropdownMenu.Group>
-									<DropdownMenu.Item onclick={() => (window.location.href = `${base}/files/download?path=${encodeURIComponent(join(e.name))}`)}>
-										{e.is_dir ? 'Scarica come zip' : 'Scarica'}
-									</DropdownMenu.Item>
-									{#if !e.is_dir && isArchive(e.name)}
-										<DropdownMenu.Item onclick={() => extract(e)}>Estrai</DropdownMenu.Item>
-									{/if}
-									<DropdownMenu.Item onclick={() => compress(e)}>Comprimi</DropdownMenu.Item>
-									<DropdownMenu.Item onclick={() => rename(e)}>Rinomina o sposta</DropdownMenu.Item>
-									<DropdownMenu.Item onclick={() => chmod(e)}>Permessi</DropdownMenu.Item>
-									<DropdownMenu.Item variant="destructive" onclick={async () => (await askConfirm({ title: `Spostare ${e.name} nel cestino?`, description: 'Per 7 giorni lo ritrovi nel Cestino, in alto a destra, e lo rimetti dov\'era.', confirmLabel: 'Sposta nel cestino', destructive: true })) && op({ op: 'delete', path: join(e.name) })}>
-										Elimina
-									</DropdownMenu.Item>
-								</DropdownMenu.Group>
+							<DropdownMenu.Content align="end">{@render rowActions(e, DropdownMenu)}
 							</DropdownMenu.Content>
 						</DropdownMenu.Root>
 					</Table.Cell>
 				</Table.Row>
+				{/snippet}
+				</ContextMenu.Trigger>
+				<ContextMenu.Content class="w-56">{@render rowActions(e, ContextMenu)}</ContextMenu.Content>
+				</ContextMenu.Root>
 			{/each}
 		</Table.Body>
 	</Table.Root>
 </div>
+
+<!-- Azioni di una riga: le stesse nel menu "…" e in quello del tasto destro. -->
+{#snippet rowActions(e: Entry, M: typeof DropdownMenu | typeof ContextMenu)}
+	<M.Group>
+		<M.Item onclick={() => open(e)}>{e.is_dir ? 'Apri' : 'Apri nell\'editor'}</M.Item>
+		<M.Item onclick={() => (window.location.href = `${base}/files/download?path=${encodeURIComponent(join(e.name))}`)}>
+			{e.is_dir ? 'Scarica come zip' : 'Scarica'}
+		</M.Item>
+		{#if !e.is_dir && isArchive(e.name)}
+			<M.Item onclick={() => extract(e)}>Estrai</M.Item>
+		{/if}
+		<M.Item onclick={() => compress(e)}>Comprimi</M.Item>
+		<M.Item onclick={() => rename(e)}>Rinomina o sposta</M.Item>
+		<M.Item onclick={() => chmod(e)}>Permessi</M.Item>
+	</M.Group>
+	<M.Separator />
+	<M.Group>
+		<M.Item
+			variant="destructive"
+			onclick={async () =>
+				(await askConfirm({ title: `Spostare ${e.name} nel cestino?`, description: "Per 7 giorni lo ritrovi nel Cestino, in alto a destra, e lo rimetti dov'era.", confirmLabel: 'Sposta nel cestino', destructive: true })) &&
+				op({ op: 'delete', path: join(e.name) })}
+		>
+			Elimina
+		</M.Item>
+	</M.Group>
+{/snippet}
 
 <Dialog.Root open={editing !== null} onOpenChange={(o) => !o && ((editing = null), (fullscreen = false))}>
 	<Dialog.Content
