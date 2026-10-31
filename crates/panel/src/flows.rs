@@ -135,6 +135,8 @@ pub trait Host: Send + Sync + 'static {
     fn probe(&self, host: &Domain, auth: Option<(&str, &str)>) -> impl Future<Output = Result<u16>> + Send;
     /// GET di una pagina del sito attraverso Caddy: stato e inizio della risposta.
     fn http_get(&self, host: &Domain, path: &str, auth: Option<(&str, &str)>, timeout_s: u32) -> impl Future<Output = Result<(u16, String)>> + Send;
+    /// GET a un URL pubblico (cron degli spazi): stato e inizio del corpo; mai verso indirizzi interni.
+    fn fetch_url(&self, url: &str, timeout_s: u32) -> impl Future<Output = Result<(u16, String)>> + Send;
     /// Uno script PHP del sito con la CLI (anche artisan): (riuscito, output).
     fn php(&self, slug: &Slug, args: &[String], timeout_s: u32) -> impl Future<Output = Result<(bool, String)>> + Send;
     /// Riscrive una chiave del .env del sito.
@@ -168,6 +170,7 @@ impl std::fmt::Display for FilesScope {
     }
 }
 
+#[derive(Default)]
 pub struct Installed {
     pub commands: Vec<Vec<String>>,
     /// Dump di un template snapshot, con il suo dominio fittizio.
@@ -212,7 +215,13 @@ pub struct CreateSite {
     /// Utente amministratore di WordPress creato all'installazione.
     pub admin_user: String,
     pub table_prefix: String,
+    /// Spazio senza dominio pubblico; con `template` vuoto nasce solo con il .env.
+    pub space: bool,
 }
+
+/// Gli spazi hanno un nome, non un dominio: dentro il pannello diventa `<nome>.internal`
+/// (TLD riservato all'uso privato, non risolve mai su internet) e non va mai sul tunnel.
+pub const SPACE_SUFFIX: &str = ".internal";
 
 /// Log di un job; con `live` ogni riga è subito visibile a chi legge il job in corso.
 #[derive(Debug, Default)]
@@ -275,9 +284,13 @@ pub async fn cloudflare_rules_template<H>(c: &Ctx<H>) -> Result<serde_json::Valu
 /// una volta per zona. Un errore non ferma il flusso: finisce nel log e in un avviso, e il
 /// monitoraggio riprova (`retry_cloudflare`) finché non va.
 pub async fn tunnel_hostnames<H: Host>(c: &Ctx<H>, site_id: i64, hosts: &[Domain], add: bool, log: &mut JobLog) -> Result<()> {
+    let hosts: Vec<&Domain> = hosts.iter().filter(|h| !h.as_str().ends_with(SPACE_SUFFIX)).collect();
+    if hosts.is_empty() {
+        return Ok(());
+    }
     let Some(account) = cloudflare_account(c, site_id).await? else {
         if add {
-            let list: Vec<&str> = hosts.iter().map(Domain::as_str).collect();
+            let list: Vec<&str> = hosts.iter().map(|h| h.as_str()).collect();
             log.push(format!("aggiungi al tunnel Cloudflare verso {}: {}", crate::cloudflare::SERVICE, list.join(", ")));
         }
         return Ok(());
@@ -342,7 +355,7 @@ pub async fn run_cron<H: Host>(c: &Ctx<H>, cron_id: i64) -> Result<bool> {
     let domains: Vec<Domain> = c.store.domains(site.id).await?.into_iter().map(|(d, _)| d).collect();
     let run = c.store.cron_started(cron_id).await?;
     let kind = cron.kind.parse::<crate::crons::CronKind>().map_err(Invalid)?;
-    let outcome = match crate::crons::prepare(kind, &cron.command, &domains) {
+    let outcome = match crate::crons::prepare(kind, &cron.command, &domains, site.space) {
         Err(e) => Ok((false, e)),
         Ok(crate::crons::Action::Wp(args)) => c.host.wp_output(&site.slug, &args).await,
         Ok(crate::crons::Action::Php(args)) => c.host.php(&site.slug, &args, cron.timeout_s).await,
@@ -351,6 +364,7 @@ pub async fn run_cron<H: Host>(c: &Ctx<H>, cron_id: i64) -> Result<bool> {
             let auth = password.as_deref().map(|p| ("staging", p));
             c.host.http_get(&host, &path, auth, cron.timeout_s).await.map(|(status, body)| ((200..400).contains(&status), format!("HTTP {status}\n{body}")))
         }
+        Ok(crate::crons::Action::Url(url)) => c.host.fetch_url(&url, cron.timeout_s).await.map(|(status, body)| ((200..400).contains(&status), format!("HTTP {status}\n{body}"))),
     };
     let (ok, output) = outcome.unwrap_or_else(|e| (false, format!("{e:#}")));
     c.store.cron_finished(run, ok, &output).await?;
@@ -668,9 +682,19 @@ async fn create_steps<H: Host>(c: &Ctx<H>, req: &CreateSite, site: &Site, undo: 
     let redis_password = random_password();
     c.store.save_redis_password(site.id, &c.key.encrypt(&redis_password)).await?;
     let (vars, env) = site_vars(c, req, site, &db, &redis_password);
-    let installed = c.host.install_template(slug, site.uid(), &req.template, &vars, &env).await?;
+    if req.space {
+        c.store.set_space(site.id).await?;
+    }
+    let installed = if req.template.is_empty() {
+        c.host.write_site_env(slug, site.uid(), &env).await?;
+        log.push(".env con le credenziali scritto");
+        Installed::default()
+    } else {
+        let installed = c.host.install_template(slug, site.uid(), &req.template, &vars, &env).await?;
+        log.push(format!("template {} installato", req.template));
+        installed
+    };
     let commands = installed.commands;
-    log.push(format!("template {} installato", req.template));
     c.sync_redis().await?;
     log.push("utente Redis creato");
 
@@ -697,6 +721,10 @@ async fn create_steps<H: Host>(c: &Ctx<H>, req: &CreateSite, site: &Site, undo: 
     }
 
     c.store.set_status(site.id, SiteStatus::Active).await?;
+    if req.space {
+        log.push("spazio attivo");
+        return Ok(());
+    }
     c.sync_caddy().await?;
     log.push("sito attivo");
     tunnel_hostnames(c, site.id, std::slice::from_ref(&req.domain), true, log).await
@@ -899,6 +927,7 @@ async fn configure_copy<H: Host>(c: &Ctx<H>, site: &Site, domain: &Domain, db: &
         admin_email: String::new(),
         admin_user: String::new(),
         table_prefix: src_env.get("TABLE_PREFIX").cloned().unwrap_or_else(|| "wp_".into()),
+        space: false,
     };
     let redis_password = random_password();
     c.store.save_redis_password(site.id, &c.key.encrypt(&redis_password)).await?;
@@ -1103,13 +1132,17 @@ fn backup_line(snap: &Snapshot) -> String {
     if snap.bytes_added == 0 {
         return format!("backup {id}: nessun dato nuovo");
     }
-    let (mut v, mut unit) = (snap.bytes_added as f64, 0);
+    format!("backup {id}: {} nuovi", human_bytes(snap.bytes_added))
+}
+
+/// 1536 → "1.5 KB".
+pub fn human_bytes(bytes: u64) -> String {
+    let (mut v, mut unit) = (bytes as f64, 0);
     while v >= 1024.0 && unit < 4 {
         v /= 1024.0;
         unit += 1;
     }
-    let size = if unit == 0 { format!("{v:.0} B") } else { format!("{v:.1} {}", ["B", "KB", "MB", "GB", "TB"][unit]) };
-    format!("backup {id}: {size} nuovi")
+    if unit == 0 { format!("{v:.0} B") } else { format!("{v:.1} {}", ["B", "KB", "MB", "GB", "TB"][unit]) }
 }
 
 /// Backup di un sito con registrazione dell'esito e avviso se fallisce.
@@ -1368,7 +1401,45 @@ mod tests {
             admin_email: "admin@sona.it".into(),
             admin_user: "admin".into(),
             table_prefix: "wp_".into(),
+            space: false,
         }
+    }
+
+    #[tokio::test]
+    async fn an_empty_space_gets_only_env_database_and_php_never_caddy_or_the_tunnel() {
+        let c = ctx(FakeHost { cf_accounts: vec!["banda".into()], ..Default::default() }).await;
+        create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        let before = c.host.calls().len();
+        let space = CreateSite { kind: SiteKind::Php, template: String::new(), space: true, ..req("report.internal") };
+        let site = create_site(&c, &space, &mut JobLog::default()).await.unwrap();
+        assert!(site.space);
+        assert_eq!(site.status, SiteStatus::Active);
+        assert_eq!(
+            c.host.calls()[before..],
+            [
+                "create_database report_internal",
+                "create_site_dirs report_internal",
+                "write_site_env report_internal",
+                "sync_redis report_internal,sona_it",
+                "sync_php users=report_internal,sona_it pools=report_internal,sona_it",
+            ]
+        );
+        assert!(c.host.env.lock().unwrap().contains_key("DB_PASSWORD"), "le credenziali del database nel .env");
+        delete_site(&c, site.id, DeleteMode::Discard, &mut JobLog::default()).await.unwrap();
+        assert!(!c.host.calls()[before..].iter().any(|c| c.starts_with("tunnel_")), "{:?}", c.host.calls());
+    }
+
+    #[tokio::test]
+    async fn a_space_cron_calls_an_external_url_a_site_cron_cannot() {
+        let c = ctx(FakeHost::default()).await;
+        let space = CreateSite { kind: SiteKind::Php, template: String::new(), space: true, ..req("report.internal") };
+        let space = create_site(&c, &space, &mut JobLog::default()).await.unwrap();
+        let site = create_site(&c, &req("sona.it"), &mut JobLog::default()).await.unwrap();
+        let call = c.store.add_cron(space.id, "* * * * *", "http", "https://api.example.com/sync", 30).await.unwrap();
+        assert!(run_cron(&c, call).await.unwrap());
+        assert_eq!(c.host.calls().last().unwrap(), "fetch_url https://api.example.com/sync");
+        let other = c.store.add_cron(site.id, "* * * * *", "http", "https://api.example.com/sync", 30).await.unwrap();
+        assert!(!run_cron(&c, other).await.unwrap(), "un sito chiama solo le sue pagine");
     }
 
     #[tokio::test]

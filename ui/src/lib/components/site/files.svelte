@@ -13,6 +13,7 @@
 	import { Spinner } from '$lib/components/ui/spinner';
 	import CodeEditor from '$lib/components/app/code-editor.svelte';
 	import TrashDialog from './trash-dialog.svelte';
+	import CopyDialog from './copy-dialog.svelte';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import { api, errorMessage, formatBytes } from '$lib/api';
 	import { enqueue } from '$lib/uploads.svelte';
@@ -36,6 +37,9 @@
 	let editing = $state<{ path: string; content: string; original: string } | null>(null);
 	let fullscreen = $state(false);
 	let trashOpen = $state(false);
+	// Solo nei siti (non nei template): "Copia in…" un altro sito.
+	const siteId = $derived(Number(/^\/api\/sites\/(\d+)$/.exec(base)?.[1]) || null);
+	let copying = $state<string | null>(null);
 	let saving = $state(false);
 	let picker: HTMLInputElement;
 	let folderPicker: HTMLInputElement;
@@ -337,6 +341,7 @@
 		{/if}
 		<M.Item onclick={() => compress(e)}>Comprimi</M.Item>
 		<M.Item onclick={() => rename(e)}>Rinomina o sposta</M.Item>
+		{#if siteId}<M.Item onclick={() => (copying = join(e.name))}>Copia in…</M.Item>{/if}
 		<M.Item onclick={() => chmod(e)}>Permessi</M.Item>
 	</M.Group>
 	<M.Separator />
@@ -381,4 +386,7 @@
 	</Dialog.Content>
 </Dialog.Root>
 
+{#if siteId && copying}
+	<CopyDialog {siteId} path={copying} dir={path} bind:open={() => copying !== null, (o) => !o && (copying = null)} ondone={(same) => same && load()} />
+{/if}
 <TrashDialog {base} bind:open={trashOpen} onrestored={(p) => ((path = parentOf(p)), load())} />

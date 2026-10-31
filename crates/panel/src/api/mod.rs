@@ -127,6 +127,9 @@ impl<H: Host> App<H> {
         if self.reserved_hosts.contains(host) {
             return Err(ApiError::new(StatusCode::CONFLICT, format!("{} è riservato al pannello", host.as_str())));
         }
+        if host.as_str().ends_with(SPACE_SUFFIX) {
+            return Err(ApiError::bad_request(format!("{SPACE_SUFFIX} è riservato agli spazi")));
+        }
         Ok(())
     }
 
@@ -317,6 +320,7 @@ pub fn router<H: Host>(app: App<H>) -> Router {
         .route("/api/sites/{id}/files/content", get(read_file::<H>).put(write_file::<H>).layer(DefaultBodyLimit::max(EDITOR_LIMIT as usize + 1024)))
         .route("/api/sites/{id}/files/download", get(download_file::<H>))
         .route("/api/sites/{id}/files/ops", post(file_op::<H>))
+        .route("/api/sites/{id}/files/copy", post(copy_files::<H>))
         .route("/api/sites/{id}/files/trash", get(list_trash::<H>))
         .route("/api/sites/{id}/files/uploads", post(upload_start::<H>))
         .route("/api/sites/{id}/files/uploads/{upload}", get(upload_status::<H>))
@@ -625,11 +629,11 @@ async fn list_sites<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap)
     for site in app.ctx.store.sites().await? {
         if visible.as_ref().is_none_or(|v| v.contains(&site.id)) {
             let first = app.ctx.store.domains(site.id).await?.into_iter().next().map(|(d, _)| d);
-            let (primary, url) = (first.as_ref().map(|d| d.as_str().to_string()), first.as_ref().map(|d| app.ctx.url_of(d)));
+            let (primary, url) = (first.as_ref().map(|d| d.as_str().to_string()), first.as_ref().filter(|_| !site.space).map(|d| app.ctx.url_of(d)));
             let monitor = sites::monitor_values(&app, site.id).await?;
             let online = monitor["uptime"]["ok"].as_bool();
             let last_backup = app.ctx.store.backup_runs(site.id, 1).await?.into_iter().next().map(|r| json!({ "started_at": r.started_at, "status": r.status }));
-            out.push(json!({ "id": site.id, "slug": site.slug, "domain": primary, "kind": site.kind, "status": site.status, "online": online, "staging": site.staging, "monitor": monitor, "last_backup": last_backup, "backups": app.ctx.backups, "url": url, "disk_alert_mb": app.disk_alert_mb }));
+            out.push(json!({ "id": site.id, "slug": site.slug, "domain": primary, "kind": site.kind, "status": site.status, "online": online, "staging": site.staging, "monitor": monitor, "last_backup": last_backup, "backups": app.ctx.backups, "url": url, "disk_alert_mb": app.disk_alert_mb, "space": site.space }));
         }
     }
     Ok(Json(out).into_response())
@@ -645,14 +649,33 @@ struct CreateSiteReq {
     /// Conferma esplicita se il budget di memoria supera il 150% della RAM.
     #[serde(default)]
     confirm_budget: bool,
+    /// Spazio: `domain` è solo un nome e `template` può essere vuoto.
+    #[serde(default)]
+    space: bool,
+}
+
+use flows::SPACE_SUFFIX;
+
+fn space_domain(name: &str) -> ApiResult<Domain> {
+    let name = name.trim();
+    let ok = (1..=40).contains(&name.len()) && !name.contains('.') && name == name.to_ascii_lowercase();
+    ok.then(|| Domain::parse(&format!("{name}{SPACE_SUFFIX}")).ok())
+        .flatten()
+        .ok_or_else(|| ApiError::bad_request("nome dello spazio: lettere minuscole, numeri e trattini"))
 }
 
 async fn create_site<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap, Json(r): Json<CreateSiteReq>) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
     require_admin(&user)?;
-    let domain = Domain::parse(&r.domain).map_err(|_| ApiError::bad_request("dominio non valido"))?;
-    app.check_not_reserved(&domain)?;
-    let template = load_template(&app.templates, &r.template)?;
+    let domain = if r.space {
+        space_domain(&r.domain)?
+    } else {
+        let d = Domain::parse(&r.domain).map_err(|_| ApiError::bad_request("dominio non valido"))?;
+        app.check_not_reserved(&d)?;
+        d
+    };
+    // Uno spazio può nascere vuoto: solo .env, database e PHP.
+    let template = (!(r.space && r.template.is_empty())).then(|| load_template(&app.templates, &r.template)).transpose()?;
     // Finiscono come argomenti di `wp core install`: niente spazi, a capo o caratteri strani.
     let admin_user = r.admin_user.as_deref().map(str::trim).filter(|u| !u.is_empty()).unwrap_or(flows::DEFAULT_ADMIN_USER).to_string();
     if !(3..=60).contains(&admin_user.len()) || !admin_user.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-@".contains(&b)) {
@@ -662,14 +685,16 @@ async fn create_site<H: Host>(State(app): State<App<H>>, m: Method, h: HeaderMap
     if admin_email.len() > 254 || !admin_email.contains('@') || admin_email.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(ApiError::bad_request("email dell'amministratore non valida"));
     }
+    let title = if r.title.trim().is_empty() && r.space { r.domain.trim().to_string() } else { r.title.trim().to_string() };
     let req = CreateSite {
         domain,
-        kind: template.manifest.kind,
+        kind: template.as_ref().map_or(crate::store::SiteKind::Php, |t| t.manifest.kind),
         template: r.template.clone(),
-        title: r.title.trim().to_string(),
+        title,
         admin_email,
         admin_user,
-        table_prefix: template.manifest.table_prefix.clone().unwrap_or_else(|| "wp_".into()),
+        table_prefix: template.as_ref().and_then(|t| t.manifest.table_prefix.clone()).unwrap_or_else(|| "wp_".into()),
+        space: r.space,
     };
     let budget = flows::budget_with(&app.ctx, 0, Some(&crate::store::PhpSettingsRow::default()), app.ram_mb).await?;
     if budget.needs_confirmation() && !r.confirm_budget {
@@ -697,7 +722,7 @@ async fn get_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Me
     app.ctx.store.site(id).await?;
     require_site(&app, &user, id, Need::Read).await?;
     let site = app.ctx.store.site(id).await?;
-    let domains: Vec<_> = app.ctx.store.domains(id).await?.into_iter().map(|(d, k)| json!({ "hostname": d.as_str(), "kind": k, "url": app.ctx.url_of(&d) })).collect();
+    let domains: Vec<_> = app.ctx.store.domains(id).await?.into_iter().map(|(d, k)| json!({ "hostname": d.as_str(), "kind": k, "url": (!site.space).then(|| app.ctx.url_of(&d)) })).collect();
     let can_manage = app.auth.can(&user, id, Need::Manage).await?;
     let staging = if can_manage { sites::staging_json(flows::staging_password(&app.ctx, id).await?) } else { serde_json::Value::Null };
     let wp_admin_pending = user.is_admin && app.ctx.store.setting(&format!("wp_admin:{id}")).await?.is_some();
@@ -887,6 +912,61 @@ async fn file_op<H: Host>(State(app): State<App<H>>, Path(t): Path<FilesPath>, m
         None => json!({}),
     })
     .into_response())
+}
+
+#[derive(Deserialize)]
+struct CopyReq {
+    paths: Vec<String>,
+    /// Sito di arrivo (anche lo stesso).
+    site: i64,
+    /// Cartella di arrivo: ogni voce ci finisce con il suo nome.
+    to: String,
+}
+
+/// Copia file e cartelle in un altro sito, come job: le cartelle grandi richiedono tempo.
+/// Se una voce c'è già nel sito di arrivo, 409 prima di copiare qualunque cosa.
+async fn copy_files<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(r): Json<CopyReq>) -> ApiResult<Response> {
+    let user = caller(&app, &m, &h).await?;
+    let src = Arc::new(site_files(&app, &user, id).await?);
+    let dest = Arc::new(site_files(&app, &user, r.site).await?);
+    if r.paths.is_empty() {
+        return Err(ApiError::bad_request("niente da copiare"));
+    }
+    let target = app.ctx.store.domains(r.site).await?.into_iter().next().map_or(format!("sito {}", r.site), |(d, _)| d.as_str().to_string());
+    let pairs: Vec<(String, String)> = r
+        .paths
+        .iter()
+        .map(|p| {
+            let name = std::path::Path::new(p.trim_end_matches('/')).file_name().map(|n| n.to_string_lossy().into_owned());
+            name.map(|n| (p.clone(), format!("{}/{n}", r.to.trim_end_matches('/'))))
+        })
+        .collect::<Option<_>>()
+        .ok_or_else(|| ApiError::bad_request("percorso non valido"))?;
+    let check = (dest.clone(), pairs.clone());
+    let conflict = blocking(move || {
+        let (dest, pairs) = check;
+        Ok(pairs.into_iter().map(|(_, to)| dest.exists(&to).map(|e| e.then_some(to))).collect::<Result<Vec<_>, _>>()?.into_iter().flatten().next())
+    })
+    .await?;
+    if let Some(to) = conflict {
+        return Err(ApiError::new(StatusCode::CONFLICT, format!("{to} c'è già in {target}")));
+    }
+    let detail = format!("{} → {target}:{}", r.paths.join(", "), r.to);
+    app.auth.audit(Some(user.id), "file.copy", Some(id), &detail).await?;
+    let job = app
+        .jobs
+        .spawn("file.copy", Some(id), Some(user.id), move |mut log| async move {
+            for (from, to) in pairs {
+                log.push(format!("{from} → {target}:{to}"));
+                let (src, dest) = (src.clone(), dest.clone());
+                let c = tokio::task::spawn_blocking(move || src.copy_to(&from, &dest, &to)).await??;
+                let links = if c.skipped_links > 0 { format!(", {} link simbolici saltati", c.skipped_links) } else { String::new() };
+                log.push(format!("  {} file, {}{links}", c.files, crate::flows::human_bytes(c.bytes)));
+            }
+            Ok(log)
+        })
+        .await?;
+    Ok((StatusCode::ACCEPTED, Json(json!({ "job": job }))).into_response())
 }
 
 #[derive(Deserialize)]
@@ -1356,6 +1436,33 @@ mod tests {
         for action in ["file.delete", "file.restore", "file.purge"] {
             assert!(audit.as_array().unwrap().iter().any(|a| a["action"] == action), "{action}");
         }
+    }
+
+    #[tokio::test]
+    async fn copy_files_to_another_site_needs_manage_on_both_and_refuses_conflicts() {
+        let t = setup().await;
+        let (admin, id) = site_with_files(&t).await;
+        let other = create_site(&t, &admin, "altro.it").await;
+        crate::host::create_dirs(&t.app.paths, &alveare_core::site::Slug::parse("altro_it").unwrap(), None).unwrap();
+        call(&t, raw("PUT", &format!("/api/sites/{id}/files/content?path=public/tema/style.css"), &admin, b"a{}".to_vec())).await;
+        call(&t, raw("PUT", &format!("/api/sites/{id}/files/content?path=public/robots.txt"), &admin, b"ok".to_vec())).await;
+        let copy = format!("/api/sites/{id}/files/copy");
+        let body = serde_json::json!({"paths": ["public/tema", "public/robots.txt"], "site": other, "to": "public/da-sona"});
+
+        let (s, r, _) = call(&t, req("POST", &copy, Some(&admin), Some(body.clone()))).await;
+        assert_eq!(s, StatusCode::ACCEPTED, "{r}");
+        let job = wait_job(&t, r["job"].as_i64().unwrap()).await;
+        assert_eq!(job.status, "done", "{:?}", job.log);
+        let (_, f, _) = call(&t, req("GET", &format!("/api/sites/{other}/files/content?path=public/da-sona/tema/style.css"), Some(&admin), None)).await;
+        assert_eq!(f["content"], "a{}");
+
+        let (s, r, _) = call(&t, req("POST", &copy, Some(&admin), Some(body.clone()))).await;
+        assert_eq!(s, StatusCode::CONFLICT, "c'è già, prima di partire: {r}");
+
+        let (uid, manager) = token_for(&t, "g@example.org", false).await;
+        t.app.auth.assign_site(uid, id, Role::Manager).await.unwrap();
+        let (s, _, _) = call(&t, req("POST", &copy, Some(&manager), Some(serde_json::json!({"paths": ["public/robots.txt"], "site": other, "to": "public"})))).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "serve poter gestire anche il sito di arrivo");
     }
 
     #[tokio::test]

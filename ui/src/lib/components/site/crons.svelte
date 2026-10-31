@@ -15,7 +15,7 @@
 	import { api, errorMessage } from '$lib/api';
 	import { toast } from 'svelte-sonner';
 
-	let { id, canManage }: { id: number; canManage: boolean } = $props();
+	let { id, canManage, space = false }: { id: number; canManage: boolean; space?: boolean } = $props();
 	type Cron = { id: number; expression: string; kind: string; command: string; timeout_s: number; active: boolean };
 	type Run = { id: number; started_at: string; finished_at: string | null; ok: boolean | null; output: string };
 	let crons = $state<{ cron: Cron; last: Run | null }[]>([]);
@@ -33,8 +33,9 @@
 	}
 	let job = $state<number | null>(null);
 	let history = $state<{ cron: Cron; runs: Run[] } | null>(null);
-	const kinds = { wp: 'WP-CLI', artisan: 'artisan', php: 'Script PHP', http: 'Pagina (HTTP)' };
-	const placeholders = { wp: 'cache flush', artisan: 'schedule:run', php: 'public/cron.php', http: 'https://esempio.it/wp-cron.php' };
+	// Uno spazio chiama qualunque URL pubblico; un sito solo le sue pagine.
+	const kinds = $derived({ wp: 'WP-CLI', artisan: 'artisan', php: 'Script PHP', http: space ? 'Chiamata HTTP' : 'Pagina (HTTP)' });
+	const placeholders = $derived({ wp: 'cache flush', artisan: 'schedule:run', php: space ? 'scripts/sincronizza.php' : 'public/cron.php', http: space ? 'https://api.esempio.it/sync' : 'https://esempio.it/wp-cron.php' });
 
 	async function load() {
 		crons = await api.get<typeof crons>(`/api/sites/${id}/cron`);

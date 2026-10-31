@@ -33,26 +33,31 @@
 </script>
 
 <SettingsSection title="Stato e accesso">
-	<SettingRow label="Sito sospeso" help="I visitatori vedono una pagina di manutenzione e PHP si ferma; file e database restano intatti.">
+	<SettingRow
+		label={detail.site.space ? 'Spazio sospeso' : 'Sito sospeso'}
+		help={detail.site.space ? 'Cron, worker e PHP si fermano; file e database restano intatti.' : 'I visitatori vedono una pagina di manutenzione e PHP si ferma; file e database restano intatti.'}
+	>
 		{#if suspended}
 			<Button disabled={busy} onclick={() => update({ suspended: false }, 'Sito riattivato')}>Riattiva il sito</Button>
 		{:else}
 			<Button variant="outline" size="sm" disabled={busy} onclick={async () => (await askConfirm({ title: `Sospendere ${detail.domains[0]?.hostname}?`, description: `I visitatori vedono una pagina di manutenzione e PHP si ferma. File e database restano intatti.`, confirmLabel: 'Sospendi' })) && update({ suspended: true }, 'Sito sospeso')}>Sospendi…</Button>
 		{/if}
 	</SettingRow>
-	<SettingRow label="Password sulle copie di prova" labelFor="staging" help="Chiede una password ai visitatori e blocca l'indicizzazione nei motori di ricerca.">
-		{#snippet extra()}
-			{#if detail.staging}
-				<div class="mt-3"><Credentials id="staging" user={detail.staging.user} password={detail.staging.password} /></div>
-			{/if}
-		{/snippet}
-		<Switch
-			id="staging"
-			checked={detail.site.staging}
-			disabled={busy || suspended}
-			onCheckedChange={(on) => update({ staging: on }, on ? 'Protezione attivata' : 'Protezione tolta')}
-		/>
-	</SettingRow>
+	{#if !detail.site.space}
+		<SettingRow label="Password sulle copie di prova" labelFor="staging" help="Chiede una password ai visitatori e blocca l'indicizzazione nei motori di ricerca.">
+			{#snippet extra()}
+				{#if detail.staging}
+					<div class="mt-3"><Credentials id="staging" user={detail.staging.user} password={detail.staging.password} /></div>
+				{/if}
+			{/snippet}
+			<Switch
+				id="staging"
+				checked={detail.site.staging}
+				disabled={busy || suspended}
+				onCheckedChange={(on) => update({ staging: on }, on ? 'Protezione attivata' : 'Protezione tolta')}
+			/>
+		</SettingRow>
+	{/if}
 	<SettingRow label="Conservazione dei log" labelFor="log-days" help="Gli access log contengono IP: dati personali. Dopo questi giorni vengono eliminati.">
 		<Input
 			id="log-days"

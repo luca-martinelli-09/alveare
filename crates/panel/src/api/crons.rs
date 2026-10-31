@@ -54,7 +54,8 @@ async fn check<H>(app: &App<H>, id: i64, r: &NewCron) -> ApiResult<()> {
         return Err(ApiError::bad_request(format!("timeout tra 1 e {max} secondi")));
     }
     let domains: Vec<Domain> = app.ctx.store.domains(id).await?.into_iter().map(|(d, _)| d).collect();
-    prepare(r.kind, &r.command, &domains).map_err(ApiError::bad_request)?;
+    let space = app.ctx.store.site(id).await?.space;
+    prepare(r.kind, &r.command, &domains, space).map_err(ApiError::bad_request)?;
     Ok(())
 }
 

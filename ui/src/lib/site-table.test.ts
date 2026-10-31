@@ -19,6 +19,7 @@ const site = (domain: string, over: Partial<SiteRow> = {}): SiteRow => ({
 	backups: true,
 	url: `https://${domain}`,
 	disk_alert_mb: 10240,
+	space: false,
 	...over
 });
 

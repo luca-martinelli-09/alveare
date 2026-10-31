@@ -488,6 +488,54 @@ pub async fn http_get(addr: &str, host: &Domain, path: &str, auth: Option<(&str,
     tokio::time::timeout(timeout, call).await.context("il sito non ha risposto in tempo")?
 }
 
+/// Risolve i nomi tenendo solo gli indirizzi pubblici: vale anche per i redirect, così un URL
+/// esterno non porta mai il pannello verso i container o la rete locale.
+struct PublicResolver;
+
+impl reqwest::dns::Resolve for PublicResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((name.as_str(), 0)).await?.filter(|a| crate::crons::is_public(a.ip())).collect();
+            if addrs.is_empty() {
+                return Err(format!("{}: nessun indirizzo pubblico", name.as_str()).into());
+            }
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+/// GET a un URL pubblico: stato e inizio del corpo (max 4 KB), al massimo 5 redirect.
+pub async fn fetch_public(url: &str, timeout: Duration) -> Result<(u16, String)> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    // Un IP scritto nell'URL (anche dopo un redirect) non passa dal resolver: si controlla qui.
+    let redirects = reqwest::redirect::Policy::custom(|attempt| {
+        let ip = attempt.url().host_str().and_then(|h| h.trim_matches(['[', ']']).parse::<std::net::IpAddr>().ok());
+        let internal = ip.is_some_and(|ip| !crate::crons::is_public(ip));
+        if internal || attempt.previous().len() >= 5 {
+            attempt.error("redirect verso un indirizzo interno o troppi redirect")
+        } else {
+            attempt.follow()
+        }
+    });
+    let client = reqwest::Client::builder()
+        .user_agent("alveare")
+        .no_proxy()
+        .dns_resolver(std::sync::Arc::new(PublicResolver))
+        .redirect(redirects)
+        .timeout(timeout)
+        .build()?;
+    let mut resp = client.get(url).send().await.map_err(|e| anyhow::anyhow!("{url}: {e:#}"))?;
+    let status = resp.status().as_u16();
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        body.extend_from_slice(&chunk);
+        if body.len() >= 64 * 1024 {
+            break;
+        }
+    }
+    Ok((status, String::from_utf8_lossy(&body).chars().take(4096).collect()))
+}
+
 pub async fn http_probe(addr: &str, host: &Domain, auth: Option<(&str, &str)>, timeout: Duration) -> Result<u16> {
     http_get(addr, host, "/", auth, timeout).await.map(|(s, _)| s)
 }
@@ -1073,6 +1121,10 @@ impl Host for SystemHost {
 
     async fn http_get(&self, host: &Domain, path: &str, auth: Option<(&str, &str)>, timeout_s: u32) -> Result<(u16, String)> {
         http_get(&self.caddy_http, host, path, auth, Duration::from_secs(u64::from(timeout_s))).await
+    }
+
+    async fn fetch_url(&self, url: &str, timeout_s: u32) -> Result<(u16, String)> {
+        fetch_public(url, Duration::from_secs(u64::from(timeout_s))).await
     }
 
     async fn php(&self, slug: &Slug, args: &[String], timeout_s: u32) -> Result<(bool, String)> {

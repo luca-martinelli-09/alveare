@@ -18,6 +18,7 @@ const site = (over: Partial<SiteRow>): SiteRow => ({
 	backups: true,
 	url: 'https://a.it',
 	disk_alert_mb: 10240,
+	space: false,
 	...over
 });
 
@@ -49,4 +50,10 @@ test('sospeso e in creazione non sono guasti', () => {
 test('ordine: prima i problemi, poi per dominio', () => {
 	const list = [site({ id: 1, domain: 'b.it' }), site({ id: 2, domain: 'z.it', online: false }), site({ id: 3, domain: 'a.it' })];
 	assert.deepEqual(list.toSorted(byHealth).map((s) => s.domain), ['z.it', 'a.it', 'b.it']);
+});
+
+test('uno spazio non ha pagine da controllare: attivo, ma i backup contano', () => {
+	const space = { domain: 'report.internal', kind: 'php', online: null, url: null, space: true, monitor: { uptime: null, usage: null, traffic: null } };
+	assert.deepEqual(health(site(space), NOW), { level: 'ok', label: 'Attivo', issues: [] });
+	assert.equal(health(site({ ...space, last_backup: { started_at: '2026-10-30T02:00:00Z', status: 'failed' } }), NOW).level, 'warn');
 });

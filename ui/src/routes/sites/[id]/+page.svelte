@@ -82,14 +82,14 @@
 				{#if h}<StatusPill level={h.level} label={h.label} class="tracking-normal" />{/if}
 			</h1>
 			<p class="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-				<span>{kinds[detail.site.kind] ?? detail.site.kind}</span>
+				<span>{detail.site.space ? 'Spazio' : (kinds[detail.site.kind] ?? detail.site.kind)}</span>
 				<span aria-hidden="true">·</span>
 				<span>PHP {detail.site.php_version}</span>
 				{#if detail.site.staging}<Badge variant="outline">staging</Badge>{/if}
 				{#if h && h.issues.length}<span class={h.level === 'down' ? 'text-destructive' : 'text-warning-text'}>· {h.issues.join(', ')}</span>{/if}
 			</p>
 		</div>
-		{#if primary}
+		{#if primary?.url}
 			<div class="flex flex-wrap gap-2">
 				{#if detail.site.kind === 'wordpress'}
 					<Button variant="outline" size="sm" href={`${primary.url}/wp-admin/`} target="_blank" rel="noreferrer">Bacheca WordPress</Button>
@@ -133,7 +133,7 @@
 			<Tabs.Content value="files"><Files base={`/api/sites/${id}`} /></Tabs.Content>
 			<Tabs.Content value="database"><Database {id} /></Tabs.Content>
 			<Tabs.Content value="settings"><Settings {detail} onchange={load} /></Tabs.Content>
-			<Tabs.Content value="cron"><Crons {id} canManage={detail.can_manage} /></Tabs.Content>
+			<Tabs.Content value="cron"><Crons {id} canManage={detail.can_manage} space={detail.site.space} /></Tabs.Content>
 			<Tabs.Content value="commands"><Commands {id} siteKind={detail.site.kind} /></Tabs.Content>
 			<Tabs.Content value="activity"><Activity {id} /></Tabs.Content>
 		{/if}

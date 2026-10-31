@@ -23,7 +23,7 @@
 	let deleting = $state<number | null>(null);
 
 	let wpAdmin = $state<{ user: string; password: string } | null>(null);
-	const wpAdminUrl = $derived(`${(detail.domains.find((d) => d.kind === 'primary') ?? detail.domains[0])?.url.replace(/\/$/, '')}/wp-admin/`);
+	const wpAdminUrl = $derived(`${(detail.domains.find((d) => d.kind === 'primary') ?? detail.domains[0])?.url?.replace(/\/$/, '')}/wp-admin/`);
 
 	async function revealWpAdmin() {
 		try {
@@ -64,11 +64,14 @@
 			{/if}
 		</SettingsSection>
 	{/if}
-	<MonitorCard id={detail.site.id} />
-	<DomainsCard {detail} {onchange} />
+	<!-- Uno spazio non ha pagine né domini pubblici: niente controlli, domini o cloni. -->
+	{#if !detail.site.space}
+		<MonitorCard id={detail.site.id} />
+		<DomainsCard {detail} {onchange} />
+	{/if}
 	{#if detail.can_manage}
 		<StateCard {detail} {onchange} />
-		<CopiesCard {detail} />
+		{#if !detail.site.space}<CopiesCard {detail} />{/if}
 	{/if}
 	<SettingsSection title="PHP" description={`Pool dedicato con l'utente Unix ${detail.site.slug}.`}>
 		<SettingRow label={`PHP ${detail.site.php_version}`} help={`memory_limit ${detail.site.settings.memory_limit_mb} MB · upload fino a ${detail.site.settings.upload_max_mb} MB · ${detail.site.settings.max_execution_time_s} s per richiesta · ${detail.site.settings.max_children} processi`}>

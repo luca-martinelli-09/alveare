@@ -18,6 +18,8 @@ pub struct SiteRef {
     pub id: i64,
     pub wordpress: bool,
     pub active: bool,
+    /// Spazio: niente pagine pubbliche da controllare.
+    pub space: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,10 +102,10 @@ pub fn due(now: DateTime<Tz>, sites: &[SiteRef]) -> Vec<Task> {
         out.push(Task::PanelBackup);
     }
     for s in sites.iter().filter(|s| s.active) {
-        if m % 5 == (s.id + 2) % 5 {
+        if m % 5 == (s.id + 2) % 5 && !s.space {
             out.push(Task::Uptime(s.id));
         }
-        if m == (s.id * 17) % 60 {
+        if m == (s.id * 17) % 60 && !s.space {
             out.push(Task::Traffic(s.id));
         }
         if (h, m) == (4, (s.id * 13) % 60) {
@@ -113,7 +115,8 @@ pub fn due(now: DateTime<Tz>, sites: &[SiteRef]) -> Vec<Task> {
             out.push(Task::Backup(s.id));
         }
         // Un sito al giorno al massimo (fino a 28 siti), alle 6 dopo i backup.
-        if now.day() as i64 == 1 + (s.id * 11).rem_euclid(28) && (h, m) == (6, (s.id * 7) % 60) {
+        // Il restore di prova controlla le pagine della copia: uno spazio non ne ha.
+        if now.day() as i64 == 1 + (s.id * 11).rem_euclid(28) && (h, m) == (6, (s.id * 7) % 60) && !s.space {
             out.push(Task::RestoreTest(s.id));
         }
     }
@@ -155,7 +158,7 @@ pub async fn run<H: Host>(app: App<H>) {
         };
         let refs: Vec<SiteRef> = sites
             .iter()
-            .map(|s| SiteRef { id: s.id, wordpress: s.kind == SiteKind::Wordpress, active: s.status == SiteStatus::Active })
+            .map(|s| SiteRef { id: s.id, wordpress: s.kind == SiteKind::Wordpress, active: s.status == SiteStatus::Active, space: s.space })
             .collect();
         let mut tasks = due(now, &refs);
         match app.ctx.store.crons(None).await {
@@ -377,12 +380,12 @@ mod tests {
     }
 
     fn wp(id: i64) -> SiteRef {
-        SiteRef { id, wordpress: true, active: true }
+        SiteRef { id, wordpress: true, active: true, space: false }
     }
 
     #[test]
     fn wordpress_cron_runs_every_five_minutes_staggered() {
-        let sites = [wp(1), wp(2), SiteRef { id: 3, wordpress: false, active: true }, SiteRef { id: 6, wordpress: true, active: false }];
+        let sites = [wp(1), wp(2), SiteRef { id: 3, wordpress: false, active: true, space: false }, SiteRef { id: 6, wordpress: true, active: false, space: false }];
         let mut runs: Vec<(u32, i64)> = Vec::new();
         for m in 0..10 {
             for t in due(at(10, m), &sites) {
@@ -396,7 +399,7 @@ mod tests {
 
     #[test]
     fn nightly_backup_at_each_site_slot_and_panel_backup_before() {
-        let sites = [wp(1), SiteRef { id: 2, wordpress: false, active: true }, SiteRef { id: 3, wordpress: true, active: false }];
+        let sites = [wp(1), SiteRef { id: 2, wordpress: false, active: true, space: false }, SiteRef { id: 3, wordpress: true, active: false, space: false }];
         let all: Vec<(u32, u32, Task)> = (0..24 * 60).flat_map(|i| due(at(i / 60, i % 60), &sites).into_iter().map(move |t| (i / 60, i % 60, t))).collect();
         let backups: Vec<_> = all.iter().filter(|(_, _, t)| matches!(t, Task::Backup(_))).collect();
         assert_eq!(backups.len(), 2, "un backup per ogni sito attivo");
@@ -407,7 +410,8 @@ mod tests {
 
     #[test]
     fn each_active_site_gets_one_test_restore_a_month() {
-        let sites = [wp(1), SiteRef { id: 2, wordpress: false, active: true }, SiteRef { id: 3, wordpress: true, active: false }];
+        let space = SiteRef { id: 4, wordpress: false, active: true, space: true };
+        let sites = [wp(1), SiteRef { id: 2, wordpress: false, active: true, space: false }, SiteRef { id: 3, wordpress: true, active: false, space: false }, space];
         let mut runs = Vec::new();
         for day in 1..=30 {
             for i in 0..24 * 60 {
@@ -415,14 +419,14 @@ mod tests {
                 runs.extend(due(t, &sites).into_iter().filter(|t| matches!(t, Task::RestoreTest(_))).map(|t| (day, i / 60, t)));
             }
         }
-        assert_eq!(runs.len(), 2, "{runs:?}");
+        assert_eq!(runs.len(), 2, "uno spazio non ha pagine da controllare nella copia: {runs:?}");
         assert!(runs.iter().all(|(d, h, _)| *d <= 28 && *h == 6), "dopo i backup notturni, mai oltre il 28: {runs:?}");
         assert_ne!(runs[0].0, runs[1].0, "siti diversi in giorni diversi");
     }
 
     #[test]
     fn wordpress_updates_run_once_a_night_after_the_backup() {
-        let sites = [wp(1), SiteRef { id: 2, wordpress: false, active: true }];
+        let sites = [wp(1), SiteRef { id: 2, wordpress: false, active: true, space: false }];
         let all: Vec<(u32, u32, Task)> = (0..24 * 60).flat_map(|i| due(at(i / 60, i % 60), &sites).into_iter().map(move |t| (i / 60, i % 60, t))).collect();
         let updates: Vec<_> = all.iter().filter(|(_, _, t)| matches!(t, Task::NightlyUpdate(_))).collect();
         assert_eq!(updates.len(), 1, "solo i siti WordPress");
@@ -433,13 +437,15 @@ mod tests {
 
     #[test]
     fn monitoring_cadence() {
-        let sites = [wp(1), SiteRef { id: 2, wordpress: false, active: false }];
+        let sites = [wp(1), SiteRef { id: 2, wordpress: false, active: false, space: false }, SiteRef { id: 3, wordpress: false, active: true, space: true }];
         let all: Vec<Task> = (0..24 * 60).flat_map(|i| due(at(i / 60, i % 60), &sites)).collect();
         let count = |f: fn(&Task) -> bool| all.iter().filter(|t| f(t)).count();
         assert_eq!(count(|t| matches!(t, Task::Uptime(1))), 24 * 12, "ogni 5 minuti");
         assert_eq!(count(|t| matches!(t, Task::Traffic(1))), 24, "ogni ora");
         assert_eq!(count(|t| matches!(t, Task::Usage(1))), 1, "ogni notte");
         assert_eq!(count(|t| matches!(t, Task::Uptime(2))), 0, "solo i siti attivi");
+        assert_eq!(count(|t| matches!(t, Task::Uptime(3) | Task::Traffic(3))), 0, "uno spazio non ha pagine da controllare");
+        assert_eq!(count(|t| matches!(t, Task::Usage(3) | Task::Backup(3))), 2, "ma spazio occupato e backup sì");
         assert_eq!(count(|t| matches!(t, Task::Notify)), 24 * 60);
     }
 

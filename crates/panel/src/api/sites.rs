@@ -123,6 +123,9 @@ async fn clone_site<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: 
     let user = caller(&app, &m, &h).await?;
     require_admin(&user)?;
     let src = app.ctx.store.site(id).await?;
+    if src.space {
+        return Err(ApiError::bad_request("uno spazio non si clona: copia i file in un altro spazio"));
+    }
     let domain = free_domain(&app, &r.domain).await?;
     let (ctx, auth, jobs, uid) = (app.ctx.clone(), app.auth.clone(), app.jobs.clone(), user.id);
     let job = app
@@ -333,7 +336,9 @@ struct NewDomain {
 async fn add_domain<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method, h: HeaderMap, Json(r): Json<NewDomain>) -> ApiResult<Response> {
     let user = caller(&app, &m, &h).await?;
     require_admin(&user)?;
-    app.ctx.store.site(id).await?;
+    if app.ctx.store.site(id).await?.space {
+        return Err(ApiError::bad_request("uno spazio non ha domini pubblici"));
+    }
     if r.kind == DomainKind::Primary {
         return Err(ApiError::bad_request("si aggiungono solo alias e redirect"));
     }
@@ -389,6 +394,26 @@ mod tests {
     use crate::auth::Role;
     use axum::http::StatusCode;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn spaces_have_a_name_instead_of_a_domain_and_no_domains_or_clones() {
+        let t = setup().await;
+        let (_, admin) = token_for(&t, "admin@example.org", true).await;
+        let (s, body, _) = call(&t, req("POST", "/api/sites", Some(&admin), Some(json!({"space": true, "domain": "Report Soci", "template": "", "title": ""})))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "il nome: lettere minuscole, numeri e trattini: {body}");
+        let (s, body, _) = call(&t, req("POST", "/api/sites", Some(&admin), Some(json!({"space": true, "domain": "report-soci", "template": "", "title": ""})))).await;
+        assert_eq!(s, StatusCode::ACCEPTED, "{body}");
+        let id = wait_job(&t, body["job"].as_i64().unwrap()).await.site_id.unwrap();
+        let (_, list, _) = call(&t, req("GET", "/api/sites", Some(&admin), None)).await;
+        assert_eq!((list[0]["domain"].as_str(), list[0]["space"].as_bool(), &list[0]["url"]), (Some("report-soci.internal"), Some(true), &json!(null)), "niente link: non ha pagine");
+
+        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/domains"), Some(&admin), Some(json!({"hostname": "report.sona.it", "kind": "alias"})))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "uno spazio non ha domini pubblici");
+        let (s, _, _) = call(&t, req("POST", &format!("/api/sites/{id}/clone"), Some(&admin), Some(json!({"domain": "copia.sona.it"})))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let (s, _, _) = call(&t, req("POST", "/api/sites", Some(&admin), Some(json!({"domain": "finto.internal", "template": "wordpress", "title": "x"})))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, ".internal è solo per gli spazi");
+    }
 
     #[tokio::test]
     async fn the_wordpress_admin_user_and_email_are_chosen_at_creation() {

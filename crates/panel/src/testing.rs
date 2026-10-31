@@ -222,6 +222,10 @@ impl Host for FakeHost {
         self.record("http_get", format!("{} {path} {}", host.as_str(), auth.map_or("-".to_string(), |(u, _)| format!("{u}:"))))?;
         Ok((self.probe_status.unwrap_or(200), "ok".into()))
     }
+    async fn fetch_url(&self, url: &str, _timeout_s: u32) -> anyhow::Result<(u16, String)> {
+        self.record("fetch_url", url.into())?;
+        Ok((self.probe_status.unwrap_or(200), "ok".into()))
+    }
     async fn php(&self, slug: &Slug, args: &[String], timeout_s: u32) -> anyhow::Result<(bool, String)> {
         self.record("php", format!("{} {} ({timeout_s} s)", slug.as_str(), args.join(" ")))?;
         Ok((true, String::new()))

@@ -59,6 +59,8 @@ export type SiteRow = {
 	url: string | null;
 	/** Soglia d'avviso dello spazio (file + database). */
 	disk_alert_mb: number;
+	/** Spazio: niente dominio pubblico né controllo di raggiungibilità (`domain` è `<nome>.internal`). */
+	space: boolean;
 };
 export type Job = { id: number; kind: string; site_id: number | null; status: 'running' | 'done' | 'failed'; log: string[] };
 export type Alert = { id: number; site_id: number | null; kind: string; message: string; created_at: string };

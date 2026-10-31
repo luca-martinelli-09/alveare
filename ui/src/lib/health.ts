@@ -32,6 +32,7 @@ export function health(site: SiteRow, now = Date.now()): Health {
 		};
 	}
 	if (issues.length) return { level: 'warn', label: 'Da guardare', issues };
+	if (site.space) return { level: 'ok', label: 'Attivo', issues };
 	if (site.online === null) return { level: 'unknown', label: 'In attesa del primo controllo', issues };
 	return { level: 'ok', label: 'Online', issues };
 }

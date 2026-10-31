@@ -152,6 +152,8 @@ pub struct Site {
     pub php_version: String,
     pub log_retention_days: u32,
     pub settings: PhpSettingsRow,
+    /// Spazio senza dominio pubblico: niente Caddy, tunnel né controllo di raggiungibilità.
+    pub space: bool,
 }
 
 /// Stessi default delle colonne di `sites` e di `PhpSettings`.
@@ -187,7 +189,7 @@ impl Site {
     }
 }
 
-const SITE_COLUMNS: &str = "id, slug, kind, template, status, staging, update_rule, php_version, log_retention_days, memory_limit_mb, upload_max_mb, max_execution_time_s, max_children";
+const SITE_COLUMNS: &str = "id, slug, kind, template, status, staging, update_rule, php_version, log_retention_days, memory_limit_mb, upload_max_mb, max_execution_time_s, max_children, space";
 
 fn site_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Site> {
     let decode = |e: alveare_core::site::InvalidSlug| StoreError::Db(sqlx::Error::Decode(e.to_string().into()));
@@ -207,6 +209,7 @@ fn site_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Site> {
             max_execution_time_s: r.try_get("max_execution_time_s")?,
             max_children: r.try_get("max_children")?,
         },
+        space: r.try_get("space")?,
     })
 }
 
@@ -308,6 +311,11 @@ impl Store {
 
     pub async fn delete_site(&self, id: i64) -> Result<()> {
         sqlx::query("DELETE FROM sites WHERE id = ?").bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn set_space(&self, id: i64) -> Result<()> {
+        sqlx::query("UPDATE sites SET space = 1 WHERE id = ?").bind(id).execute(&self.pool).await?;
         Ok(())
     }
 
@@ -919,7 +927,7 @@ impl Store {
     /// Siti serviti da Caddy: attivi, o sospesi con la pagina di manutenzione.
     pub async fn caddy_sites(&self) -> Result<Vec<CaddySite>> {
         let mut out = Vec::new();
-        for site in self.sites().await?.into_iter().filter(|s| matches!(s.status, SiteStatus::Active | SiteStatus::Suspended)) {
+        for site in self.sites().await?.into_iter().filter(|s| matches!(s.status, SiteStatus::Active | SiteStatus::Suspended) && !s.space) {
             let domains = self.domains(site.id).await?;
             let of = |k: DomainKind| domains.iter().filter(|(_, dk)| *dk == k).map(|(d, _)| d.clone()).collect::<Vec<_>>();
             let primary = of(DomainKind::Primary).into_iter().next().ok_or(StoreError::NotFound)?;

@@ -8,6 +8,8 @@ export type SiteDetail = {
     staging: boolean;
     log_retention_days: number;
     php_version: string;
+    /** Spazio: niente dominio pubblico, Caddy, tunnel né controllo di raggiungibilità. */
+    space: boolean;
     settings: {
       memory_limit_mb: number;
       upload_max_mb: number;
@@ -18,7 +20,8 @@ export type SiteDetail = {
   domains: {
     hostname: string;
     kind: "primary" | "alias" | "redirect";
-    url: string;
+    /** null per gli spazi: non hanno pagine. */
+    url: string | null;
   }[];
   can_manage: boolean;
   staging: { user: string; password: string } | null;

@@ -30,12 +30,12 @@ async fn run<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method,
     if !allowed {
         return Err(ApiError::bad_request(format!("{} non si esegue su questo sito", r.kind.as_str())));
     }
-    let action = prepare(r.kind, &r.command, &[]).map_err(ApiError::bad_request)?;
+    let action = prepare(r.kind, &r.command, &[], false).map_err(ApiError::bad_request)?;
     // Nel log e nell'audit il comando intero ("wp plugin list"), con le password come ***.
     let shown = match &action {
         Action::Wp(args) => format!("wp {}", crate::host::shown_args(args)),
         Action::Php(args) => format!("php {}", crate::host::shown_args(args)),
-        Action::Http { .. } => unreachable!("rifiutato sopra"),
+        Action::Http { .. } | Action::Url(_) => unreachable!("rifiutato sopra"),
     };
     let (ctx, auth, uid) = (app.ctx.clone(), app.auth.clone(), user.id);
     let job = app
@@ -46,7 +46,7 @@ async fn run<H: Host>(State(app): State<App<H>>, Path(id): Path<i64>, m: Method,
             let (ok, out) = match action {
                 Action::Wp(args) => ctx.host.wp_output(&site.slug, &args).await?,
                 Action::Php(args) => ctx.host.php(&site.slug, &args, PHP_TIMEOUT_S).await?,
-                Action::Http { .. } => unreachable!("rifiutato sopra"),
+                Action::Http { .. } | Action::Url(_) => unreachable!("rifiutato sopra"),
             };
             for line in out.lines() {
                 log.push(line);

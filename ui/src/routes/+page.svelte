@@ -3,6 +3,7 @@
 	import * as Table from '$lib/components/ui/table';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Field from '$lib/components/ui/field';
+	import * as ToggleGroup from '$lib/components/ui/toggle-group';
 	import * as Select from '$lib/components/ui/select';
 	import * as Alert from '$lib/components/ui/alert';
 	import * as Empty from '$lib/components/ui/empty';
@@ -55,6 +56,14 @@
 	});
 	const isWordpress = $derived(templates.find((t) => t.id === template)?.kind === 'wordpress');
 	let template = $state('wordpress');
+	// Spazio: un nome invece del dominio, per script, cron e file senza pagine pubbliche.
+	let space = $state(false);
+	// Non è un nome di template valido (iniziano con una lettera): niente collisioni.
+	const EMPTY = '_vuoto';
+	function setSpace(v: boolean) {
+		space = v;
+		template = v ? EMPTY : 'wordpress';
+	}
 	let error = $state('');
 	let job = $state<number | null>(null);
 
@@ -81,7 +90,13 @@
 		e.preventDefault();
 		error = '';
 		try {
-			const r = await api.post<{ job: number }>('/api/sites', { domain, title, template, ...(isWordpress ? { admin_user: adminUser, admin_email: adminEmail } : {}) });
+			const r = await api.post<{ job: number }>('/api/sites', {
+				domain,
+				title,
+				template: template === EMPTY ? '' : template,
+				space,
+				...(isWordpress ? { admin_user: adminUser, admin_email: adminEmail } : {})
+			});
 			job = r.job;
 		} catch (err) {
 			error = errorMessage(err);
@@ -94,6 +109,7 @@
 			job = null;
 			domain = '';
 			title = '';
+			setSpace(false);
 			adminUser = 'admin';
 			adminEmail = session.user?.email ?? '';
 			load();
@@ -156,8 +172,12 @@
 				</Dialog.Trigger>
 				<Dialog.Content>
 					<Dialog.Header>
-						<Dialog.Title>Nuovo sito</Dialog.Title>
-						<Dialog.Description>Database, utente, cartella, pool PHP e route vengono creati insieme.</Dialog.Description>
+						<Dialog.Title>{space ? 'Nuovo spazio' : 'Nuovo sito'}</Dialog.Title>
+						<Dialog.Description>
+							{space
+								? 'Senza dominio né pagine pubbliche: file, script PHP, cron e comandi, con il suo database. I cron HTTP possono chiamare qualunque URL pubblico.'
+								: 'Database, utente, cartella, pool PHP e route vengono creati insieme.'}
+						</Dialog.Description>
 					</Dialog.Header>
 					{#if job}
 						<JobLog id={job} />
@@ -167,20 +187,33 @@
 								{#if error}
 									<Alert.Root variant="destructive"><Alert.Description>{error}</Alert.Description></Alert.Root>
 								{/if}
-								<Field.Field>
-									<Field.FieldLabel for="domain">Dominio</Field.FieldLabel>
-									<Input id="domain" placeholder="esempio.it" bind:value={domain} required />
-								</Field.Field>
-								<Field.Field>
-									<Field.FieldLabel for="title">Titolo</Field.FieldLabel>
-									<Input id="title" bind:value={title} required />
-								</Field.Field>
+								<ToggleGroup.Root type="single" variant="outline" size="sm" value={space ? 'space' : 'site'} onValueChange={(v) => v && setSpace(v === 'space')}>
+									<ToggleGroup.Item value="site">Sito</ToggleGroup.Item>
+									<ToggleGroup.Item value="space">Spazio</ToggleGroup.Item>
+								</ToggleGroup.Root>
+								{#if space}
+									<Field.Field>
+										<Field.FieldLabel for="domain">Nome</Field.FieldLabel>
+										<Input id="domain" placeholder="report-soci" bind:value={domain} required pattern="[a-z0-9]([a-z0-9\-]*[a-z0-9])?" maxlength={40} autocomplete="off" spellcheck={false} />
+										<Field.FieldDescription>Lettere minuscole, numeri e trattini. Nel pannello diventa {domain || 'nome'}.internal.</Field.FieldDescription>
+									</Field.Field>
+								{:else}
+									<Field.Field>
+										<Field.FieldLabel for="domain">Dominio</Field.FieldLabel>
+										<Input id="domain" placeholder="esempio.it" bind:value={domain} required />
+									</Field.Field>
+									<Field.Field>
+										<Field.FieldLabel for="title">Titolo</Field.FieldLabel>
+										<Input id="title" bind:value={title} required />
+									</Field.Field>
+								{/if}
 								<Field.Field>
 									<Field.FieldLabel>Template</Field.FieldLabel>
 									<Select.Root type="single" bind:value={template}>
-										<Select.Trigger>{templates.find((t) => t.id === template)?.name ?? template}</Select.Trigger>
+										<Select.Trigger>{template === EMPTY ? 'Vuoto' : (templates.find((t) => t.id === template)?.name ?? template)}</Select.Trigger>
 										<Select.Content>
 											<Select.Group>
+												{#if space}<Select.Item value={EMPTY} label="Vuoto">Vuoto: solo .env e database</Select.Item>{/if}
 												{#each templates as t (t.id)}
 													<Select.Item value={t.id} label={t.name}>{t.name}</Select.Item>
 												{/each}
@@ -202,7 +235,7 @@
 									<p class="text-muted-foreground -mt-2 text-xs">La password si genera da sola e si vede una volta nella panoramica del sito.</p>
 								{/if}
 								<Dialog.Footer>
-									<Button variant="primary" type="submit">Crea sito</Button>
+									<Button variant="primary" type="submit">{space ? 'Crea spazio' : 'Crea sito'}</Button>
 								</Dialog.Footer>
 							</Field.FieldGroup>
 						</form>
@@ -340,7 +373,7 @@
 									<span class="flex flex-col leading-tight">
 										<span class="font-medium group-hover:underline">{site.domain ?? site.slug}</span>
 										<span class="text-muted-foreground text-xs">
-											{kinds[site.kind] ?? site.kind}{site.staging ? ' · staging' : ''}{(updates[site.id] ?? 0) > 0 ? ` · ${updates[site.id]} aggiornamenti` : ''}
+											{site.space ? 'Spazio' : (kinds[site.kind] ?? site.kind)}{site.staging ? ' · staging' : ''}{(updates[site.id] ?? 0) > 0 ? ` · ${updates[site.id]} aggiornamenti` : ''}
 										</span>
 									</span>
 								</a>

@@ -51,6 +51,14 @@ pub struct TrashItem {
     pub size: u64,
 }
 
+/// Esito di una copia fra siti.
+#[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Copied {
+    pub files: u64,
+    pub bytes: u64,
+    pub skipped_links: u64,
+}
+
 const TRASH: &str = ".trash";
 /// Dentro ogni voce del cestino: il percorso originale.
 const ORIGIN: &str = ".alveare-origine";
@@ -298,6 +306,11 @@ impl SiteFiles {
         self.give_to_site(&f.into_std())
     }
 
+    /// C'è già qualcosa (anche un link) in `path`?
+    pub fn exists(&self, path: &str) -> Result<bool> {
+        Ok(self.root.symlink_metadata(rel(path)?).is_ok())
+    }
+
     pub fn mkdir(&self, path: &str) -> Result<()> {
         self.mkdirs(&rel(path)?)
     }
@@ -311,6 +324,54 @@ impl SiteFiles {
             self.mkdirs(parent)?;
         }
         Ok(self.root.rename(&from, &self.root, &to)?)
+    }
+
+    /// Copia `path` (file o cartella) in `to` dentro `dest`, un altro sito o lo stesso: contenuti e
+    /// permessi, file dell'utente di `dest`. I link simbolici si saltano (potrebbero puntare fuori);
+    /// se `to` c'è già, AlreadyExists prima di copiare qualunque cosa.
+    pub fn copy_to(&self, path: &str, dest: &SiteFiles, to: &str) -> Result<Copied> {
+        let (from, to) = (rel(path)?, rel(to)?);
+        if is_protected(&from) || to == Path::new(".") {
+            return Err(FileError::Protected);
+        }
+        let (a, b) = (self.root.dir_metadata()?, dest.root.dir_metadata()?);
+        if (a.dev(), a.ino()) == (b.dev(), b.ino()) && to.starts_with(&from) {
+            return Err(FileError::BadPath);
+        }
+        if dest.exists(&to.to_string_lossy())? {
+            return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists).into());
+        }
+        if let Some(parent) = to.parent().filter(|x| !x.as_os_str().is_empty()) {
+            dest.mkdirs(parent)?;
+        }
+        let mut copied = Copied::default();
+        self.copy_tree(&from, dest, &to, &mut copied)?;
+        Ok(copied)
+    }
+
+    fn copy_tree(&self, from: &Path, dest: &SiteFiles, to: &Path, copied: &mut Copied) -> Result<()> {
+        let meta = self.root.symlink_metadata(from)?;
+        let mode = std::fs::Permissions::from_mode(meta.mode() & 0o777);
+        if meta.is_symlink() {
+            copied.skipped_links += 1;
+        } else if meta.is_dir() {
+            dest.root.create_dir(to)?;
+            let dir = dest.root.open_with(to, cap_std::fs::OpenOptions::new().read(true))?.into_std();
+            dir.set_permissions(mode)?;
+            dest.give_to_site(&dir)?;
+            for entry in self.root.read_dir(from)? {
+                let name = entry?.file_name();
+                self.copy_tree(&from.join(&name), dest, &to.join(&name), copied)?;
+            }
+        } else {
+            let mut src = self.root.open(from)?;
+            let mut out = dest.root.open_with(to, cap_std::fs::OpenOptions::new().write(true).create_new(true))?.into_std();
+            copied.bytes += std::io::copy(&mut src, &mut out)?;
+            copied.files += 1;
+            out.set_permissions(mode)?;
+            dest.give_to_site(&out)?;
+        }
+        Ok(())
     }
 
     /// Nel cestino del sito (tmp/<slug>/.trash), svuotato dopo 7 giorni. Ogni voce è una cartella
@@ -739,6 +800,33 @@ mod tests {
         assert!(f.upload_start("public/nuovo.png", 5, false).is_ok(), "un file nuovo non chiede niente");
         f.mkdir("public/tema").unwrap();
         assert!(matches!(f.upload_start("public/tema", 5, true), Err(FileError::BadUpload(_))), "una cartella non si sostituisce con un file");
+    }
+
+    #[test]
+    fn copy_to_another_site_keeps_content_and_modes_skips_links_and_never_overwrites() {
+        let (_t, p, src) = site();
+        let other = Slug::parse("altro_it").unwrap();
+        create_dirs(&p, &other, None).unwrap();
+        let dst = SiteFiles::open(&p, &other, None).unwrap();
+        src.write("public/tema/style.css", b"body{}").unwrap();
+        src.write("public/tema/img/logo.png", b"png").unwrap();
+        src.chmod("public/tema/style.css", 0o600).unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", p.sites.join("sona_it/public/tema/link")).unwrap();
+
+        let copied = src.copy_to("public/tema", &dst, "public/nuovo").unwrap();
+        assert_eq!(copied, Copied { files: 2, bytes: 9, skipped_links: 1 });
+        assert_eq!(dst.read_text("public/nuovo/style.css").unwrap(), "body{}");
+        assert_eq!(dst.read_text("public/nuovo/img/logo.png").unwrap(), "png");
+        assert_eq!(std::fs::metadata(p.sites.join("altro_it/public/nuovo/style.css")).unwrap().permissions().mode() & 0o777, 0o600);
+        assert!(!p.sites.join("altro_it/public/nuovo/link").exists());
+
+        let err = src.copy_to("public/tema", &dst, "public/nuovo").unwrap_err();
+        assert!(matches!(err, FileError::Io(ref e) if e.kind() == std::io::ErrorKind::AlreadyExists), "{err:?}");
+        assert!(src.copy_to("public/tema", &dst, "../fuori").is_err());
+        assert!(src.copy_to(".env", &dst, "x").is_err());
+        assert!(src.copy_to("public/tema/style.css", &dst, "public/style.css").is_ok(), "anche un file singolo");
+        assert!(src.copy_to("public/tema", &src, "public/tema-copia").is_ok(), "nello stesso sito");
+        assert!(matches!(src.copy_to("public/tema", &src, "public/tema/dentro"), Err(FileError::BadPath)), "mai dentro se stessa");
     }
 
     #[test]
